@@ -25,7 +25,7 @@
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
 
--define(BUILTIN_EXTENSIONS, ["SIZE 10240000", "8BITMIME"]).
+-define(BUILTIN_EXTENSIONS, [{"SIZE", "10240000"}, {"8BITMIME", true}]).
 
 %% External API
 -export([start_link/2, start/2]).
@@ -39,7 +39,9 @@
 		from :: string(),
 		to = [] :: [string()],
 		extensions = [] :: [string()],
-		message = "" :: string()
+		data = "" :: string(),
+		expectedsize :: pos_integer(),
+		bodytype
 	}
 ).
 
@@ -76,15 +78,26 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 	
-handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true} = State) ->
+handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope} = State) ->
 	io:format("done reading message~n"),
-	gen_tcp:send(Socket, "250 Ok\r\n"),
+	io:format("entire message~n~p~n", [Envelope#envelope.data]),
+	case has_extension(Envelope, "SIZE") of
+		{true, Value} ->
+			case length(Envelope#envelope.data) > list_to_integer(Value) of
+				true ->
+					gen_tcp:send(Socket, "552 Message too large\r\n");
+				false ->
+					gen_tcp:send(Socket, "250 Ok\r\n")
+			end;
+		false ->
+			gen_tcp:send(Socket, "250 Ok\r\n")
+	end,
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, State#state{readmessage = false}};
-handle_info({tcp, Socket, Packet}, #state{readmessage = true} = State) ->
+handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
 	io:format("got message chunk \"~s\"~n", [Packet]),
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, State};
+	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet)}}};
 handle_info({tcp, Socket, Packet}, State) ->
 	io:format("Packet ~p~n", [Packet]),
 	State2 = handle_request(parse_request(Packet), State),
@@ -134,15 +147,25 @@ handle_request({"EHLO", []}, #state{socket = Socket} = State) ->
 handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
 	%Extensions = Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS),
 	Extensions = ?BUILTIN_EXTENSIONS,
-	F =
-	fun(E, {Pos, Len, Acc}) when Pos =:= Len ->
-			{Pos, Len, string:concat(string:concat(string:concat(Acc, "250 "), E), "\r\n")};
-		(E, {Pos, Len, Acc}) ->
-			{Pos+1, Len, string:concat(string:concat(string:concat(Acc, "250-"), E), "\r\n")}
-	end,
-	{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
-	gen_tcp:send(Socket, Response),
-	State#state{envelope = #envelope{extensions = Extensions}};
+	case Extensions of
+		[] ->
+			gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
+			State#state{envelope = #envelope{extensions = Extensions}};
+		_Else ->
+			F =
+			fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
+					{Pos, Len, string:concat(string:concat(string:concat(Acc, "250 "), E), "\r\n")};
+				({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
+					{Pos, Len, string:concat(Acc, io_lib:format("250 ~s ~s\r\n", [E, Value]))};
+				({E, true}, {Pos, Len, Acc}) ->
+					{Pos+1, Len, string:concat(string:concat(string:concat(Acc, "250-"), E), "\r\n")};
+				({E, Value}, {Pos, Len, Acc}) ->
+					{Pos+1, Len, string:concat(Acc, io_lib:format("250-~s ~s\r\n", [E, Value]))}
+			end,
+			{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
+			gen_tcp:send(Socket, Response),
+			State#state{envelope = #envelope{extensions = Extensions}}
+	end;
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
 	State;
@@ -162,18 +185,47 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 							State#state{envelope = Envelope#envelope{from = ParsedAddress}};
 						{ParsedAddress, ExtraInfo} ->
 							io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-							case string:to_upper(ExtraInfo) of
-								"BODY=7BIT" ->
-									io:format("7 bit mail, yay~n"),
+							Options = lists:map(fun(X) -> string:to_upper(X) end, string:tokens(ExtraInfo, " ")),
+							%io:format("options are ~p~n", [Options]),
+							 F = fun(_, {error, Message}) ->
+									 {error, Message};
+								 ("SIZE="++Size, InnerState) ->
+									case has_extension(Envelope, "SIZE") of
+										{true, Value} ->
+											case list_to_integer(Size) > list_to_integer(Value) of
+												true ->
+													{error, io_lib:format("552 Estimated message length ~s exceeds limit of ~s\r\n", [Size, Value])};
+												false ->
+													InnerState#state{envelope = Envelope#envelope{expectedsize = list_to_integer(Size)}}
+											end;
+										false ->
+											{error, "552 Unsupported option SIZE\r\n"}
+									end;
+								("BODY="++BodyType, InnerState) ->
+									case has_extension(Envelope, "8BITMIME") of
+										{true, _} ->
+											case BodyType of
+												_ when BodyType =:= "8BITMIME"; BodyType =:= "7BIT" ->
+													InnerState#state{envelope = Envelope#envelope{bodytype = BodyType}};
+												_ ->
+													{error, io_lib:format("555 Unsupported BODY type: ~s\r\n", [BodyType])}
+											end;
+										false ->
+											{error, "552 Unsupported option BODY\r\n"}
+									end;
+								(X, InnerState) ->
+									% TODO send to the callback
+									{error, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])}
+							end,
+							case lists:foldl(F, State, Options) of
+								{error, Message} ->
+									io:format("error: ~s~n", [Message]),
+									gen_tcp:send(Socket, Message),
+									State;
+								#state{envelope = NewEnvelope} = NewState ->
+									io:format("OK~n"),
 									gen_tcp:send(Socket, "250 Ok\r\n"),
-									State#state{envelope = Envelope#envelope{from = ParsedAddress}};
-								"BODY=8BIT" ->
-									io:format("8 bit mail, yay~n"),
-									gen_tcp:send(Socket, "250 Ok\r\n"),
-									State#state{envelope = Envelope#envelope{from = ParsedAddress}};
-								Else ->
-									gen_tcp:send(Socket, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])),
-									State
+									NewState#state{envelope = NewEnvelope#envelope{from = ParsedAddress}}
 							end
 					end;
 				_Else ->
@@ -279,8 +331,18 @@ parse_encoded_address([H | Tail], Acc, noquotes) when H >= 97, H =< 122 ->
 	parse_encoded_address(Tail, [H | Acc], noquotes); % lowercase letters
 parse_encoded_address([H | Tail], Acc, noquotes) when H =:= 45; H =:= 46; H =:= 95 ->
 	parse_encoded_address(Tail, [H | Acc], noquotes); % dash, dot, underscore
-parse_encoded_address([H | Tail], Acc, quotes) ->
-	parse_encoded_address(Tail, [H | Acc], quotes);
-parse_encoded_address([H | Tail], Acc, quotes) ->
-	error.
+parse_encoded_address(_, _Acc, quotes) ->
+	error;
+parse_encoded_address([H | Tail], Acc, Quotes) ->
+	parse_encoded_address(Tail, [H | Acc], Quotes).
 
+has_extension(#envelope{extensions = Exts}, Ext) ->
+	Extension = string:to_upper(Ext),
+	Extensions = lists:map(fun({X, Y}) -> {string:to_upper(X), Y} end, Exts),
+	%io:format("extensions ~p~n", [Extensions]),
+	case lists:keyfind(Extension, 1, Extensions) of
+		{_, Value} ->
+			{true, Value};
+		false ->
+			false
+	end.
