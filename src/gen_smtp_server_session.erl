@@ -38,7 +38,6 @@
 	{
 		from :: string(),
 		to = [] :: [string()],
-		extensions = [] :: [string()],
 		data = "" :: string(),
 		expectedsize :: pos_integer(),
 		bodytype
@@ -51,6 +50,7 @@
 		module = erlang:error({undefined, module}) :: atom(),
 		hostname = "localhost" :: string(),
 		envelope = undefined :: 'undefined' | #envelope{},
+		extensions = [] :: [string()],
 		readmessage = false :: bool()
 	}
 ).
@@ -80,8 +80,8 @@ handle_cast(_Msg, State) ->
 	
 handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope} = State) ->
 	io:format("done reading message~n"),
-	io:format("entire message~n~p~n", [Envelope#envelope.data]),
-	case has_extension(Envelope, "SIZE") of
+	io:format("entire message~n~s~n", [Envelope#envelope.data]),
+	case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
 			case length(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
@@ -150,7 +150,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 	case Extensions of
 		[] ->
 			gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
-			State#state{envelope = #envelope{extensions = Extensions}};
+			State#state{extensions = Extensions};
 		_Else ->
 			F =
 			fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
@@ -164,7 +164,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 			end,
 			{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
 			gen_tcp:send(Socket, Response),
-			State#state{envelope = #envelope{extensions = Extensions}}
+			State#state{extensions = Extensions}
 	end;
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
@@ -336,7 +336,7 @@ parse_encoded_address(_, _Acc, quotes) ->
 parse_encoded_address([H | Tail], Acc, Quotes) ->
 	parse_encoded_address(Tail, [H | Acc], Quotes).
 
-has_extension(#envelope{extensions = Exts}, Ext) ->
+has_extension(Exts, Ext) ->
 	Extension = string:to_upper(Ext),
 	Extensions = lists:map(fun({X, Y}) -> {string:to_upper(X), Y} end, Exts),
 	%io:format("extensions ~p~n", [Extensions]),
