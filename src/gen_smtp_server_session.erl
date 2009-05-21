@@ -93,7 +93,7 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 			gen_tcp:send(Socket, "250 Ok\r\n")
 	end,
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, State#state{readmessage = false}};
+	{noreply, State#state{readmessage = false, envelope = #envelope{}}};
 handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
 	io:format("got message chunk \"~s\"~n", [Packet]),
 	inet:setopts(Socket, [{active, once}]),
@@ -164,7 +164,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 			end,
 			{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
 			gen_tcp:send(Socket, Response),
-			State#state{extensions = Extensions}
+			State#state{extensions = Extensions, envelope = #envelope{}}
 	end;
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
@@ -190,7 +190,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
 								 ("SIZE="++Size, InnerState) ->
-									case has_extension(Envelope, "SIZE") of
+									case has_extension(State#state.extensions, "SIZE") of
 										{true, Value} ->
 											case list_to_integer(Size) > list_to_integer(Value) of
 												true ->
@@ -202,7 +202,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 											{error, "552 Unsupported option SIZE\r\n"}
 									end;
 								("BODY="++BodyType, InnerState) ->
-									case has_extension(Envelope, "8BITMIME") of
+									case has_extension(State#state.extensions, "8BITMIME") of
 										{true, _} ->
 											case BodyType of
 												_ when BodyType =:= "8BITMIME"; BodyType =:= "7BIT" ->
