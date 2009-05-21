@@ -136,7 +136,10 @@ rule ".txt" => ["%{coverage,debug_ebin}X.beam", 'debug_ebin/test_coverage.beam']
 end
 
 task :compile => [:contrib, 'ebin'] + HEADERS + OBJ + RELEASE do
-	sh "erl -noshell -eval 'systools:make_script(\"ebin/cpx-rel-0.1\", [{outdir, \"ebin\"}]).' -s erlang halt -pa ebin"
+	Dir["ebin/*.rel"].each do |rel|
+		rel = File.basename(rel, '.rel')
+		sh "erl -noshell -eval 'systools:make_script(\"ebin/#{rel}\", [{outdir, \"ebin\"}]).' -s erlang halt -pa ebin"
+	end
 end
 
 task :contrib do
@@ -150,7 +153,9 @@ task :contrib do
 			Dir.chdir(pwd)
 		end
 	end
-	#sh "cp src/*.app ebin/"
+	unless Dir["src/*.app"].length.zero?
+		sh "cp src/*.app ebin/"
+	end
 end
 
 task :default => :compile
