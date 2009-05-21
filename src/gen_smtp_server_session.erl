@@ -39,8 +39,7 @@
 		from :: string(),
 		to = [] :: [string()],
 		data = "" :: string(),
-		expectedsize :: pos_integer(),
-		bodytype
+		expectedsize :: pos_integer()
 	}
 ).
 
@@ -204,12 +203,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 								("BODY="++BodyType, InnerState) ->
 									case has_extension(State#state.extensions, "8BITMIME") of
 										{true, _} ->
-											case BodyType of
-												_ when BodyType =:= "8BITMIME"; BodyType =:= "7BIT" ->
-													InnerState#state{envelope = Envelope#envelope{bodytype = BodyType}};
-												_ ->
-													{error, io_lib:format("555 Unsupported BODY type: ~s\r\n", [BodyType])}
-											end;
+											InnerState;
 										false ->
 											{error, "552 Unsupported option BODY\r\n"}
 									end;
