@@ -25,7 +25,7 @@
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
 
--define(BUILTIN_EXTENSIONS, [{"SIZE", "10240000"}, {"8BITMIME", true}]).
+-define(BUILTIN_EXTENSIONS, [{"SIZE", "10240000"}, {"8BITMIME", true}, {"PIPELINING", true}]).
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
@@ -235,7 +235,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 								{ok, CallbackState} ->
-									gen_tcp:send(Socket, "250 Ok\r\n"),
+									gen_tcp:send(Socket, "250 sender Ok\r\n"),
 									State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
 								{error, Message, CallbackState} ->
 									gen_tcp:send(Socket, Message ++ "\r\n"),
@@ -284,7 +284,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 									% TODO callback
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
-											gen_tcp:send(Socket, "250 Ok\r\n"),
+											gen_tcp:send(Socket, "250 sender Ok\r\n"),
 											State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
 										{error, Message, CallbackState} ->
 											gen_tcp:send(Socket, Message ++ "\r\n"),
@@ -315,7 +315,7 @@ handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, modu
 					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, State#state.callbackstate) of
 						{ok, CallbackState} ->
-							gen_tcp:send(Socket, "250 Ok\r\n"),
+							gen_tcp:send(Socket, "250 recipient Ok\r\n"),
 							State#state{envelope = Envelope#envelope{to = lists:append(Envelope#envelope.to, [ParsedAddress])}, callbackstate = CallbackState};
 						{error, Message, CallbackState} ->
 							gen_tcp:send(Socket, Message++"\r\n"),
@@ -343,7 +343,7 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 			gen_tcp:send(Socket, "503 Error: need RCPT command\r\n"),
 			State;
 		_Else ->
-			gen_tcp:send(Socket, "354 Ok\r\n"),
+			gen_tcp:send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
 			%io:format("switching to data read mode~n"),
 			State#state{readmessage = true}
 	end;
