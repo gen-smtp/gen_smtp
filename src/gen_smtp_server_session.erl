@@ -512,4 +512,30 @@ parse_encoded_address_test_() ->
 		}
 	].
 
+parse_request_test_() ->
+	[
+		{"Parsing normal SMTP requests",
+			fun() ->
+					?assertEqual({"HELO", []}, parse_request("HELO")),
+					?assertEqual({"EHLO", "hell.af.mil"}, parse_request("EHLO hell.af.mil")),
+					?assertEqual({"MAIL", "FROM:God@heaven.af.mil"}, parse_request("MAIL FROM:God@heaven.af.mil"))
+			end
+		},
+		{"Verbs should be uppercased",
+			fun() ->
+					?assertEqual({"HELO", "hell.af.mil"}, parse_request("helo hell.af.mil"))
+			end
+		},
+		{"Leading and trailing spaces are removed",
+			fun() ->
+					?assertEqual({"HELO", "hell.af.mil"}, parse_request(" helo   hell.af.mil           "))
+			end
+		},
+		{"Blank lines are blank",
+			fun() ->
+					?assertEqual({[], []}, parse_request(""))
+			end
+		}
+	].
+
 -endif.
