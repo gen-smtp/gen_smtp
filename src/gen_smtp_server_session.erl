@@ -138,9 +138,16 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 			end
 	end;
 handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
-	%io:format("got message chunk \"~s\"~n", [Packet]),
+	io:format("got message chunk \"~p\"~n", [Packet]),
+	% if there's a leading dot, trim it off
+	case Packet of
+		"." ++ String ->
+			String;
+		String ->
+			String
+	end,
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet)}}, ?TIMEOUT};
+	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}}, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, State) ->
 	%io:format("Packet ~p~n", [Packet]),
 	State2 = handle_request(parse_request(Packet), State),
@@ -496,6 +503,11 @@ parse_encoded_address_test_() ->
 			fun() ->
 					?assertEqual(error, parse_encoded_address("")),
 					?assertEqual(error, parse_encoded_address(" "))
+			end
+		},
+		{"addresses with trailing parameters should return the trailing parameters",
+			fun() ->
+					?assertEqual({"God@heaven.af.mil", "SIZE=100 BODY=8BITMIME"}, parse_encoded_address("<God@heaven.af.mil> SIZE=100 BODY=8BITMIME"))
 			end
 		}
 	].

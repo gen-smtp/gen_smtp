@@ -43,5 +43,5 @@ handle_RCPT_extension(Extension, State) ->
 handle_DATA(From, To, Data, State) ->
 	% some kind of unique id
 	Reference = io_lib:format("~p", [make_ref()]),
-	io:format("message from ~s to ~p queued as ~s, body follows:~n ~s~nEOF~n", [From, To, Reference, Data]),
+	io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
 	{ok, Reference, State}.
