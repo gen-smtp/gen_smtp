@@ -42,7 +42,8 @@
 
 -record(state, {
 		listener :: port(),       % Listening socket
-		acceptor :: ref()       % Asynchronous acceptor's internal reference
+		acceptor :: ref(),       % Asynchronous acceptor's internal reference
+		sessions = [] :: [pid()]
 		}).
 
 -type(state() :: #state{}).
@@ -70,7 +71,7 @@ stop(Pid) ->
 %% @hidden
 init([Port]) ->
 	io:format("~p starting at ~p~n", [?MODULE, node()]),
-%	process_flag(trap_exit, true),
+	process_flag(trap_exit, true),
 	Opts = [list, {packet, line}, {reuseaddr, true},
 		{keepalive, true}, {backlog, 30}, {active, false}],
 	case gen_tcp:listen(Port, Opts) of
@@ -106,9 +107,14 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 
 		%% New client connected
 		io:format("new client connection.~n", []),
-		{ok, Pid} = gen_smtp_server_session:start(CliSocket, smtp_server_example, "localhost"),
-		gen_tcp:controlling_process(CliSocket, Pid),
-
+		Sessions = case gen_smtp_server_session:start(CliSocket, smtp_server_example, "localhost", length(State#state.sessions) + 1) of
+			{ok, Pid} ->
+				link(Pid),
+				gen_tcp:controlling_process(CliSocket, Pid),
+				lists:append(State#state.sessions, [Pid]);
+			Other ->
+				State#state.sessions
+		end,
 		%% Signal the network driver that we are ready to accept another connection
 		case prim_inet:async_accept(ListSock, -1) of
 			{ok, NewRef} ->
@@ -117,16 +123,20 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 				exit({async_accept, inet:format_error(NewRef)})
 		end,
 
-		{noreply, State#state{acceptor=NewRef}}
+		{noreply, State#state{acceptor=NewRef, sessions = Sessions}}
 	catch exit:Why ->
 		error_logger:error_msg("Error in async accept: ~p.\n", [Why]),
 		{stop, Why, State}
 end;
 
-% TODO - why?  trying to close on shutdown w/ reason shutdown, which it does anyway.
-% remove the trap exit process flag, see what happens.
-handle_info({'EXIT', _From, shutdown}, State) ->
-	{stop, shutdown, State};
+handle_info({'EXIT', From, Reason}, State) ->
+	case lists:member(From, State#state.sessions) of
+		true ->
+			{noreply, State#state{sessions = lists:delete(From, State#state.sessions)}};
+		false ->
+			io:format("process ~p exited with reason ~p~n", [From, Reason]),
+			{noreply, State}
+	end;
 	
 handle_info({inet_async, ListSock, Ref, Error}, #state{listener=ListSock, acceptor=Ref} = State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),

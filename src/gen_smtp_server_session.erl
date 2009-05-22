@@ -29,7 +29,7 @@
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/3, start/3]).
+-export([start_link/4, start/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -59,7 +59,7 @@
 ).
 
 behaviour_info(callbacks) ->
-	[{init,1},
+	[{init,2},
 		{handle_HELO,2},
 		{handle_EHLO,3},
 		{handle_MAIL,2},
@@ -72,19 +72,20 @@ behaviour_info(callbacks) ->
 behaviour_info(_Other) ->
 	undefined.
 
-start_link(Socket, Module, Hostname) ->
-	gen_server:start_link(?MODULE, [Socket, Module, Hostname], []).
+start_link(Socket, Module, Hostname, SessionCount) ->
+	gen_server:start_link(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
-start(Socket, Module, Hostname) ->
-	gen_server:start(?MODULE, [Socket, Module, Hostname], []).
+start(Socket, Module, Hostname, SessionCount) ->
+	gen_server:start(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
-init([Socket, Module, Hostname]) ->
+init([Socket, Module, Hostname, SessionCount]) ->
 	inet:setopts(Socket, [{active, once}, {packet, line}, list]),
-	case Module:init(Hostname) of
+	case Module:init(Hostname, SessionCount) of
 		{ok, Banner, CallbackState} ->
 			gen_tcp:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
 			{ok, #state{socket = Socket, module = Module, hostname = Hostname, callbackstate = CallbackState}, ?TIMEOUT};
-		{stop, Reason} ->
+		{stop, Reason, Message} ->
+			gen_tcp:send(Socket, Message ++ "\r\n"),
 			gen_tcp:close(Socket),
 			{stop, Reason};
 		ignore ->
@@ -153,7 +154,7 @@ handle_info(_Info, State) ->
 
 %% @hidden
 terminate(Reason, State) ->
-	io:format("Terminating due to ~p~n", [Reason]),
+	io:format("Session terminating due to ~p~n", [Reason]),
 	gen_tcp:close(State#state.socket),
 	ok.
 
