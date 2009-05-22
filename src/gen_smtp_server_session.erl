@@ -154,7 +154,7 @@ handle_info({tcp, Socket, Packet}, State) ->
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, State2, ?TIMEOUT};
 handle_info({tcp_closed, _Socket}, State) ->
-	io:format("Connection closed~n~n", []),
+	io:format("Connection closed~n"),
 	{stop, normal, State};
 handle_info(timeout, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "421 Error: timeout exceeded\r\n"),
@@ -537,5 +537,43 @@ parse_request_test_() ->
 			end
 		}
 	].
+
+smtp_session_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				Self = self(),
+				spawn(fun() ->
+							{ok, ListenSock} = gen_tcp:listen(9876, [list, {packet, line}, {reuseaddr, true}, {keepalive, true}, {backlog, 30}, {active, false}]),
+							{ok, X} = gen_tcp:accept(ListenSock),
+							inet:setopts(X, [list, {packet, line}, {reuseaddr, true}, {keepalive, true}, {backlog, 30}, {active, false}]),
+							gen_tcp:controlling_process(X, Self),
+							Self ! X
+					end),
+				{ok, CSock} = gen_tcp:connect("localhost", 9876,  [list, {packet, line}, {active, false}]),
+				receive
+					SSock when is_port(SSock) ->
+						?debugFmt("Got server side of the socket ~p, client is ~p~n", [SSock, CSock])
+				end,
+				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, "localhost", 1),
+				gen_tcp:controlling_process(SSock, Pid),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+				gen_tcp:close(CSock)
+		end,
+		[fun({CSock, _Pid}) ->
+					{"A new connection should get a banner",
+						fun() ->
+								?debugFmt("yo~n", []),
+								inet:setopts(CSock, [{active, once}]),
+								?debugFmt("yo~n", []),
+								receive {tcp, CSock, Packet} -> ok end,
+								?assertMatch("220 localhost"++_Stuff,  Packet)
+						end
+					}
+			end
+		]
+	}.
 
 -endif.
