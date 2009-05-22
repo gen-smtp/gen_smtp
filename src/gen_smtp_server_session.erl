@@ -83,10 +83,10 @@ start(Socket, Module, Hostname, SessionCount) ->
 	gen_server:start(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
 init([Socket, Module, Hostname, SessionCount]) ->
-	inet:setopts(Socket, [{active, once}, {packet, line}, list]),
 	case Module:init(Hostname, SessionCount) of
 		{ok, Banner, CallbackState} ->
 			gen_tcp:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
+			inet:setopts(Socket, [{active, once}, {packet, line}, list]),
 			{ok, #state{socket = Socket, module = Module, hostname = Hostname, callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
 			gen_tcp:send(Socket, Message ++ "\r\n"),
@@ -316,6 +316,10 @@ handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, modu
 				error ->
 					gen_tcp:send(Socket, "501 Bad recipient address syntax\r\n"),
 					State;
+				{[], _} ->
+					% empty rcpt to addresses aren't cool
+					gen_tcp:send(Socket, "501 Bad recipient address syntax\r\n"),
+					State;
 				{ParsedAddress, []} ->
 					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, State#state.callbackstate) of
@@ -373,6 +377,8 @@ handle_request({Verb, Args}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "502 Error: command not recognized\r\n"),
 	State.
 
+parse_encoded_address([]) ->
+	error; % empty
 parse_encoded_address("<@" ++ Address) ->
 	case string:str(Address, ":") of
 		0 ->
@@ -478,6 +484,18 @@ parse_encoded_address_test_() ->
 		{"Address with an invalid route should fail",
 			fun() ->
 					?assertEqual(error, parse_encoded_address("<@gateway.af.mil God@heaven.af.mil>"))
+			end
+		},
+		{"Empty addresses should parse OK",
+			fun() ->
+					?assertEqual({[], []}, parse_encoded_address("<>")),
+					?assertEqual({[], []}, parse_encoded_address(" <> "))
+			end
+		},
+		{"Completely empty addresses are an error",
+			fun() ->
+					?assertEqual(error, parse_encoded_address("")),
+					?assertEqual(error, parse_encoded_address(" "))
 			end
 		}
 	].

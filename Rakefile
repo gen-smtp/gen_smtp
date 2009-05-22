@@ -266,7 +266,8 @@ namespace :test do
 		dialyzer_flags = ""
 		dialyzer_flags += " -DEUNIT=1" if ENV['dialyzer_debug']
 		dialyzer_flags += " -Wunderspecs" if ENV['dialyzer_underspecced']
-		dialyzer_output = `dialyzer -D#{OTPVERSION}=1 #{dialyzer_flags} --src -I include -c #{SRC.join(' ')} contrib/misc/src/*.erl contrib/mochiweb/src/*.erl`
+		contribfiles = Dir['contrib**/*.erl'].join(' ')
+		dialyzer_output = `dialyzer -D#{OTPVERSION}=1 #{dialyzer_flags} --src -I include -c #{SRC.join(' ')} #{contribfiles}`
 		#puts dialyzer_output
 		if $?.exitstatus.zero?
 			puts 'ok'
@@ -280,6 +281,6 @@ namespace :test do
 	task :build_plt do
 		out = `which erlc`
 		foo = out.split('/')[0..-3].join('/')+'/lib/erlang/lib'
-		sh "dialyzer --build_plt -r #{foo}/kernel*/ebin #{foo}/stdlib*/ebin #{foo}/mnesia*/ebin #{foo}/crypto*/ebin"
+		sh "dialyzer --build_plt -r #{foo}/kernel*/ebin #{foo}/stdlib*/ebin #{foo}/mnesia*/ebin #{foo}/crypto*/ebin #{foo}/eunit*/ebin"
 	end
 end
