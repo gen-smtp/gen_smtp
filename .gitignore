@@ -1,2 +1,4 @@
 *.swp
 *.beam
+erl_crash.dump
+coverage/*

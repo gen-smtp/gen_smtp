@@ -25,6 +25,10 @@
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
 
+-ifdef(EUNIT).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -define(BUILTIN_EXTENSIONS, [{"SIZE", "10240000"}, {"8BITMIME", true}, {"PIPELINING", true}]).
 -define(TIMEOUT, 180000). % 3 minutes
 
@@ -199,7 +203,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 			case Extensions of
 				[] ->
 					gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
-					State#state{extensions = Extensions};
+					State#state{extensions = Extensions, callbackstate = CallbackState};
 				_Else ->
 					F =
 					fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
@@ -213,7 +217,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 					end,
 					{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
 					gen_tcp:send(Socket, Response),
-					State#state{extensions = Extensions, envelope = #envelope{}}
+					State#state{extensions = Extensions, envelope = #envelope{}, callbackstate = CallbackState}
 			end;
 		{error, Message, CallbackState} ->
 			gen_tcp:send(Socket, Message++"\r\n"),
@@ -260,7 +264,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 										false ->
 											{error, "552 Unsupported option SIZE\r\n"}
 									end;
-								("BODY="++BodyType, InnerState) ->
+								("BODY="++_BodyType, InnerState) ->
 									case has_extension(State#state.extensions, "8BITMIME") of
 										{true, _} ->
 											InnerState;
@@ -280,7 +284,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 									%io:format("error: ~s~n", [Message]),
 									gen_tcp:send(Socket, Message),
 									State;
-								#state{envelope = NewEnvelope} = NewState ->
+								NewState ->
 									%io:format("OK~n"),
 									% TODO callback
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
@@ -289,7 +293,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 											State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
 										{error, Message, CallbackState} ->
 											gen_tcp:send(Socket, Message ++ "\r\n"),
-											State#state{callbackstate = CallbackState}
+											NewState#state{callbackstate = CallbackState}
 									end
 							end
 					end;
@@ -374,37 +378,45 @@ parse_encoded_address("<@" ++ Address) ->
 		0 ->
 			error; % invalid address
 		Index ->
-			parse_encoded_address(string:substr(Address, Index + 1))
+			parse_encoded_address(string:substr(Address, Index + 1), "", {false, true})
 	end;
 parse_encoded_address("<" ++ Address) ->
+	parse_encoded_address(Address, "", {false, true});
+parse_encoded_address(" " ++ Address) ->
 	parse_encoded_address(Address);
 parse_encoded_address(Address) ->
-	parse_encoded_address(Address, "", noquotes).
+	parse_encoded_address(Address, "", {false, false}).
 
-parse_encoded_address([], Acc, Quotes) ->
+parse_encoded_address([], Acc, {_Quotes, false}) ->
 	{lists:reverse(Acc), []};
+parse_encoded_address([], _Acc, {_Quotes, true}) ->
+	error; % began with angle brackets but didn't end with them
 parse_encoded_address(_, Acc, _) when length(Acc) > 129 ->
 	error; % too long
-parse_encoded_address([$\\ | Tail], Acc, Quotes) ->
+parse_encoded_address([$\\ | Tail], Acc, Flags) ->
 	[H | NewTail] = Tail,
-	parse_encoded_address(NewTail, [H | Acc], Quotes);
-parse_encoded_address([$" | Tail], Acc, noquotes) ->
-	parse_encoded_address(Tail, Acc, quotes);
-parse_encoded_address([$" | Tail], Acc, quotes) ->
-	parse_encoded_address(Tail, Acc, noquotes);
-parse_encoded_address([$> | Tail], Acc, noquotes) ->
+	parse_encoded_address(NewTail, [H | Acc], Flags);
+parse_encoded_address([$" | Tail], Acc, {false, AB}) ->
+	parse_encoded_address(Tail, Acc, {true, AB});
+parse_encoded_address([$" | Tail], Acc, {true, AB}) ->
+	parse_encoded_address(Tail, Acc, {false, AB});
+parse_encoded_address([$> | Tail], Acc, {false, true}) ->
 	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
-parse_encoded_address([$\s | Tail], Acc, noquotes) ->
+parse_encoded_address([$> | _Tail], _Acc, {false, false}) ->
+	error; % ended with angle brackets but didn't begin with them
+parse_encoded_address([$\s | Tail], Acc, {false, false}) ->
 	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
-parse_encoded_address([H | Tail], Acc, noquotes) when H >= 48, H =< 57 ->
-	parse_encoded_address(Tail, [H | Acc], noquotes); % digits
-parse_encoded_address([H | Tail], Acc, noquotes) when H >= 64, H =< 90 ->
-	parse_encoded_address(Tail, [H | Acc], noquotes); % @ symbol and uppercase letters
-parse_encoded_address([H | Tail], Acc, noquotes) when H >= 97, H =< 122 ->
-	parse_encoded_address(Tail, [H | Acc], noquotes); % lowercase letters
-parse_encoded_address([H | Tail], Acc, noquotes) when H =:= 45; H =:= 46; H =:= 95 ->
-	parse_encoded_address(Tail, [H | Acc], noquotes); % dash, dot, underscore
-parse_encoded_address(_, _Acc, quotes) ->
+parse_encoded_address([$\s | _Tail], _Acc, {false, true}) ->
+	error; % began with angle brackets but didn't end with them
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= 48, H =< 57 ->
+	parse_encoded_address(Tail, [H | Acc], {false, AB}); % digits
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= 64, H =< 90 ->
+	parse_encoded_address(Tail, [H | Acc], {false, AB}); % @ symbol and uppercase letters
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= 97, H =< 122 ->
+	parse_encoded_address(Tail, [H | Acc], {false, AB}); % lowercase letters
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H =:= 45; H =:= 46; H =:= 95 ->
+	parse_encoded_address(Tail, [H | Acc], {false, AB}); % dash, dot, underscore
+parse_encoded_address([_H | _Tail], _Acc, {false, _AB}) ->
 	error;
 parse_encoded_address([H | Tail], Acc, Quotes) ->
 	parse_encoded_address(Tail, [H | Acc], Quotes).
@@ -419,3 +431,55 @@ has_extension(Exts, Ext) ->
 		false ->
 			false
 	end.
+
+-ifdef(EUNIT).
+parse_encoded_address_test_() ->
+	[
+		{"Valid addresses should parse",
+			fun() ->
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<God@heaven.af.mil>")),
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<\\God@heaven.af.mil>")),
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<\"God\"@heaven.af.mil>")),
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<@gateway.af.mil,@uucp.local:\"\\G\\o\\d\"@heaven.af.mil>")),
+					?assertEqual({"God2@heaven.af.mil", []}, parse_encoded_address("<God2@heaven.af.mil>"))
+			end
+		},
+		{"Addresses that are sorta valid should parse",
+			fun() ->
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("God@heaven.af.mil")),
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("God@heaven.af.mil ")),
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address(" God@heaven.af.mil ")),
+					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address(" <God@heaven.af.mil> "))
+			end
+		},
+		{"Addresses containing unescaped <> that aren't at start/end should fail",
+			fun() ->
+					?assertEqual(error, parse_encoded_address("<<")),
+					?assertEqual(error, parse_encoded_address("<God<@heaven.af.mil>"))
+			end
+		},
+		{"Address that begins with < but doesn't end with a > should fail",
+			fun() ->
+					?assertEqual(error, parse_encoded_address("<God@heaven.af.mil")),
+					?assertEqual(error, parse_encoded_address("<God@heaven.af.mil "))
+			end
+		},
+		{"Address that begins without < but ends with a > should fail",
+			fun() ->
+					?assertEqual(error, parse_encoded_address("God@heaven.af.mil>"))
+			end
+		},
+		{"Address longer than 129 character should fail",
+			fun() ->
+					MegaAddress = lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ "@" ++ lists:seq(97, 122) ++ lists:seq(97, 122),
+					?assertEqual(error, parse_encoded_address(MegaAddress))
+			end
+		},
+		{"Address with an invalid route should fail",
+			fun() ->
+					?assertEqual(error, parse_encoded_address("<@gateway.af.mil God@heaven.af.mil>"))
+			end
+		}
+	].
+
+-endif.
