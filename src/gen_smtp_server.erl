@@ -35,6 +35,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
 
+
 -ifdef(R13B).
 -type(ref() :: reference()).
 -endif.
@@ -105,7 +106,7 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 
 		%% New client connected
 		io:format("new client connection.~n", []),
-		{ok, Pid} = gen_smtp_server_session:start(CliSocket, undefined),
+		{ok, Pid} = gen_smtp_server_session:start(CliSocket, smtp_server_example, "localhost"),
 		gen_tcp:controlling_process(CliSocket, Pid),
 
 		%% Signal the network driver that we are ready to accept another connection

@@ -26,13 +26,16 @@
 -behaviour(gen_server).
 
 -define(BUILTIN_EXTENSIONS, [{"SIZE", "10240000"}, {"8BITMIME", true}]).
+-define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/2, start/2]).
+-export([start_link/3, start/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
+
+-export([behaviour_info/1]).
 
 -record(envelope,
 	{
@@ -47,23 +50,47 @@
 	{
 		socket = erlang:error({undefined, socket}) :: port(),
 		module = erlang:error({undefined, module}) :: atom(),
-		hostname = "localhost" :: string(),
+		hostname = erlang:error({undefined, hostname}) :: string(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [string()],
-		readmessage = false :: bool()
+		readmessage = false :: bool(),
+		callbackstate :: any()
 	}
 ).
 
-start_link(Socket, Module) ->
-	gen_server:start_link(?MODULE, [Socket, Module], []).
+behaviour_info(callbacks) ->
+	[{init,1},
+		{handle_HELO,2},
+		{handle_EHLO,3},
+		{handle_MAIL,2},
+		{handle_MAIL_extension,2},
+		{handle_RCPT,2},
+		{handle_RCPT_extension,2},
+		{handle_DATA,4},
+		{terminate,2},
+		{code_change,3}];
+behaviour_info(_Other) ->
+	undefined.
 
-start(Socket, Module) ->
-	gen_server:start(?MODULE, [Socket, Module], []).
+start_link(Socket, Module, Hostname) ->
+	gen_server:start_link(?MODULE, [Socket, Module, Hostname], []).
 
-init([Socket, Module]) ->
+start(Socket, Module, Hostname) ->
+	gen_server:start(?MODULE, [Socket, Module, Hostname], []).
+
+init([Socket, Module, Hostname]) ->
 	inet:setopts(Socket, [{active, once}, {packet, line}, list]),
-	gen_tcp:send(Socket, "220 localhost ESMTP\r\n"),
-	{ok, #state{socket = Socket, module = Module}}.
+	case Module:init(Hostname) of
+		{ok, Banner, CallbackState} ->
+			gen_tcp:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
+			{ok, #state{socket = Socket, module = Module, hostname = Hostname, callbackstate = CallbackState}, ?TIMEOUT};
+		{stop, Reason} ->
+			gen_tcp:close(Socket),
+			{stop, Reason};
+		ignore ->
+			gen_tcp:close(Socket),
+			ignore
+	end.
 
 %% @hidden
 handle_call(stop, _From, State) ->
@@ -77,33 +104,49 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 	
-handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope} = State) ->
-	io:format("done reading message~n"),
-	io:format("entire message~n~s~n", [Envelope#envelope.data]),
-	case has_extension(State#state.extensions, "SIZE") of
+handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
+	%io:format("done reading message~n"),
+	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
+	Valid = case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
 			case length(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
-					gen_tcp:send(Socket, "552 Message too large\r\n");
+					gen_tcp:send(Socket, "552 Message too large\r\n"),
+					false;
 				false ->
-					gen_tcp:send(Socket, "250 Ok\r\n")
+					true
 			end;
 		false ->
-			gen_tcp:send(Socket, "250 Ok\r\n")
+			true
 	end,
-	inet:setopts(Socket, [{active, once}]),
-	{noreply, State#state{readmessage = false, envelope = #envelope{}}};
+	case Valid of
+		true ->
+			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, State#state.callbackstate) of
+				{ok, Reference, CallbackState} ->
+					gen_tcp:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
+					inet:setopts(Socket, [{active, once}]),
+					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT};
+				{error, Message, CallbackState} ->
+					gen_tcp:send(Socket, Message++"\r\n"),
+					inet:setopts(Socket, [{active, once}]),
+					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
+			end
+	end;
 handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
-	io:format("got message chunk \"~s\"~n", [Packet]),
+	%io:format("got message chunk \"~s\"~n", [Packet]),
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet)}}};
+	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet)}}, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, State) ->
-	io:format("Packet ~p~n", [Packet]),
+	%io:format("Packet ~p~n", [Packet]),
 	State2 = handle_request(parse_request(Packet), State),
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, State2};
+	{noreply, State2, ?TIMEOUT};
 handle_info({tcp_closed, _Socket}, State) ->
 	io:format("Connection closed~n~n", []),
+	{stop, normal, State};
+handle_info(timeout, #state{socket = Socket} = State) ->
+	gen_tcp:send(Socket, "421 Error: timeout exceeded\r\n"),
+	gen_tcp:close(Socket),
 	{stop, normal, State};
 handle_info(_Info, State) ->
 	{noreply, State}.
@@ -122,12 +165,12 @@ parse_request(Packet) ->
 	Request = string:strip(string:strip(string:strip(string:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case string:str(Request, " ") of
 		0 -> % whole thing is the verb
-			io:format("got a ~s request~n", [Request]),
+			%io:format("got a ~s request~n", [Request]),
 			{string:to_upper(Request), []};
 		Index ->
 			Verb = string:substr(Request, 1, Index - 1),
 			Parameters = string:strip(string:substr(Request, Index + 1), left, $\s),
-			io:format("got a ~s request with parameters ~s~n", [Verb, Parameters]),
+			%io:format("got a ~s request with parameters ~s~n", [Verb, Parameters]),
 			{string:to_upper(Verb), Parameters}
 	end.
 
@@ -137,38 +180,48 @@ handle_request({[], _Any}, #state{socket = Socket} = State) ->
 handle_request({"HELO", []}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "501 Syntax: HELO hostname\r\n"),
 	State;
-handle_request({"HELO", _Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
-	gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
-	State#state{envelope = #envelope{}};
+handle_request({"HELO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
+	case Module:handle_HELO(Hostname, State#state.callbackstate) of
+		{ok, CallbackState} ->
+			gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
+			State#state{envelope = #envelope{}, callbackstate = CallbackState};
+		{error, Message, CallbackState} ->
+			gen_tcp:send(Socket, Message ++ "\r\n"),
+			State#state{callbackstate = CallbackState}
+	end;
 handle_request({"EHLO", []}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "501 Syntax: EHLO hostname\r\n"),
 	State;
 handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
-	%Extensions = Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS),
-	Extensions = ?BUILTIN_EXTENSIONS,
-	case Extensions of
-		[] ->
-			gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
-			State#state{extensions = Extensions};
-		_Else ->
-			F =
-			fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
-					{Pos, Len, string:concat(string:concat(string:concat(Acc, "250 "), E), "\r\n")};
-				({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
-					{Pos, Len, string:concat(Acc, io_lib:format("250 ~s ~s\r\n", [E, Value]))};
-				({E, true}, {Pos, Len, Acc}) ->
-					{Pos+1, Len, string:concat(string:concat(string:concat(Acc, "250-"), E), "\r\n")};
-				({E, Value}, {Pos, Len, Acc}) ->
-					{Pos+1, Len, string:concat(Acc, io_lib:format("250-~s ~s\r\n", [E, Value]))}
-			end,
-			{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
-			gen_tcp:send(Socket, Response),
-			State#state{extensions = Extensions, envelope = #envelope{}}
+	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, State#state.callbackstate) of
+		{ok, Extensions, CallbackState} ->
+			case Extensions of
+				[] ->
+					gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
+					State#state{extensions = Extensions};
+				_Else ->
+					F =
+					fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
+							{Pos, Len, string:concat(string:concat(string:concat(Acc, "250 "), E), "\r\n")};
+						({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
+							{Pos, Len, string:concat(Acc, io_lib:format("250 ~s ~s\r\n", [E, Value]))};
+						({E, true}, {Pos, Len, Acc}) ->
+							{Pos+1, Len, string:concat(string:concat(string:concat(Acc, "250-"), E), "\r\n")};
+						({E, Value}, {Pos, Len, Acc}) ->
+							{Pos+1, Len, string:concat(Acc, io_lib:format("250-~s ~s\r\n", [E, Value]))}
+					end,
+					{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
+					gen_tcp:send(Socket, Response),
+					State#state{extensions = Extensions, envelope = #envelope{}}
+			end;
+		{error, Message, CallbackState} ->
+			gen_tcp:send(Socket, Message++"\r\n"),
+			State#state{callbackstate = CallbackState}
 	end;
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
 	State;
-handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = State) ->
+handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope = Envelope} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
 			case string:str(string:to_upper(Args), "FROM:") of
@@ -179,11 +232,17 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 							gen_tcp:send(Socket, "501 Bad sender address syntax\r\n"),
 							State;
 						{ParsedAddress, []} ->
-							io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
-							gen_tcp:send(Socket, "250 Ok\r\n"),
-							State#state{envelope = Envelope#envelope{from = ParsedAddress}};
+							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
+							case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
+								{ok, CallbackState} ->
+									gen_tcp:send(Socket, "250 Ok\r\n"),
+									State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
+								{error, Message, CallbackState} ->
+									gen_tcp:send(Socket, Message ++ "\r\n"),
+									State#state{callbackstate = CallbackState}
+							end;
 						{ParsedAddress, ExtraInfo} ->
-							io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
+							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
 							Options = lists:map(fun(X) -> string:to_upper(X) end, string:tokens(ExtraInfo, " ")),
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
@@ -208,18 +267,29 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 											{error, "552 Unsupported option BODY\r\n"}
 									end;
 								(X, InnerState) ->
-									% TODO send to the callback
-									{error, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])}
+									case Module:handle_MAIL_extension(X, InnerState#state.callbackstate) of
+										{ok, CallbackState} ->
+											InnerState#state{callbackstate = CallbackState};
+										error ->
+											{error, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])}
+									end
 							end,
 							case lists:foldl(F, State, Options) of
 								{error, Message} ->
-									io:format("error: ~s~n", [Message]),
+									%io:format("error: ~s~n", [Message]),
 									gen_tcp:send(Socket, Message),
 									State;
 								#state{envelope = NewEnvelope} = NewState ->
-									io:format("OK~n"),
-									gen_tcp:send(Socket, "250 Ok\r\n"),
-									NewState#state{envelope = NewEnvelope#envelope{from = ParsedAddress}}
+									%io:format("OK~n"),
+									% TODO callback
+									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
+										{ok, CallbackState} ->
+											gen_tcp:send(Socket, "250 Ok\r\n"),
+											State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
+										{error, Message, CallbackState} ->
+											gen_tcp:send(Socket, Message ++ "\r\n"),
+											State#state{callbackstate = CallbackState}
+									end
 							end
 					end;
 				_Else ->
@@ -233,7 +303,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, envelope = Envelope} = St
 handle_request({"RCPT", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: need MAIL command\r\n"),
 	State;
-handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope} = State) ->
+handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
 	case string:str(string:to_upper(Args), "TO:") of
 		1 ->
 			Address = string:strip(string:substr(Args, 4), left, $\s),
@@ -242,10 +312,17 @@ handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope} = St
 					gen_tcp:send(Socket, "501 Bad recipient address syntax\r\n"),
 					State;
 				{ParsedAddress, []} ->
-					io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
-					gen_tcp:send(Socket, "250 Ok\r\n"),
-					State#state{envelope = Envelope#envelope{to = lists:append(Envelope#envelope.to, [ParsedAddress])}};
+					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
+					case Module:handle_RCPT(ParsedAddress, State#state.callbackstate) of
+						{ok, CallbackState} ->
+							gen_tcp:send(Socket, "250 Ok\r\n"),
+							State#state{envelope = Envelope#envelope{to = lists:append(Envelope#envelope.to, [ParsedAddress])}, callbackstate = CallbackState};
+						{error, Message, CallbackState} ->
+							gen_tcp:send(Socket, Message++"\r\n"),
+							State#state{callbackstate = CallbackState}
+					end;
 				{ParsedAddress, ExtraInfo} ->
+					% TODO - are there even any RCPT extensions?
 					io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
 					gen_tcp:send(Socket, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])),
 					State
@@ -267,7 +344,7 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 			State;
 		_Else ->
 			gen_tcp:send(Socket, "354 Ok\r\n"),
-			io:format("switching to data read mode~n"),
+			%io:format("switching to data read mode~n"),
 			State#state{readmessage = true}
 	end;
 handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope} = State) ->
@@ -284,6 +361,7 @@ handle_request({"NOOP", _Any}, #state{socket = Socket} = State) ->
 handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "221 Bye\r\n"),
 	gen_tcp:close(Socket),
+	self() ! {tcp_closed, Socket}, % make sure we exit too
 	State;
 handle_request({Verb, Args}, #state{socket = Socket} = State) ->
 	io:format("unhandled request ~s with arguments ~s~n", [Verb, Args]),
