@@ -46,6 +46,7 @@
 		from :: string(),
 		to = [] :: [string()],
 		data = "" :: string(),
+		headers = [] :: [{string(), string()}], %proplist
 		expectedsize :: pos_integer()
 	}
 ).
@@ -58,6 +59,7 @@
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [string()],
 		readmessage = false :: bool(),
+		readheaders = false :: bool(),
 		callbackstate :: any()
 	}
 ).
@@ -109,6 +111,7 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 	
+
 handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
@@ -126,7 +129,7 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 	end,
 	case Valid of
 		true ->
-			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, State#state.callbackstate) of
+			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.headers, Envelope#envelope.data, State#state.callbackstate) of
 				{ok, Reference, CallbackState} ->
 					gen_tcp:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
 					inet:setopts(Socket, [{active, once}]),
@@ -137,6 +140,41 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
 			end
 	end;
+handle_info({tcp, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
+	io:format("Header terminator~n"),
+	inet:setopts(Socket, [{active, once}]),
+	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}};
+handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
+	io:format("Header candidate: ~p~n", [Packet]),
+	NewState = case Packet of % first, check for a leading space or tab
+		[H | _T] when H =:= $\s; H =:= $\t ->
+			% TODO - check for "invisible line"
+			% TODO - if the header list is empty, this means that this line can't be a continuation of a previous header
+			[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
+			State#state{envelope = Envelope#envelope{headers = [{FieldName, string:concat(FieldValue, Packet)} | T]}};
+		_ -> % okay, now see if it's a header
+			case string:str(Packet, ":") of
+				0 -> % not a line starting a field
+					State#state{readmessage = true, readheaders = false,
+						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet), headers = lists:reverse(Envelope#envelope.headers)}};
+				1 -> % WTF, colon as first character on line
+					State#state{readmessage = true, readheaders = false,
+						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet), headers = lists:reverse(Envelope#envelope.headers)}};
+				Index ->
+					FieldName = string:substr(Packet, 1, Index - 1),
+					F = fun(X) -> X > 32 andalso X < 127 end,
+					case lists:all(F, FieldName) of
+						true ->
+							FieldValue = string:substr(Packet, Index+1),
+							State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
+						false ->
+							State#state{readmessage = true, readheaders = false,
+								envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet), headers = lists:reverse(Envelope#envelope.headers)}}
+					end
+			end
+	end,
+	inet:setopts(Socket, [{active, once}]),
+	{noreply, NewState};
 handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
 	io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
@@ -361,7 +399,7 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 		_Else ->
 			gen_tcp:send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
 			%io:format("switching to data read mode~n"),
-			State#state{readmessage = true}
+			State#state{readheaders = true}
 	end;
 handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope} = State) ->
 	gen_tcp:send(Socket, "250 Ok\r\n"),
@@ -380,9 +418,11 @@ handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 	self() ! {tcp_closed, Socket}, % make sure we exit too
 	State;
 handle_request({"VRFY", _Any}, #state{socket = Socket} = State) ->
+	% TODO callback
 	gen_tcp:send(Socket, "502 Error: VRFY disabled by policy\r\n"),
 	State;
 handle_request({Verb, Args}, #state{socket = Socket} = State) ->
+	% TODO callback
 	io:format("unhandled request ~s with arguments ~s~n", [Verb, Args]),
 	gen_tcp:send(Socket, "500 Error: command not recognized\r\n"),
 	State.

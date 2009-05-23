@@ -2,7 +2,7 @@
 -behaviour(gen_smtp_server_session).
 
 -export([init/2, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
-	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4]).
+	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/5]).
 
 init(Hostname, SessionCount) ->
 	case SessionCount > 20 of
@@ -11,6 +11,7 @@ init(Hostname, SessionCount) ->
 			State = {},
 			{ok, Banner, State};
 		true ->
+			io:format("Connection limit exceeded~n")
 			State = {},
 			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
 	end.
@@ -40,8 +41,10 @@ handle_RCPT_extension(Extension, State) ->
 	io:format("Mail from extension ~s~n", [Extension]),
 	{ok, State}.
 
-handle_DATA(From, To, Data, State) ->
+handle_DATA(From, To, Headers, Data, State) ->
 	% some kind of unique id
 	Reference = io_lib:format("~p", [make_ref()]),
 	io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
+	io:format("headers:~n"),
+	lists:foreach(fun({F, V}) -> io:format("~s : ~s", [F, V]) end, Headers),
 	{ok, Reference, State}.
