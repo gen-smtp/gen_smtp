@@ -269,14 +269,14 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 													InnerState#state{envelope = Envelope#envelope{expectedsize = list_to_integer(Size)}}
 											end;
 										false ->
-											{error, "552 Unsupported option SIZE\r\n"}
+											{error, "555 Unsupported option SIZE\r\n"}
 									end;
 								("BODY="++_BodyType, InnerState) ->
 									case has_extension(State#state.extensions, "8BITMIME") of
 										{true, _} ->
 											InnerState;
 										false ->
-											{error, "552 Unsupported option BODY\r\n"}
+											{error, "555 Unsupported option BODY\r\n"}
 									end;
 								(X, InnerState) ->
 									case Module:handle_MAIL_extension(X, InnerState#state.callbackstate) of
@@ -379,9 +379,12 @@ handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:close(Socket),
 	self() ! {tcp_closed, Socket}, % make sure we exit too
 	State;
+handle_request({"VRFY", _Any}, #state{socket = Socket} = State) ->
+	gen_tcp:send(Socket, "502 Error: VRFY disabled by policy\r\n"),
+	State;
 handle_request({Verb, Args}, #state{socket = Socket} = State) ->
 	io:format("unhandled request ~s with arguments ~s~n", [Verb, Args]),
-	gen_tcp:send(Socket, "502 Error: command not recognized\r\n"),
+	gen_tcp:send(Socket, "500 Error: command not recognized\r\n"),
 	State.
 
 parse_encoded_address([]) ->
@@ -565,14 +568,37 @@ smtp_session_test_() ->
 		[fun({CSock, _Pid}) ->
 					{"A new connection should get a banner",
 						fun() ->
-								?debugFmt("yo~n", []),
 								inet:setopts(CSock, [{active, once}]),
-								?debugFmt("yo~n", []),
 								receive {tcp, CSock, Packet} -> ok end,
 								?assertMatch("220 localhost"++_Stuff,  Packet)
 						end
 					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"A correct response to HELO",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 localhost\r\n",  Packet2)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"An error in response to an invalid HELO",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("501 Syntax: HELO hostname\r\n",  Packet2)
+						end
+					}
 			end
+
 		]
 	}.
 
