@@ -145,31 +145,37 @@ handle_info({tcp, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelop
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}};
 handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
-	io:format("Header candidate: ~p~n", [Packet]),
-	NewState = case Packet of % first, check for a leading space or tab
+	case Packet of
+		"." ++ String ->
+			String;
+		String ->
+			String
+	end,
+	io:format("Header candidate: ~p~n", [String]),
+	NewState = case String of % first, check for a leading space or tab
 		[H | _T] when H =:= $\s; H =:= $\t ->
 			% TODO - check for "invisible line"
 			% TODO - if the header list is empty, this means that this line can't be a continuation of a previous header
 			[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
-			State#state{envelope = Envelope#envelope{headers = [{FieldName, string:concat(FieldValue, Packet)} | T]}};
+			State#state{envelope = Envelope#envelope{headers = [{FieldName, trim_crlf(string:concat(FieldValue, String))} | T]}};
 		_ -> % okay, now see if it's a header
-			case string:str(Packet, ":") of
+			case string:str(String, ":") of
 				0 -> % not a line starting a field
 					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet), headers = lists:reverse(Envelope#envelope.headers)}};
+						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String), headers = lists:reverse(Envelope#envelope.headers)}};
 				1 -> % WTF, colon as first character on line
 					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet), headers = lists:reverse(Envelope#envelope.headers)}};
+						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String), headers = lists:reverse(Envelope#envelope.headers)}};
 				Index ->
-					FieldName = string:substr(Packet, 1, Index - 1),
+					FieldName = string:substr(String, 1, Index - 1),
 					F = fun(X) -> X > 32 andalso X < 127 end,
 					case lists:all(F, FieldName) of
 						true ->
-							FieldValue = string:substr(Packet, Index+1),
+							FieldValue = trim_crlf(string:substr(String, Index+1)),
 							State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
 						false ->
 							State#state{readmessage = true, readheaders = false,
-								envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, Packet), headers = lists:reverse(Envelope#envelope.headers)}}
+								envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String), headers = lists:reverse(Envelope#envelope.headers)}}
 					end
 			end
 	end,
@@ -464,13 +470,13 @@ parse_encoded_address([$\s | Tail], Acc, {false, false}) ->
 	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
 parse_encoded_address([$\s | _Tail], _Acc, {false, true}) ->
 	error; % began with angle brackets but didn't end with them
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= 48, H =< 57 ->
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $0, H =< $9 ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % digits
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= 64, H =< 90 ->
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $@, H =< $Z ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % @ symbol and uppercase letters
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= 97, H =< 122 ->
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $a, H =< $z ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % lowercase letters
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H =:= 45; H =:= 46; H =:= 95 ->
+parse_encoded_address([H | Tail], Acc, {false, AB}) when H =:= $-; H =:= $.; H =:= $_ ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % dash, dot, underscore
 parse_encoded_address([_H | _Tail], _Acc, {false, _AB}) ->
 	error;
@@ -487,6 +493,9 @@ has_extension(Exts, Ext) ->
 		false ->
 			false
 	end.
+
+trim_crlf(String) ->
+	string:strip(string:strip(String, right, $\n), right, $\r).
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->

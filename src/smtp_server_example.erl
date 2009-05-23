@@ -11,7 +11,7 @@ init(Hostname, SessionCount) ->
 			State = {},
 			{ok, Banner, State};
 		true ->
-			io:format("Connection limit exceeded~n")
+			io:format("Connection limit exceeded~n"),
 			State = {},
 			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
 	end.
@@ -46,5 +46,5 @@ handle_DATA(From, To, Headers, Data, State) ->
 	Reference = io_lib:format("~p", [make_ref()]),
 	io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
 	io:format("headers:~n"),
-	lists:foreach(fun({F, V}) -> io:format("~s : ~s", [F, V]) end, Headers),
+	lists:foreach(fun({F, V}) -> io:format("~s : ~s~n", [F, V]) end, Headers),
 	{ok, Reference, State}.
