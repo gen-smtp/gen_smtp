@@ -73,6 +73,8 @@ behaviour_info(callbacks) ->
 		{handle_RCPT,2},
 		{handle_RCPT_extension,2},
 		{handle_DATA,5},
+		{handle_VRFY,2},
+		{handle_other/3},
 		{terminate,2},
 		{code_change,3}];
 behaviour_info(_Other) ->
@@ -428,15 +430,25 @@ handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:close(Socket),
 	self() ! {tcp_closed, Socket}, % make sure we exit too
 	State;
-handle_request({"VRFY", _Any}, #state{socket = Socket} = State) ->
-	% TODO callback
-	gen_tcp:send(Socket, "502 Error: VRFY disabled by policy\r\n"),
-	State;
-handle_request({Verb, Args}, #state{socket = Socket} = State) ->
-	% TODO callback
-	io:format("unhandled request ~s with arguments ~s~n", [Verb, Args]),
-	gen_tcp:send(Socket, "500 Error: command not recognized\r\n"),
-	State.
+handle_request({"VRFY", Address}, #state{module= Module, socket = Socket} = State) ->
+	case parse_encoded_address(Address) of
+		{ParsedAddress, []} ->
+			case Module:handle_VRFY(Address, State#state.callbackstate) of
+				{ok, Reply, CallbackState} ->
+					gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [Reply])),
+					State#state{callbackstate = CallbackState};
+				{error, Message, CallbackState} ->
+					gen_tcp:send(Socket, Message++"\r\n"),
+					State#state{callbackstate = CallbackState}
+			end;
+		_Other ->
+			gen_tcp:send(Socket, "501 Syntax: VRFY username/address\r\n"),
+			State
+	end;
+handle_request({Verb, Args}, #state{socket = Socket, module = Module} = State) ->
+	{Message, CallbackState} = Module:handle_other(Verb, Args, State#state.callbackstate),
+	gen_tcp:send(Socket, Message++"\r\n"),
+	State#state{callbackstate = CallbackState}.
 
 parse_encoded_address([]) ->
 	error; % empty
