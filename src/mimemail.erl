@@ -38,27 +38,34 @@ decode(Headers, Body) ->
 		undefined ->
 			io:format("Non-MIME email~n");
 		Other ->
-			decode_component(Headers, Body, Other)
+			io:format("decoded mail: ~p~n", [decode_component(FixedHeaders, Body, Other)])
 	end.
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 	io:format("MIME 1.0 email~n"),
-	case parse_contenttype(proplists:get_value("Content-Type", FixedHeaders)) of
+	case parse_contenttype(proplists:get_value("Content-Type", Headers)) of
 		{"multipart", SubType, Parameters} ->
 			case proplists:get_value("boundary", Parameters) of
-				Boundary ->
-					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]);
 				undefined ->
-					io:format("multipart email of type ~s doesn't have a boundary!~n", [SubType])
+					io:format("multipart email of type ~s doesn't have a boundary!~n", [SubType]),
+					io:format("Headers: ~p, Body: ~p~n", [Headers, Body]),
+					erlang:error(boundary);
+				Boundary ->
+					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
+					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "\r\n--"++Boundary)}
 			end;
 		{Type, SubType, Parameters} ->
-			io:format("body is ~s/~s~n", [Type, SubType]);
+			io:format("body is ~s/~s~n", [Type, SubType]),
+			{Type, SubType, Headers, Parameters, Body};
+		undefined -> % defaults
+			Type = "text",
+			SubType = "plain",
+			Parameters = [{"charset", "us-ascii"}],
+			{Type, SubType, Headers, Parameters, Body};
 		error ->
-			error;
-		undefined ->
-
+			error
 	end;
-decode(Headers, Body, Other) ->
+decode_component(Headers, Body, Other) ->
 	io:format("Unknown mime version ~s~n", [Other]).
 
 
@@ -114,7 +121,7 @@ parse_contenttype(String) ->
 			SubType = string:substr(RawType, Index + 1),
 			F =
 			fun(X) ->
-					Y = string:strip(X),
+					Y = string:strip(string:strip(X), both, $\t),
 					case string:str(Y, "=") of
 						0 ->
 							error;
@@ -132,6 +139,84 @@ parse_contenttype(String) ->
 					{string:to_lower(Type), string:to_lower(SubType), Params}
 			end
 	end.
+
+split_body_by_boundary(Body, Boundary) ->
+	% find the indices of the first and last boundary
+	case [string:str(Body, Boundary), string:str(Body, Boundary++"--")] of
+		[Start, End] when Start =:= 0; End =:= 0 ->
+			error;
+		[Start, End] ->
+			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
+			Parts = split_body_by_boundary(NewBody, Boundary, []),
+			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, "1.0") end, Parts)
+	end.
+
+split_body_by_boundary([], _Boundary, Acc) ->
+	lists:reverse(Acc);
+split_body_by_boundary(Body, Boundary, Acc) ->
+	% trim the incomplete first line
+	TrimmedBody = string:substr(Body, string:str(Body, "\r\n") + 2),
+	case string:str(TrimmedBody, Boundary) of
+		0 ->
+			lists:reverse(Acc);
+		Index ->
+			split_body_by_boundary(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
+				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
+	end.
+
+parse_headers(Body) ->
+	case string:str(Body, "\r\n") of
+		0 ->
+			{[], Body};
+		1 ->
+			{[], string:substr(Body, 3)};
+		Index ->
+			parse_headers(string:substr(Body, Index+2), string:substr(Body, 1, Index - 1), [])
+	end.
+
+parse_headers(Body, Line, Headers) ->
+	case Line of
+		[H | T] when H =:= $\s; H =:= $\t ->
+			io:format("folded header"),
+			case length(Headers) of
+				0 ->
+					{[], Line++"\r\n"++Body};
+				_ ->
+					[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
+					FieldValue = string:concat(OldFieldValue, T),
+					case string:str(Body, "\r\n") of
+						0 ->
+							{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
+						1 ->
+							{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), string:substr(Body, 3)};
+						Index2 ->
+							parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | OtherHeaders])
+					end
+			end;
+		_ ->
+			case string:str(Line, ":") of
+				0 ->
+					{lists:reverse(Headers), Line++"\r\n"++Body};
+				Index ->
+					FieldName = string:substr(Line, 1, Index - 1),
+					F = fun(X) -> X > 32 andalso X < 127 end,
+					case lists:all(F, FieldName) of
+						true ->
+							FieldValue = string:strip(string:substr(Line, Index+1)),
+							case string:str(Body, "\r\n") of
+								0 ->
+									{lists:reverse([{FieldName, FieldValue} | Headers]), Body};
+								1 ->
+									{lists:reverse([{FieldName, FieldValue} | Headers]), string:substr(Body, 3)};
+								Index2 ->
+									parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | Headers])
+							end;
+						false ->
+							{lists:reverse(Headers), Line++"\r\n"++Body}
+					end
+			end
+	end.
+
 
 -ifdef(EUNIT).
 parse_with_comments_test_() ->
@@ -172,6 +257,11 @@ parse_contenttype_test_() ->
 					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("Text/Plain; Charset=\"us-ascii\"")),
 					?assertEqual({"multipart", "mixed", [{"boundary", "----_=_NextPart_001_01C9DCAE.1F2CB390"}]},
 						parse_contenttype("multipart/mixed; boundary=\"----_=_NextPart_001_01C9DCAE.1F2CB390\""))
+			end
+		},
+		{"parsing contenttype with a tab in it",
+			fun() ->
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain;\tcharset=us-ascii"))
 			end
 		}
 	].
