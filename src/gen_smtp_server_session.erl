@@ -74,7 +74,7 @@ behaviour_info(callbacks) ->
 		{handle_RCPT_extension,2},
 		{handle_DATA,5},
 		{handle_VRFY,2},
-		{handle_other/3},
+		{handle_other,3},
 		{terminate,2},
 		{code_change,3}];
 behaviour_info(_Other) ->
@@ -201,10 +201,13 @@ handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelop
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}}, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, State) ->
-	%io:format("Packet ~p~n", [Packet]),
-	State2 = handle_request(parse_request(Packet), State),
-	inet:setopts(Socket, [{active, once}]),
-	{noreply, State2, ?TIMEOUT};
+	case handle_request(parse_request(Packet), State) of
+		{ok, NewState} ->
+			inet:setopts(Socket, [{active, once}]),
+			{noreply, NewState, ?TIMEOUT};
+		{stop, Reason, NewState} ->
+			{stop, Reason, NewState}
+	end;
 handle_info({tcp_closed, _Socket}, State) ->
 	io:format("Connection closed~n"),
 	{stop, normal, State};
@@ -238,24 +241,25 @@ parse_request(Packet) ->
 			{string:to_upper(Verb), Parameters}
 	end.
 
+-spec(handle_request/2 :: ({Verb :: string(), Args :: string()}, State :: #state{}) -> {'ok', #state{}} | {'stop', any(), #state{}}).
 handle_request({[], _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "500 Error: bad syntax\r\n"),
-	State;
+	{ok, State};
 handle_request({"HELO", []}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "501 Syntax: HELO hostname\r\n"),
-	State;
+	{ok, State};
 handle_request({"HELO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
 	case Module:handle_HELO(Hostname, State#state.callbackstate) of
 		{ok, CallbackState} ->
 			gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
-			State#state{envelope = #envelope{}, callbackstate = CallbackState};
+			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
 			gen_tcp:send(Socket, Message ++ "\r\n"),
-			State#state{callbackstate = CallbackState}
+			{ok, State#state{callbackstate = CallbackState}}
 	end;
 handle_request({"EHLO", []}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "501 Syntax: EHLO hostname\r\n"),
-	State;
+	{ok, State};
 handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, State#state.callbackstate) of
 		{ok, Extensions, CallbackState} ->
@@ -276,15 +280,15 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 					end,
 					{_, _, Response} = lists:foldl(F, {1, length(Extensions), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions),
 					gen_tcp:send(Socket, Response),
-					State#state{extensions = Extensions, envelope = #envelope{}, callbackstate = CallbackState}
+					{ok, State#state{extensions = Extensions, envelope = #envelope{}, callbackstate = CallbackState}}
 			end;
 		{error, Message, CallbackState} ->
 			gen_tcp:send(Socket, Message++"\r\n"),
-			State#state{callbackstate = CallbackState}
+			{ok, State#state{callbackstate = CallbackState}}
 	end;
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
-	State;
+	{ok, State};
 handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope = Envelope} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
@@ -342,30 +346,30 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 								{error, Message} ->
 									%io:format("error: ~s~n", [Message]),
 									gen_tcp:send(Socket, Message),
-									State;
+									{ok, State};
 								NewState ->
 									%io:format("OK~n"),
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
 											gen_tcp:send(Socket, "250 sender Ok\r\n"),
-											State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
+											{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 										{error, Message, CallbackState} ->
 											gen_tcp:send(Socket, Message ++ "\r\n"),
-											NewState#state{callbackstate = CallbackState}
+											{ok, NewState#state{callbackstate = CallbackState}}
 									end
 							end
 					end;
 				_Else ->
 					gen_tcp:send(Socket, "501 Syntax: MAIL FROM:<address>\r\n"),
-					State
+					{ok, State}
 			end;
 		_Other ->
 			gen_tcp:send(Socket, "503 Error: Nested MAIL command\r\n"),
-			State
+			{ok, State}
 	end;
 handle_request({"RCPT", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: need MAIL command\r\n"),
-	State;
+	{ok, State};
 handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
 	case string:str(string:to_upper(Args), "TO:") of
 		1 ->
@@ -373,46 +377,46 @@ handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, modu
 			case parse_encoded_address(Address) of
 				error ->
 					gen_tcp:send(Socket, "501 Bad recipient address syntax\r\n"),
-					State;
+					{ok, State};
 				{[], _} ->
 					% empty rcpt to addresses aren't cool
 					gen_tcp:send(Socket, "501 Bad recipient address syntax\r\n"),
-					State;
+					{ok, State};
 				{ParsedAddress, []} ->
 					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, State#state.callbackstate) of
 						{ok, CallbackState} ->
 							gen_tcp:send(Socket, "250 recipient Ok\r\n"),
-							State#state{envelope = Envelope#envelope{to = lists:append(Envelope#envelope.to, [ParsedAddress])}, callbackstate = CallbackState};
+							{ok, State#state{envelope = Envelope#envelope{to = lists:append(Envelope#envelope.to, [ParsedAddress])}, callbackstate = CallbackState}};
 						{error, Message, CallbackState} ->
 							gen_tcp:send(Socket, Message++"\r\n"),
-							State#state{callbackstate = CallbackState}
+							{ok, State#state{callbackstate = CallbackState}}
 					end;
 				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
 					io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
 					gen_tcp:send(Socket, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])),
-					State
+					{ok, State}
 			end;
 		_Else ->
 			gen_tcp:send(Socket, "501 Syntax: RCPT TO:<address>\r\n"),
-			State
+			{ok, State}
 	end;
 handle_request({"DATA", []}, #state{socket = Socket, envelope = undefined} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
-	State;
+	{ok, State};
 handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = State) ->
 	case {Envelope#envelope.from, Envelope#envelope.to} of
 		{undefined, _} ->
 			gen_tcp:send(Socket, "503 Error: need MAIL command\r\n"),
-			State;
+			{ok, State};
 		{_, []} ->
 			gen_tcp:send(Socket, "503 Error: need RCPT command\r\n"),
-			State;
+			{ok, State};
 		_Else ->
 			gen_tcp:send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
 			%io:format("switching to data read mode~n"),
-			State#state{readheaders = true}
+			{ok, State#state{readheaders = true}}
 	end;
 handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope} = State) ->
 	gen_tcp:send(Socket, "250 Ok\r\n"),
@@ -421,34 +425,32 @@ handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope} = St
 		undefined -> undefined;
 		_Something -> #envelope{}
 	end,
-	State#state{envelope = NewEnvelope};
+	{ok, State#state{envelope = NewEnvelope}};
 handle_request({"NOOP", _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "250 Ok\r\n"),
-	State;
+	{ok, State};
 handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "221 Bye\r\n"),
-	gen_tcp:close(Socket),
-	self() ! {tcp_closed, Socket}, % make sure we exit too
-	State;
+	{stop, normal, State};
 handle_request({"VRFY", Address}, #state{module= Module, socket = Socket} = State) ->
 	case parse_encoded_address(Address) of
 		{ParsedAddress, []} ->
 			case Module:handle_VRFY(Address, State#state.callbackstate) of
 				{ok, Reply, CallbackState} ->
 					gen_tcp:send(Socket, io_lib:format("250 ~s\r\n", [Reply])),
-					State#state{callbackstate = CallbackState};
+					{ok, State#state{callbackstate = CallbackState}};
 				{error, Message, CallbackState} ->
 					gen_tcp:send(Socket, Message++"\r\n"),
-					State#state{callbackstate = CallbackState}
+					{ok, State#state{callbackstate = CallbackState}}
 			end;
 		_Other ->
 			gen_tcp:send(Socket, "501 Syntax: VRFY username/address\r\n"),
-			State
+			{ok, State}
 	end;
 handle_request({Verb, Args}, #state{socket = Socket, module = Module} = State) ->
 	{Message, CallbackState} = Module:handle_other(Verb, Args, State#state.callbackstate),
 	gen_tcp:send(Socket, Message++"\r\n"),
-	State#state{callbackstate = CallbackState}.
+	{ok, State#state{callbackstate = CallbackState}}.
 
 parse_encoded_address([]) ->
 	error; % empty
