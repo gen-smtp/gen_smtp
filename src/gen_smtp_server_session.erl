@@ -65,7 +65,7 @@
 ).
 
 behaviour_info(callbacks) ->
-	[{init,2},
+	[{init,3},
 		{handle_HELO,2},
 		{handle_EHLO,3},
 		{handle_MAIL,2},
@@ -73,6 +73,7 @@ behaviour_info(callbacks) ->
 		{handle_RCPT,2},
 		{handle_RCPT_extension,2},
 		{handle_DATA,5},
+		{handle_RSET,1},
 		{handle_VRFY,2},
 		{handle_other,3},
 		{terminate,2},
@@ -87,7 +88,8 @@ start(Socket, Module, Hostname, SessionCount) ->
 	gen_server:start(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
 init([Socket, Module, Hostname, SessionCount]) ->
-	case Module:init(Hostname, SessionCount) of
+	{ok, {PeerName, _Port}} = inet:peername(Socket),
+	case Module:init(Hostname, SessionCount, PeerName) of
 		{ok, Banner, CallbackState} ->
 			gen_tcp:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
 			inet:setopts(Socket, [{active, once}, {packet, line}, list]),
@@ -143,7 +145,7 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 			end
 	end;
 handle_info({tcp, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
-	io:format("Header terminator~n"),
+	%io:format("Header terminator~n"),
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
@@ -153,7 +155,7 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 		String ->
 			String
 	end,
-	io:format("Header candidate: ~p~n", [String]),
+	%io:format("Header candidate: ~p~n", [String]),
 	NewState = case String of % first, check for a leading space or tab
 		[H | _T] when H =:= $\s; H =:= $\t ->
 			% TODO - check for "invisible line"
@@ -190,7 +192,7 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 	inet:setopts(Socket, [{active, once}]),
 	{noreply, NewState, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
-	io:format("got message chunk \"~p\"~n", [Packet]),
+	%io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
 	case Packet of
 		"." ++ String ->
@@ -209,7 +211,7 @@ handle_info({tcp, Socket, Packet}, State) ->
 			{stop, Reason, NewState}
 	end;
 handle_info({tcp_closed, _Socket}, State) ->
-	io:format("Connection closed~n"),
+	%io:format("Connection closed~n"),
 	{stop, normal, State};
 handle_info(timeout, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "421 Error: timeout exceeded\r\n"),
@@ -418,14 +420,14 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 			%io:format("switching to data read mode~n"),
 			{ok, State#state{readheaders = true}}
 	end;
-handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope} = State) ->
+handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
 	gen_tcp:send(Socket, "250 Ok\r\n"),
 	% if the client sends a RSET before a HELO/EHLO don't give them a valid envelope
 	NewEnvelope = case Envelope of
 		undefined -> undefined;
 		_Something -> #envelope{}
 	end,
-	{ok, State#state{envelope = NewEnvelope}};
+	{ok, State#state{envelope = NewEnvelope, callbackstate = Module:handle_RSET(State#state.callbackstate)}};
 handle_request({"NOOP", _Any}, #state{socket = Socket} = State) ->
 	gen_tcp:send(Socket, "250 Ok\r\n"),
 	{ok, State};

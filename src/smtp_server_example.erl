@@ -1,10 +1,11 @@
 -module(smtp_server_example).
 -behaviour(gen_smtp_server_session).
 
--export([init/2, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
-	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/5, handle_VRFY/2, handle_other/3]).
+-export([init/3, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
+	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/5, handle_RSET/1, handle_VRFY/2, handle_other/3]).
 
-init(Hostname, SessionCount) ->
+init(Hostname, SessionCount, Address) ->
+	io:format("peer: ~p~n", [Address]),
 	case SessionCount > 20 of
 		false ->
 			Banner = io_lib:format("~s ESMTP smtp_server_example", [Hostname]),
@@ -43,10 +44,15 @@ handle_RCPT_extension(Extension, State) ->
 handle_DATA(From, To, Headers, Data, State) ->
 	% some kind of unique id
 	Reference = io_lib:format("~p", [make_ref()]),
-	io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
-	io:format("headers:~n"),
+	%io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
+	%io:format("headers:~n"),
 	lists:foreach(fun({F, V}) -> io:format("~s : ~s~n", [F, V]) end, Headers),
+	mimemail:decode(Headers, Data),
 	{ok, Reference, State}.
+
+handle_RSET(State) ->
+	% reset any relevant internal state
+	State.
 
 handle_VRFY(Address, State) ->
 	{error, "252 VRFY disabled by policy, just send some mail", State}.
