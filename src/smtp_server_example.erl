@@ -12,7 +12,6 @@ init(Hostname, SessionCount) ->
 			{ok, Banner, State};
 		true ->
 			io:format("Connection limit exceeded~n"),
-			State = {},
 			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
 	end.
 

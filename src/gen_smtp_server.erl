@@ -112,7 +112,7 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 				link(Pid),
 				gen_tcp:controlling_process(CliSocket, Pid),
 				lists:append(State#state.sessions, [Pid]);
-			Other ->
+			_Other ->
 				State#state.sessions
 		end,
 		%% Signal the network driver that we are ready to accept another connection

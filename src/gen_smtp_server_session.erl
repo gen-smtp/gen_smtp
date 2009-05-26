@@ -72,7 +72,7 @@ behaviour_info(callbacks) ->
 		{handle_MAIL_extension,2},
 		{handle_RCPT,2},
 		{handle_RCPT_extension,2},
-		{handle_DATA,4},
+		{handle_DATA,5},
 		{terminate,2},
 		{code_change,3}];
 behaviour_info(_Other) ->
@@ -143,7 +143,7 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 handle_info({tcp, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
 	io:format("Header terminator~n"),
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}};
+	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
 	case Packet of
 		"." ++ String ->
@@ -155,9 +155,15 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 	NewState = case String of % first, check for a leading space or tab
 		[H | _T] when H =:= $\s; H =:= $\t ->
 			% TODO - check for "invisible line"
-			% TODO - if the header list is empty, this means that this line can't be a continuation of a previous header
-			[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
-			State#state{envelope = Envelope#envelope{headers = [{FieldName, trim_crlf(string:concat(FieldValue, String))} | T]}};
+			case Envelope#envelope.headers of
+				[] ->
+					% if the header list is empty, this means that this line can't be a continuation of a previous header
+					State#state{readmessage = true, readheaders = false,
+						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}};
+				_ ->
+					[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
+					State#state{envelope = Envelope#envelope{headers = [{FieldName, string:concat(FieldValue, trim_crlf(String))} | T]}}
+			end;
 		_ -> % okay, now see if it's a header
 			case string:str(String, ":") of
 				0 -> % not a line starting a field
@@ -171,7 +177,7 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 					F = fun(X) -> X > 32 andalso X < 127 end,
 					case lists:all(F, FieldName) of
 						true ->
-							FieldValue = trim_crlf(string:substr(String, Index+1)),
+							FieldValue = string:strip(trim_crlf(string:substr(String, Index+1))),
 							State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
 						false ->
 							State#state{readmessage = true, readheaders = false,
@@ -180,7 +186,7 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 			end
 	end,
 	inet:setopts(Socket, [{active, once}]),
-	{noreply, NewState};
+	{noreply, NewState, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
 	io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
@@ -337,7 +343,6 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 									State;
 								NewState ->
 									%io:format("OK~n"),
-									% TODO callback
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
 											gen_tcp:send(Socket, "250 sender Ok\r\n"),
