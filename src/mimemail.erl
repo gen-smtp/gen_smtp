@@ -38,7 +38,7 @@ decode(Headers, Body) ->
 		undefined ->
 			io:format("Non-MIME email~n");
 		Other ->
-			io:format("decoded mail: ~p~n", [decode_component(FixedHeaders, Body, Other)])
+			decode_component(FixedHeaders, Body, Other)
 	end.
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
@@ -54,6 +54,9 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "\r\n--"++Boundary)}
 			end;
+		{"message", "rfc822", Parameters} ->
+			{NewHeaders, NewBody} = parse_headers(Body),
+			{"message", "rfc822", Headers, Parameters, decode(NewHeaders, NewBody)};
 		{Type, SubType, Parameters} ->
 			io:format("body is ~s/~s~n", [Type, SubType]),
 			{Type, SubType, Headers, Parameters, Body};
@@ -175,15 +178,17 @@ parse_headers(Body) ->
 	end.
 
 parse_headers(Body, Line, Headers) ->
+	%?debugFmt("line: ~p, nextpart ~p~n", [Line, string:substr(Body, 1, 10)]),
 	case Line of
 		[H | T] when H =:= $\s; H =:= $\t ->
-			io:format("folded header"),
+		%?debugFmt("folded header~n", []),
 			case length(Headers) of
 				0 ->
 					{[], Line++"\r\n"++Body};
 				_ ->
 					[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
 					FieldValue = string:concat(OldFieldValue, T),
+					%?debugFmt("~p = ~p~n", [FieldName, FieldValue]),
 					case string:str(Body, "\r\n") of
 						0 ->
 							{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
@@ -262,6 +267,19 @@ parse_contenttype_test_() ->
 		{"parsing contenttype with a tab in it",
 			fun() ->
 					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain;\tcharset=us-ascii"))
+			end
+		}
+	].
+
+parse_full_email_test_() ->
+	[
+		{"parse a random email",
+			fun() ->
+					{ok, Contents} = file:read_file("testdata/testcase2"),
+					StringContents = binary_to_list(Contents),
+					{Headers, Body} = parse_headers(StringContents),
+					?debugFmt("Headers: ~p~nBody: ~p~n", [Headers, Body]),
+					?debugFmt("decoded: ~p~n", [decode(Headers, Body)])
 			end
 		}
 	].

@@ -44,10 +44,10 @@ handle_RCPT_extension(Extension, State) ->
 handle_DATA(From, To, Headers, Data, State) ->
 	% some kind of unique id
 	Reference = io_lib:format("~p", [make_ref()]),
-	%io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
-	%io:format("headers:~n"),
+	io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
+	io:format("headers:~n"),
 	lists:foreach(fun({F, V}) -> io:format("~s : ~s~n", [F, V]) end, Headers),
-	mimemail:decode(Headers, Data),
+	%mimemail:decode(Headers, Data),
 	{ok, Reference, State}.
 
 handle_RSET(State) ->
