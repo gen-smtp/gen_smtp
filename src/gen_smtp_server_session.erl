@@ -508,11 +508,11 @@ has_extension(Exts, Ext) ->
 	Extension = string:to_upper(Ext),
 	Extensions = lists:map(fun({X, Y}) -> {string:to_upper(X), Y} end, Exts),
 	%io:format("extensions ~p~n", [Extensions]),
-	case lists:keyfind(Extension, 1, Extensions) of
-		{_, Value} ->
-			{true, Value};
-		false ->
-			false
+	case proplists:get_value(Extension, Extensions) of
+		undefined ->
+			false;
+		Value ->
+			{true, Value}
 	end.
 
 trim_crlf(String) ->

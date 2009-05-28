@@ -44,30 +44,31 @@
 		listener :: port(),       % Listening socket
 		acceptor :: ref(),       % Asynchronous acceptor's internal reference
 		module :: atom(),
+		hostname :: string(),
 		sessions = [] :: [pid()]
 		}).
 
 -type(state() :: #state{}).
 
-%% @doc Start the listener with callback module `Module' on port `Port' linked to the calling process.
--spec(start_link/2 :: (Module :: atom(), Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start_link(Module, Port) when is_integer(Port) ->
-	gen_server:start_link(?MODULE, [Module, Port], []).
+%% @doc Start the listener with callback module `Module' on with options `Options' linked to the calling process.
+-spec(start_link/2 :: (Module :: atom(), Options :: [{'domain' | 'address' | 'port', any()}]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start_link(Module, Options) when is_list(Options) ->
+	gen_server:start_link(?MODULE, [Module, Options], []).
 
-%% @doc Start the listener with callback module `Module' on port `Port' linked to no process.
--spec(start/2 :: (Module :: atom(), Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start(Module, Port) when is_integer(Port) -> 
-	gen_server:start(?MODULE, [Module, Port], []).
+%% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
+-spec(start/2 :: (Module :: atom(), Options :: [{'domain' | 'address' | 'port', any()}]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start(Module, Options) when is_list(Options) ->
+	gen_server:start(?MODULE, [Module, Options], []).
 
-%% @doc Start the listener with callback module `Module' on the default port linked to no process.
+%% @doc Start the listener with callback module `Module' with default options linked to no process.
 -spec(start/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start(Module) -> 
-	start(Module, ?PORT).
+start(Module) ->
+	start(Module, []).
 
-%% @doc Start the listener with callback module `Module' on the default port linked to the calling process.
+%% @doc Start the listener with callback module `Module' with default options linked to the calling process.
 -spec(start_link/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start_link(Module) -> 
-	start_link(Module, ?PORT).
+start_link(Module) ->
+	start_link(Module, []).
 
 %% @doc Stop the listener pid() `Pid' with reason `normal'.
 -spec(stop/1 :: (Pid :: pid()) -> 'ok').
@@ -75,16 +76,20 @@ stop(Pid) ->
 	gen_server:call(Pid, stop).
 
 %% @hidden
-init([Module, Port]) ->
+init([Module, Options]) ->
+	FQDN = guess_FQDN(),
+	%NewOptions = lists:umerge(fun({X1,_Y1}, {X2,_Y2}) -> X1 < X2 end, lists:sort(Options), lists:sort([{domain, FQDN}, {address, IP}, {port, ?PORT}])),
+	NewOptions = lists:ukeymerge(1, lists:sort(Options), lists:sort([{domain, FQDN}, {address, {0,0,0,0}}, {port, ?PORT}])),
+	io:format("Options: ~p~n", [NewOptions]),
 	io:format("~p starting at ~p~n", [?MODULE, node()]),
 	process_flag(trap_exit, true),
 	Opts = [list, {packet, line}, {reuseaddr, true},
-		{keepalive, true}, {backlog, 30}, {active, false}],
-	case gen_tcp:listen(Port, Opts) of
+		{keepalive, true}, {backlog, 30}, {active, false}, {ip, proplists:get_value(address, NewOptions)}],
+	case gen_tcp:listen(proplists:get_value(port, NewOptions), Opts) of
 		{ok, Listen_socket} ->
 			%%Create first accepting process
 			{ok, Ref} = prim_inet:async_accept(Listen_socket, -1),
-			{ok, #state{listener = Listen_socket, acceptor = Ref, module = Module}};
+			{ok, #state{listener = Listen_socket, acceptor = Ref, module = Module, hostname = proplists:get_value(domain, NewOptions)}};
 		{error, Reason} ->
 			io:format("Could not start gen_tcp:  ~p~n", [Reason]),
 			{stop, Reason}
@@ -113,7 +118,7 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 
 		%% New client connected
 		io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(CliSocket, State#state.module, "localhost", length(State#state.sessions) + 1) of
+		Sessions = case gen_smtp_server_session:start(CliSocket, State#state.module, State#state.hostname, length(State#state.sessions) + 1) of
 			{ok, Pid} ->
 				link(Pid),
 				gen_tcp:controlling_process(CliSocket, Pid),
@@ -175,4 +180,10 @@ set_sockopt(ListSock, CliSocket) ->
 			gen_tcp:close(CliSocket),
 			Error % return error
 	end.
+
+guess_FQDN() ->
+	{ok, Hostname} = inet:gethostname(),
+	{ok, Hostent} = inet:gethostbyname(Hostname),
+	{hostent, FQDN, _Aliases, inet, _, _Addresses} = Hostent,
+	FQDN.
 
