@@ -300,16 +300,16 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 					case parse_encoded_address(Address) of
 						error ->
 							gen_tcp:send(Socket, "501 Bad sender address syntax\r\n"),
-							State;
+							{ok, State};
 						{ParsedAddress, []} ->
 							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 								{ok, CallbackState} ->
 									gen_tcp:send(Socket, "250 sender Ok\r\n"),
-									State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState};
+									{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 								{error, Message, CallbackState} ->
 									gen_tcp:send(Socket, Message ++ "\r\n"),
-									State#state{callbackstate = CallbackState}
+									{ok, State#state{callbackstate = CallbackState}}
 							end;
 						{ParsedAddress, ExtraInfo} ->
 							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),

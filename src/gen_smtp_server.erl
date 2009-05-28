@@ -43,6 +43,7 @@
 -record(state, {
 		listener :: port(),       % Listening socket
 		acceptor :: ref(),       % Asynchronous acceptor's internal reference
+		module :: atom(),
 		sessions = [] :: [pid()]
 		}).
 
@@ -56,7 +57,7 @@ start_link(Module, Port) when is_integer(Port) ->
 %% @doc Start the listener with callback module `Module' on port `Port' linked to no process.
 -spec(start/2 :: (Module :: atom(), Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start(Module, Port) when is_integer(Port) -> 
-	gen_server:start(?MODULE, [Port], []).
+	gen_server:start(?MODULE, [Module, Port], []).
 
 %% @doc Start the listener with callback module `Module' on the default port linked to no process.
 -spec(start/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
@@ -74,7 +75,7 @@ stop(Pid) ->
 	gen_server:call(Pid, stop).
 
 %% @hidden
-init([Port]) ->
+init([Module, Port]) ->
 	io:format("~p starting at ~p~n", [?MODULE, node()]),
 	process_flag(trap_exit, true),
 	Opts = [list, {packet, line}, {reuseaddr, true},
@@ -83,7 +84,7 @@ init([Port]) ->
 		{ok, Listen_socket} ->
 			%%Create first accepting process
 			{ok, Ref} = prim_inet:async_accept(Listen_socket, -1),
-			{ok, #state{listener = Listen_socket, acceptor = Ref}};
+			{ok, #state{listener = Listen_socket, acceptor = Ref, module = Module}};
 		{error, Reason} ->
 			io:format("Could not start gen_tcp:  ~p~n", [Reason]),
 			{stop, Reason}
@@ -112,7 +113,7 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 
 		%% New client connected
 		io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(CliSocket, smtp_server_example, "localhost", length(State#state.sessions) + 1) of
+		Sessions = case gen_smtp_server_session:start(CliSocket, State#state.module, "localhost", length(State#state.sessions) + 1) of
 			{ok, Pid} ->
 				link(Pid),
 				gen_tcp:controlling_process(CliSocket, Pid),
