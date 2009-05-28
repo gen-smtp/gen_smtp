@@ -52,7 +52,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 					erlang:error(boundary);
 				Boundary ->
 					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
-					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "\r\n--"++Boundary)}
+					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "\r\n--"++Boundary, MimeVsn)}
 			end;
 		{"message", "rfc822", Parameters} ->
 			{NewHeaders, NewBody} = parse_headers(Body),
@@ -143,27 +143,27 @@ parse_contenttype(String) ->
 			end
 	end.
 
-split_body_by_boundary(Body, Boundary) ->
+split_body_by_boundary(Body, Boundary, MimeVsn) ->
 	% find the indices of the first and last boundary
 	case [string:str(Body, Boundary), string:str(Body, Boundary++"--")] of
 		[Start, End] when Start =:= 0; End =:= 0 ->
 			error;
 		[Start, End] ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
-			Parts = split_body_by_boundary(NewBody, Boundary, []),
-			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, "1.0") end, Parts)
+			Parts = split_body_by_boundary_(NewBody, Boundary, []),
+			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, MimeVsn) end, Parts)
 	end.
 
-split_body_by_boundary([], _Boundary, Acc) ->
+split_body_by_boundary_([], _Boundary, Acc) ->
 	lists:reverse(Acc);
-split_body_by_boundary(Body, Boundary, Acc) ->
+split_body_by_boundary_(Body, Boundary, Acc) ->
 	% trim the incomplete first line
 	TrimmedBody = string:substr(Body, string:str(Body, "\r\n") + 2),
 	case string:str(TrimmedBody, Boundary) of
 		0 ->
 			lists:reverse(Acc);
 		Index ->
-			split_body_by_boundary(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
+			split_body_by_boundary_(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
 				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
 	end.
 

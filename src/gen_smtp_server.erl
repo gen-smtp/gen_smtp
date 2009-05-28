@@ -29,7 +29,7 @@
 -define(PORT, 2525).
 
 %% External API
--export([start_link/1, start/1, start/0, stop/1]).
+-export([start_link/2, start/2, start/1, start_link/1, stop/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -48,20 +48,25 @@
 
 -type(state() :: #state{}).
 
-%% @doc Start the listener on port `Port' linked to the calling process.
--spec(start_link/1 :: (Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start_link(Port) when is_integer(Port) ->
-	gen_server:start_link(?MODULE, [Port], []).
+%% @doc Start the listener with callback module `Module' on port `Port' linked to the calling process.
+-spec(start_link/2 :: (Module :: atom(), Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start_link(Module, Port) when is_integer(Port) ->
+	gen_server:start_link(?MODULE, [Module, Port], []).
 
-%% @doc Start the listener on port `Port' linked to no process.
--spec(start/1 :: (Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start(Port) when is_integer(Port) -> 
+%% @doc Start the listener with callback module `Module' on port `Port' linked to no process.
+-spec(start/2 :: (Module :: atom(), Port :: integer()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start(Module, Port) when is_integer(Port) -> 
 	gen_server:start(?MODULE, [Port], []).
 
-%% @doc Start the listener on the default port of 1337 linked to no process.
--spec(start/0 :: () -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start() -> 
-	start(?PORT).
+%% @doc Start the listener with callback module `Module' on the default port linked to no process.
+-spec(start/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start(Module) -> 
+	start(Module, ?PORT).
+
+%% @doc Start the listener with callback module `Module' on the default port linked to the calling process.
+-spec(start_link/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start_link(Module) -> 
+	start_link(Module, ?PORT).
 
 %% @doc Stop the listener pid() `Pid' with reason `normal'.
 -spec(stop/1 :: (Pid :: pid()) -> 'ok').
