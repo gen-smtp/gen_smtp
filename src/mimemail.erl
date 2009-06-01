@@ -302,6 +302,21 @@ parse_example_mails_test_() ->
 				?assertEqual({"text", "plain"}, {Type, SubType}),
 				?assertEqual("This message contains only plain text.\r\n", Body)
 			end
+		},
+		{"rich text",
+			fun() ->
+				%% pardon my naming here.  apparently 'rich text' in mac mail
+				%% means 'html'.
+				Decoded = Getmail("rich-text.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"multipart", "alternative"}, {Type, SubType}),
+				?assertEqual(2, length(Body)),
+				[Plain, Html] = Body,
+				?assertEqual({5, 5}, {tuple_size(Plain), tuple_size(Html)}),
+				?assertMatch({"text", "plain", _, _, "This message contains rich text."}, Plain),
+				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
+			end
 		}
 	].
 
