@@ -109,7 +109,7 @@ parse_with_comments([$) | Tail], Acc, Depth) when Depth > 0 ->
 	parse_with_comments(Tail, Acc, Depth - 1);
 parse_with_comments([_H | Tail], Acc, Depth) when Depth > 0 ->
 	parse_with_comments(Tail, Acc, Depth);
-parse_with_comments([$" | T], Acc, Depth) ->
+parse_with_comments([$" | T], Acc, Depth) -> %"
 	parse_with_comments(T, Acc, Depth);
 parse_with_comments([H | Tail], Acc, Depth) ->
 	parse_with_comments(Tail, [H | Acc], Depth).
