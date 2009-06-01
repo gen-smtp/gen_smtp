@@ -373,7 +373,49 @@ parse_example_mails_test_() ->
 				?assertMatch({"image", "jpeg", _, _, _}, Image),
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))				
 			end
-		}
+		},
+		{"The gamut",
+			fun() ->
+				% multipart/alternative
+				%	text/plain
+				%	multipart/mixed
+				%		text/html
+				%		message/rf822
+				%			multipart/mixed
+				%				message/rfc822
+				%					text/plain
+				%		text/html
+				%		message/rtc822
+				%			text/plain
+				%		text/html
+				%		image/jpeg
+				%		text/html
+				%		text/rtf
+				%		text/html
+				Decoded = Getmail("the-gamut.eml"),
+				?assertMatch({"multipart", "alternative", _, _, _}, Decoded),
+				?assertEqual(2, length(element(5, Decoded))),
+				[Toptext, Topmultipart] = element(5, Decoded),
+				?assertMatch({"text", "plain", _, _, _}, Toptext),
+				?assertEqual("This is rich text.\r\n\r\nThe list is html.\r\n\r\nAttchments:\r\nan email containing an attachment of an email.\r\nan email of only plain text.\r\nan image\r\nan rtf file.\r\n", element(5, Toptext)),
+				?assertEqual(9, length(element(5, Topmultipart))),
+				[Html, Messagewithin, _Brhtml, Message, _Brhtml, Image, _Brhtml, Rtf, _Brhtml] = element(5, Topmultipart),
+				?assertMatch({"text", "html", _, _, _}, Html),
+				?assertEqual("<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This</b> is <i>rich</i> text.<div><br></div><div>The list is html.</div><div><br></div><div>Attchments:</div><div><ul class=\"MailOutline\"><li>an email containing an attachment of an email.</li><li>an email of only plain text.</li><li>an image</li><li>an rtf file.</li></ul></div><div></div></body></html>", element(5, Html)),
+				
+				?assertMatch({"message", "rfc822", _, _, _}, Messagewithin),
+				%?assertEqual(1, length(element(5, Messagewithin))),
+				?debugFmt("~p", [element(5, Messagewithin)]),
+				?assertMatch({"multipart", "mixed", _, _, [{"message", "rfc822", _, _, {"text", "plain", _, _, "This message contains only plain text.\r\n"}}]}, element(5, Messagewithin)),
+				
+				?assertMatch({"image", "jpeg", _, _, _}, Image),
+				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image))),
+				
+				?assertMatch({"text", "rtf", _, _, _}, Rtf),
+				?assertEqual("{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}", element(5, Rtf))
+				
+			end
+		}		
 	].
 
 -endif.
