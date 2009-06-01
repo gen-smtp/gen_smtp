@@ -317,6 +317,20 @@ parse_example_mails_test_() ->
 				?assertMatch({"text", "plain", _, _, "This message contains rich text."}, Plain),
 				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
 			end
+		},
+		{"text attachment only",
+			fun() ->
+				Decoded = Getmail("text-attachment-only.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"multipart", "mixed"}, {Type, SubType}),
+				?debugFmt("~p", [Body]),
+				?assertEqual(1, length(Body)),
+				Rich = "{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}",
+				?assertMatch([{"text", "rtf", _, _, Rich}], Body)
+				
+			
+			end
 		}
 	].
 
