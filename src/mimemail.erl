@@ -426,6 +426,17 @@ parse_example_mails_test_() ->
 				?assertMatch({"text", "plain", _, _, _}, Plain),
 				?assertEqual("This message contains only plain text.\r\n", element(5, Plain))
 			end
+		},
+		{"no \r\n before first boundary",
+			fun() ->
+				{ok, Bin} = file:read_file("testdata/html.eml"),
+				Email = binary_to_list(Bin),
+				{Headers, B} = parse_headers(Email),
+				Body = string:strip(string:strip(B, left, $\r), left, $\n),
+				Decoded = decode(Headers, Body),
+				?debugFmt("~p", [Decoded]),
+				?assertEqual(2, length(element(5, Decoded)))
+			end
 		}
 	].
 
