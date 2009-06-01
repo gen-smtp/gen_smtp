@@ -225,6 +225,7 @@ parse_headers(Body, Line, Headers) ->
 
 
 -ifdef(EUNIT).
+
 parse_with_comments_test_() ->
 	[
 		{"bleh",
@@ -254,6 +255,7 @@ parse_with_comments_test_() ->
 			end
 		}
 	].
+	
 parse_contenttype_test_() ->
 	[
 		{"parsing contenttypes",
@@ -272,19 +274,6 @@ parse_contenttype_test_() ->
 		}
 	].
 
-%parse_full_email_test_() ->
-%	[
-%		{"parse a random email",
-%			fun() ->
-%					{ok, Contents} = file:read_file("testdata/testcase2"),
-%					StringContents = binary_to_list(Contents),
-%					{Headers, Body} = parse_headers(StringContents),
-%					?debugFmt("Headers: ~p~nBody: ~p~n", [Headers, Body]),
-%					?debugFmt("decoded: ~p~n", [decode(Headers, Body)])
-%			end
-%		}
-%	].
-
 -define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
 
 parse_example_mails_test_() ->
@@ -298,8 +287,7 @@ parse_example_mails_test_() ->
 		{"parse a plain text email",
 			fun() ->
 				Decoded = Getmail("Plain-text-only.eml"),
-%				?debugFmt("~p", [Decoded]),
-%				?assert(false),
+				?debugFmt("~p", [Decoded]),
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"text", "plain"}, {Type, SubType}),
