@@ -52,7 +52,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 					erlang:error(boundary);
 				Boundary ->
 					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
-					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "\r\n--"++Boundary, MimeVsn)}
+					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
 			end;
 		{"message", "rfc822", Parameters} ->
 			{NewHeaders, NewBody} = parse_headers(Body),
@@ -150,7 +150,8 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			error;
 		[Start, End] ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
-			Parts = split_body_by_boundary_(NewBody, Boundary, []),
+			% from now on, we can be sure that each boundary is preceeded by a CRLF
+			Parts = split_body_by_boundary_(NewBody, "\r\n" ++ Boundary, []),
 			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, MimeVsn) end, Parts)
 	end.
 
