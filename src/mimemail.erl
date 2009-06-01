@@ -283,6 +283,28 @@ parse_full_email_test_() ->
 			end
 		}
 	].
+
+parse_example_mails_test_() ->
+	Getmail = fun(File) ->
+		{ok, Bin} = file:read_file(string:concat("testdata/", File)),
+		Email = binary_to_list(Bin),
+		{Headers, Body} = parse_headers(Email),
+		decode(Headers, Body)
+	end,
+	[
+		{"parse a plain text email",
+			fun() ->
+				Decoded = Getmail("Plain-text-only.eml"),
+%				?debugFmt("~p", [Decoded]),
+%				?assert(false),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"text", "plain"}, {Type, SubType}),
+				?assertEqual("This message contains only plain text.\r\n", Body)
+			end
+		}
+	].
+
 -endif.
 
 
