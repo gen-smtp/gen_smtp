@@ -343,8 +343,22 @@ parse_example_mails_test_() ->
 				?assertMatch([{"image", "jpeg", _, _, _}], Body),
 				[H | _] = Body,
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H)))
+			end
+		},
+		{"message attachment only",
+			fun() ->
+				Decoded = Getmail("message-as-attachment.eml"),
+				?assertMatch({"multipart", "mixed", _, _, _}, Decoded),
+				[Body] = element(5, Decoded),
+				?debugFmt("~p", [Body]),
+				?assertMatch({"message", "rfc822", _, _, _}, Body),
+				Subbody = element(5, Body),
+				?assertMatch({"text", "plain", _, _, _}, Subbody),
+				?assertEqual("This message contains only plain text.\r\n", element(5, Subbody))
 				
-								
+				
+				
+				
 				
 				
 				
