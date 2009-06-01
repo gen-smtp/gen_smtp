@@ -271,18 +271,18 @@ parse_contenttype_test_() ->
 		}
 	].
 
-parse_full_email_test_() ->
-	[
-		{"parse a random email",
-			fun() ->
-					{ok, Contents} = file:read_file("testdata/testcase2"),
-					StringContents = binary_to_list(Contents),
-					{Headers, Body} = parse_headers(StringContents),
-					?debugFmt("Headers: ~p~nBody: ~p~n", [Headers, Body]),
-					?debugFmt("decoded: ~p~n", [decode(Headers, Body)])
-			end
-		}
-	].
+%parse_full_email_test_() ->
+%	[
+%		{"parse a random email",
+%			fun() ->
+%					{ok, Contents} = file:read_file("testdata/testcase2"),
+%					StringContents = binary_to_list(Contents),
+%					{Headers, Body} = parse_headers(StringContents),
+%					?debugFmt("Headers: ~p~nBody: ~p~n", [Headers, Body]),
+%					?debugFmt("decoded: ~p~n", [decode(Headers, Body)])
+%			end
+%		}
+%	].
 
 -define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
 
@@ -355,15 +355,23 @@ parse_example_mails_test_() ->
 				Subbody = element(5, Body),
 				?assertMatch({"text", "plain", _, _, _}, Subbody),
 				?assertEqual("This message contains only plain text.\r\n", element(5, Subbody))
+			end
+		},
+		{"message, image, and rtf attachments.",
+			fun() ->
+				Decoded = Getmail("message-image-text-attachments.eml"),
+				?assertMatch({"multipart", "mixed", _, _, _}, Decoded),
+				?assertEqual(3, length(element(5, Decoded))),
+				[Message, Rtf, Image] = element(5, Decoded),
+				?assertMatch({"message", "rfc822", _, _, _}, Message),
+				Submessage = element(5, Message),
+				?assertMatch({"text", "plain", _, _, "This message contains only plain text.\r\n"}, Submessage),
 				
+				?assertMatch({"text", "rtf", _, _, _}, Rtf),
+				?assertEqual("{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}", element(5, Rtf)),
 				
-				
-				
-				
-				
-				
-				
-				
+				?assertMatch({"image", "jpeg", _, _, _}, Image),
+				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))				
 			end
 		}
 	].
