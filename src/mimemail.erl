@@ -27,10 +27,14 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([encode/2, decode/2]).
+-export([encode/2, decode/2, decode/1]).
 
 encode(Headers, BodyList) ->
 	ok.
+
+decode(All) ->
+	{Headers, Body} = parse_headers(All),
+	decode(Headers, Body).
 
 decode(Headers, Body) ->
 	FixedHeaders = fix_headers(Headers),
