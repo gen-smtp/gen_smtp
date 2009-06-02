@@ -430,12 +430,23 @@ parse_example_mails_test_() ->
 				?debugFmt("~p", [Decoded]),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
+		},
+%		{"testcase1",
+%			fun() ->
+%				Decoded = Getmail("testcase1"),
+%				?debugFmt("~p", [Decoded]),
+%				?assertMatch({"multipart", "mixed", _, _, _}, Decoded),
+%				?assert(false)
+%			end
+%		},
+		{"Parens not treated as comments in the name of content type message/rfc822",
+			fun() ->
+				Decoded = Getmail("testcase1"),
+				{_, _, _, _, [_, {"message","rfc822", _, [Resname], _}]} = Decoded,
+				?assertEqual({"name","Height (from xkcd).eml"}, Resname)
+			end
 		}
 	].
 
 -endif.
-
-
-
-
 
