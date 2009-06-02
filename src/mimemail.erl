@@ -97,16 +97,26 @@ parse_with_comments(Value) when is_list(Value) ->
 parse_with_comments(Value) ->
 	Value.
 
-parse_with_comments([], Acc, Depth, _Quotes) when Depth > 0 ->
+parse_with_comments([], Acc, Depth, Quotes) when Depth > 0; Quotes ->
 	error;
 parse_with_comments([], Acc, Depth, _Quotes) ->
 	string:strip(lists:reverse(Acc));
 parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) when Depth > 0 ->
-	[_H | T2] = Tail,
-	parse_with_comments(T2, Acc, Depth, Quotes);
+	[H | T2] = Tail,
+	case H of
+		_ when H > 32, H < 127 ->
+			parse_with_comments(T2, Acc, Depth, Quotes);
+		_ ->
+			parse_with_comments(Tail, Acc, Depth, Quotes)
+	end;
 parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) ->
 	[H | T2] = Tail,
-	parse_with_comments(T2, [H | Acc], Depth, Quotes);
+	case H of
+		_ when H > 32, H < 127 ->
+			parse_with_comments(T2, [H | Acc], Depth, Quotes);
+		_ ->
+			parse_with_comments(Tail, [$\\ | Acc], Depth, Quotes)
+	end;
 parse_with_comments([$( | Tail], Acc, Depth, Quotes) when not Quotes ->
 	parse_with_comments(Tail, Acc, Depth + 1, Quotes);
 parse_with_comments([$) | Tail], Acc, Depth, Quotes) when Depth > 0, not Quotes ->
@@ -251,7 +261,8 @@ parse_with_comments_test_() ->
 		},
 		{"some more",
 			fun() ->
-					?assertEqual(":sysmail@  group. org, Muhammed. Ali @Vegas.WBA", parse_with_comments("\":sysmail\"@  group. org, Muhammed.(the greatest) Ali @(the)Vegas.WBA"))
+					?assertEqual(":sysmail@  group. org, Muhammed. Ali @Vegas.WBA", parse_with_comments("\":sysmail\"@  group. org, Muhammed.(the greatest) Ali @(the)Vegas.WBA")),
+					?assertEqual("Pete <pete@silly.test>", parse_with_comments("Pete(A wonderful \\) chap) <pete(his account)@silly.test(his host)>"))
 			end
 		},
 		{"non list values",
@@ -262,7 +273,28 @@ parse_with_comments_test_() ->
 		},
 		{"Parens within quotes ignored",
 			fun() ->
-				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height (from xkcd).eml\""))
+				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height (from xkcd).eml\"")),
+				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height \(from xkcd\).eml\""))
+			end
+		},
+		{"Escaped quotes are handled correctly",
+			fun() ->
+					?assertEqual("Hello \"world\"", parse_with_comments("Hello \\\"world\\\"")),
+					?assertEqual("<boss@nil.test>, Giant; \"Big\" Box <sysservices@example.net>", parse_with_comments("<boss@nil.test>, \"Giant; \\\"Big\\\" Box\" <sysservices@example.net>"))
+			end
+		},
+		{"backslash not part of a quoted pair",
+			fun() ->
+					?assertEqual("AC \\ DC", parse_with_comments("AC \\ DC")),
+					?assertEqual("AC  DC", parse_with_comments("AC ( \\ ) DC"))
+			end
+		},
+		{"Unterminated quotes or comments",
+			fun() ->
+					?assertEqual(error, parse_with_comments("\"Hello there ")),
+					?assertEqual(error, parse_with_comments("\"Hello there \\\"")),
+					?assertEqual(error, parse_with_comments("(Hello there ")),
+					?assertEqual(error, parse_with_comments("(Hello there \\\)"))
 			end
 		}
 	].
@@ -298,7 +330,7 @@ parse_example_mails_test_() ->
 		{"parse a plain text email",
 			fun() ->
 				Decoded = Getmail("Plain-text-only.eml"),
-				?debugFmt("~p", [Decoded]),
+				%?debugFmt("~p", [Decoded]),
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"text", "plain"}, {Type, SubType}),
@@ -326,7 +358,7 @@ parse_example_mails_test_() ->
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"multipart", "mixed"}, {Type, SubType}),
-				?debugFmt("~p", [Body]),
+				%?debugFmt("~p", [Body]),
 				?assertEqual(1, length(Body)),
 				Rich = "{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}",
 				?assertMatch([{"text", "rtf", _, _, Rich}], Body)
@@ -338,7 +370,7 @@ parse_example_mails_test_() ->
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"multipart", "mixed"}, {Type, SubType}),
-				?debugFmt("~p", [Body]),
+				%?debugFmt("~p", [Body]),
 				?assertEqual(1, length(Body)),
 				?assertMatch([{"image", "jpeg", _, _, _}], Body),
 				[H | _] = Body,
@@ -350,7 +382,7 @@ parse_example_mails_test_() ->
 				Decoded = Getmail("message-as-attachment.eml"),
 				?assertMatch({"multipart", "mixed", _, _, _}, Decoded),
 				[Body] = element(5, Decoded),
-				?debugFmt("~p", [Body]),
+				%?debugFmt("~p", [Body]),
 				?assertMatch({"message", "rfc822", _, _, _}, Body),
 				Subbody = element(5, Body),
 				?assertMatch({"text", "plain", _, _, _}, Subbody),
@@ -405,7 +437,7 @@ parse_example_mails_test_() ->
 				
 				?assertMatch({"message", "rfc822", _, _, _}, Messagewithin),
 				%?assertEqual(1, length(element(5, Messagewithin))),
-				?debugFmt("~p", [element(5, Messagewithin)]),
+				%?debugFmt("~p", [element(5, Messagewithin)]),
 				?assertMatch({"multipart", "mixed", _, _, [{"message", "rfc822", _, _, {"text", "plain", _, _, "This message contains only plain text.\r\n"}}]}, element(5, Messagewithin)),
 				
 				?assertMatch({"image", "jpeg", _, _, _}, Image),
@@ -434,7 +466,7 @@ parse_example_mails_test_() ->
 				{Headers, B} = parse_headers(Email),
 				Body = string:strip(string:strip(B, left, $\r), left, $\n),
 				Decoded = decode(Headers, Body),
-				?debugFmt("~p", [Decoded]),
+				%?debugFmt("~p", [Decoded]),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		}%,
