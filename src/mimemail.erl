@@ -40,20 +40,17 @@ decode(Headers, Body) ->
 	FixedHeaders = fix_headers(Headers),
 	case parse_with_comments(proplists:get_value("MIME-Version", FixedHeaders)) of
 		undefined ->
-			io:format("Non-MIME email~n");
+			erlang:error(non_mime);
 		Other ->
 			decode_component(FixedHeaders, Body, Other)
 	end.
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
-	io:format("MIME 1.0 email~n"),
 	case parse_contenttype(proplists:get_value("Content-Type", Headers)) of
 		{"multipart", SubType, Parameters} ->
 			case proplists:get_value("boundary", Parameters) of
 				undefined ->
-					io:format("multipart email of type ~s doesn't have a boundary!~n", [SubType]),
-					io:format("Headers: ~p, Body: ~p~n", [Headers, Body]),
-					erlang:error(boundary);
+					erlang:error(no_boundary);
 				Boundary ->
 					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
@@ -130,6 +127,8 @@ parse_with_comments([$" | T], Acc, Depth, false) -> %"
 parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
 	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
+parse_contenttype(undefined) ->
+	undefined;
 parse_contenttype(String) ->
 	[RawType | Parameters] = string:tokens(parse_with_comments(String), ";"),
 	case string:str(RawType, "/") of
@@ -163,7 +162,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 	% find the indices of the first and last boundary
 	case [string:str(Body, Boundary), string:str(Body, Boundary++"--")] of
 		[Start, End] when Start =:= 0; End =:= 0 ->
-			error;
+			erlang:error(bad_boundary);
 		[Start, End] ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
@@ -314,7 +313,13 @@ parse_contenttype_test_() ->
 			fun() ->
 					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain;\tcharset=us-ascii"))
 			end
-		}
+		},
+		{"invalid contenttypes",
+			fun() ->
+					?assertEqual(error, parse_contenttype("text\\plain; charset=us-ascii")),
+					?assertEqual(error, parse_contenttype("text/plain; charset us-ascii"))
+				end
+			}
 	].
 
 -define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
@@ -323,8 +328,7 @@ parse_example_mails_test_() ->
 	Getmail = fun(File) ->
 		{ok, Bin} = file:read_file(string:concat("testdata/", File)),
 		Email = binary_to_list(Bin),
-		{Headers, Body} = parse_headers(Email),
-		decode(Headers, Body)
+		decode(Email)
 	end,
 	[
 		{"parse a plain text email",
@@ -337,11 +341,59 @@ parse_example_mails_test_() ->
 				?assertEqual("This message contains only plain text.\r\n", Body)
 			end
 		},
+		{"parse a plain text email with no MIME header",
+			fun() ->
+				?assertError(non_mime, Getmail("Plain-text-only-no-MIME.eml"))
+			end
+		},
 		{"rich text",
 			fun() ->
 				%% pardon my naming here.  apparently 'rich text' in mac mail
 				%% means 'html'.
 				Decoded = Getmail("rich-text.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"multipart", "alternative"}, {Type, SubType}),
+				?assertEqual(2, length(Body)),
+				[Plain, Html] = Body,
+				?assertEqual({5, 5}, {tuple_size(Plain), tuple_size(Html)}),
+				?assertMatch({"text", "plain", _, _, "This message contains rich text."}, Plain),
+				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
+			end
+		},
+		{"rich text no boundary",
+			fun() ->
+				?assertError(no_boundary, Getmail("rich-text-no-boundary.eml"))
+			end
+		},
+		{"rich text missing first boundary",
+			fun() ->
+				% TODO - should we handle this more elegantly?
+				Decoded = Getmail("rich-text-missing-first-boundary.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"multipart", "alternative"}, {Type, SubType}),
+				?assertEqual(1, length(Body)),
+				[Html] = Body,
+				?assertEqual(5, tuple_size(Html)),
+				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
+			end
+		},
+		{"rich text missing last boundary",
+			fun() ->
+				?assertError(bad_boundary, Getmail("rich-text-missing-last-boundary.eml"))
+			end
+		},
+		{"rich text missing last boundary",
+			fun() ->
+				?assertError(bad_boundary, Getmail("rich-text-broken-last-boundary.eml"))
+			end
+		},
+		{"rich text missing text contenttype",
+			fun() ->
+				%% pardon my naming here.  apparently 'rich text' in mac mail
+				%% means 'html'.
+				Decoded = Getmail("rich-text-no-text-contenttype.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"multipart", "alternative"}, {Type, SubType}),
