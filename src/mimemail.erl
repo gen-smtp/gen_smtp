@@ -257,6 +257,11 @@ parse_with_comments_test_() ->
 					?assertEqual(undefined, parse_with_comments(undefined)),
 					?assertEqual(17, parse_with_comments(17))
 			end
+		},
+		{"Parens within quotes ignored",
+			fun() ->
+				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height (from xkcd).eml\""))
+			end
 		}
 	].
 	
@@ -430,7 +435,7 @@ parse_example_mails_test_() ->
 				?debugFmt("~p", [Decoded]),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
-		},
+		}%,
 %		{"testcase1",
 %			fun() ->
 %				Decoded = Getmail("testcase1"),
@@ -439,13 +444,13 @@ parse_example_mails_test_() ->
 %				?assert(false)
 %			end
 %		},
-		{"Parens not treated as comments in the name of content type message/rfc822",
-			fun() ->
-				Decoded = Getmail("testcase1"),
-				{_, _, _, _, [_, {"message","rfc822", _, [Resname], _}]} = Decoded,
-				?assertEqual({"name","Height (from xkcd).eml"}, Resname)
-			end
-		}
+%		{"Parens not treated as comments in the name of content type message/rfc822",
+%			fun() ->
+%				Decoded = Getmail("testcase1"),
+%				{_, _, _, _, [_, {"message","rfc822", _, [Resname], _}]} = Decoded,
+%				?assertEqual({"name","Height (from xkcd).eml"}, Resname)
+%			end
+%		}
 	].
 
 -endif.
