@@ -93,30 +93,32 @@ fix_headers(Headers) ->
 	lists:map(F, Headers).
 
 parse_with_comments(Value) when is_list(Value) ->
-	parse_with_comments(Value, "", 0);
+	parse_with_comments(Value, "", 0, false);
 parse_with_comments(Value) ->
 	Value.
 
-parse_with_comments([], Acc, Depth) when Depth > 0 ->
+parse_with_comments([], Acc, Depth, _Quotes) when Depth > 0 ->
 	error;
-parse_with_comments([], Acc, Depth) ->
+parse_with_comments([], Acc, Depth, _Quotes) ->
 	string:strip(lists:reverse(Acc));
-parse_with_comments([$\\ | Tail], Acc, Depth) when Depth > 0 ->
+parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) when Depth > 0 ->
 	[_H | T2] = Tail,
-	parse_with_comments(T2, Acc, Depth);
-parse_with_comments([$\\ | Tail], Acc, Depth) ->
+	parse_with_comments(T2, Acc, Depth, Quotes);
+parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) ->
 	[H | T2] = Tail,
-	parse_with_comments(T2, [H | Acc], Depth);
-parse_with_comments([$( | Tail], Acc, Depth) ->
-	parse_with_comments(Tail, Acc, Depth + 1);
-parse_with_comments([$) | Tail], Acc, Depth) when Depth > 0 ->
-	parse_with_comments(Tail, Acc, Depth - 1);
-parse_with_comments([_H | Tail], Acc, Depth) when Depth > 0 ->
-	parse_with_comments(Tail, Acc, Depth);
-parse_with_comments([$" | T], Acc, Depth) -> %"
-	parse_with_comments(T, Acc, Depth);
-parse_with_comments([H | Tail], Acc, Depth) ->
-	parse_with_comments(Tail, [H | Acc], Depth).
+	parse_with_comments(T2, [H | Acc], Depth, Quotes);
+parse_with_comments([$( | Tail], Acc, Depth, Quotes) when not Quotes ->
+	parse_with_comments(Tail, Acc, Depth + 1, Quotes);
+parse_with_comments([$) | Tail], Acc, Depth, Quotes) when Depth > 0, not Quotes ->
+	parse_with_comments(Tail, Acc, Depth - 1, Quotes);
+parse_with_comments([_H | Tail], Acc, Depth, Quotes) when Depth > 0 ->
+	parse_with_comments(Tail, Acc, Depth, Quotes);
+parse_with_comments([$" | T], Acc, Depth, true) -> %"
+	parse_with_comments(T, Acc, Depth, false);
+parse_with_comments([$" | T], Acc, Depth, false) -> %"
+	parse_with_comments(T, Acc, Depth, true);
+parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
+	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
 parse_contenttype(String) ->
 	[RawType | Parameters] = string:tokens(parse_with_comments(String), ";"),
