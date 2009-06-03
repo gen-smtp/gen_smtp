@@ -193,48 +193,44 @@ parse_headers(Body) ->
 			parse_headers(string:substr(Body, Index+2), string:substr(Body, 1, Index - 1), [])
 	end.
 
+
+parse_headers(Body, [H | T] = Line, []) when H =:= $\s; H =:= $\t ->
+	% folded headers
+	{[], Line++"\r\n"++Body};
+parse_headers(Body, [H | T] = Line, Headers) when H =:= $\s; H =:= $\t ->
+	% folded headers
+	[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
+	FieldValue = string:concat(OldFieldValue, T),
+	%?debugFmt("~p = ~p~n", [FieldName, FieldValue]),
+	case string:str(Body, "\r\n") of
+		0 ->
+			{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
+		1 ->
+			{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), string:substr(Body, 3)};
+		Index2 ->
+			parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | OtherHeaders])
+	end;
 parse_headers(Body, Line, Headers) ->
 	%?debugFmt("line: ~p, nextpart ~p~n", [Line, string:substr(Body, 1, 10)]),
-	case Line of
-		[H | T] when H =:= $\s; H =:= $\t ->
-		%?debugFmt("folded header~n", []),
-			case length(Headers) of
-				0 ->
-					{[], Line++"\r\n"++Body};
-				_ ->
-					[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
-					FieldValue = string:concat(OldFieldValue, T),
-					%?debugFmt("~p = ~p~n", [FieldName, FieldValue]),
+	case string:str(Line, ":") of
+		0 ->
+			{lists:reverse(Headers), Line++"\r\n"++Body};
+		Index ->
+			FieldName = string:substr(Line, 1, Index - 1),
+			F = fun(X) -> X > 32 andalso X < 127 end,
+			case lists:all(F, FieldName) of
+				true ->
+					FieldValue = string:strip(string:substr(Line, Index+1)),
 					case string:str(Body, "\r\n") of
 						0 ->
-							{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
+							{lists:reverse([{FieldName, FieldValue} | Headers]), Body};
 						1 ->
-							{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), string:substr(Body, 3)};
+							{lists:reverse([{FieldName, FieldValue} | Headers]), string:substr(Body, 3)};
 						Index2 ->
-							parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | OtherHeaders])
-					end
-			end;
-		_ ->
-			case string:str(Line, ":") of
-				0 ->
-					{lists:reverse(Headers), Line++"\r\n"++Body};
-				Index ->
-					FieldName = string:substr(Line, 1, Index - 1),
-					F = fun(X) -> X > 32 andalso X < 127 end,
-					case lists:all(F, FieldName) of
-						true ->
-							FieldValue = string:strip(string:substr(Line, Index+1)),
-							case string:str(Body, "\r\n") of
-								0 ->
-									{lists:reverse([{FieldName, FieldValue} | Headers]), Body};
-								1 ->
-									{lists:reverse([{FieldName, FieldValue} | Headers]), string:substr(Body, 3)};
-								Index2 ->
-									parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | Headers])
-							end;
-						false ->
-							{lists:reverse(Headers), Line++"\r\n"++Body}
-					end
+							parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | Headers])
+					end;
+				false ->
+					{lists:reverse(Headers), Line++"\r\n"++Body}
 			end
 	end.
 
