@@ -40,20 +40,17 @@ decode(Headers, Body) ->
 	FixedHeaders = fix_headers(Headers),
 	case parse_with_comments(proplists:get_value("MIME-Version", FixedHeaders)) of
 		undefined ->
-			io:format("Non-MIME email~n");
+			erlang:error(non_mime);
 		Other ->
 			decode_component(FixedHeaders, Body, Other)
 	end.
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
-	io:format("MIME 1.0 email~n"),
 	case parse_contenttype(proplists:get_value("Content-Type", Headers)) of
 		{"multipart", SubType, Parameters} ->
 			case proplists:get_value("boundary", Parameters) of
 				undefined ->
-					io:format("multipart email of type ~s doesn't have a boundary!~n", [SubType]),
-					io:format("Headers: ~p, Body: ~p~n", [Headers, Body]),
-					erlang:error(boundary);
+					erlang:error(no_boundary);
 				Boundary ->
 					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
@@ -93,31 +90,45 @@ fix_headers(Headers) ->
 	lists:map(F, Headers).
 
 parse_with_comments(Value) when is_list(Value) ->
-	parse_with_comments(Value, "", 0);
+	parse_with_comments(Value, "", 0, false);
 parse_with_comments(Value) ->
 	Value.
 
-parse_with_comments([], Acc, Depth) when Depth > 0 ->
+parse_with_comments([], Acc, Depth, Quotes) when Depth > 0; Quotes ->
 	error;
-parse_with_comments([], Acc, Depth) ->
+parse_with_comments([], Acc, Depth, _Quotes) ->
 	string:strip(lists:reverse(Acc));
-parse_with_comments([$\\ | Tail], Acc, Depth) when Depth > 0 ->
-	[_H | T2] = Tail,
-	parse_with_comments(T2, Acc, Depth);
-parse_with_comments([$\\ | Tail], Acc, Depth) ->
+parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) when Depth > 0 ->
 	[H | T2] = Tail,
-	parse_with_comments(T2, [H | Acc], Depth);
-parse_with_comments([$( | Tail], Acc, Depth) ->
-	parse_with_comments(Tail, Acc, Depth + 1);
-parse_with_comments([$) | Tail], Acc, Depth) when Depth > 0 ->
-	parse_with_comments(Tail, Acc, Depth - 1);
-parse_with_comments([_H | Tail], Acc, Depth) when Depth > 0 ->
-	parse_with_comments(Tail, Acc, Depth);
-parse_with_comments([$" | T], Acc, Depth) -> %"
-	parse_with_comments(T, Acc, Depth);
-parse_with_comments([H | Tail], Acc, Depth) ->
-	parse_with_comments(Tail, [H | Acc], Depth).
+	case H of
+		_ when H > 32, H < 127 ->
+			parse_with_comments(T2, Acc, Depth, Quotes);
+		_ ->
+			parse_with_comments(Tail, Acc, Depth, Quotes)
+	end;
+parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) ->
+	[H | T2] = Tail,
+	case H of
+		_ when H > 32, H < 127 ->
+			parse_with_comments(T2, [H | Acc], Depth, Quotes);
+		_ ->
+			parse_with_comments(Tail, [$\\ | Acc], Depth, Quotes)
+	end;
+parse_with_comments([$( | Tail], Acc, Depth, Quotes) when not Quotes ->
+	parse_with_comments(Tail, Acc, Depth + 1, Quotes);
+parse_with_comments([$) | Tail], Acc, Depth, Quotes) when Depth > 0, not Quotes ->
+	parse_with_comments(Tail, Acc, Depth - 1, Quotes);
+parse_with_comments([_H | Tail], Acc, Depth, Quotes) when Depth > 0 ->
+	parse_with_comments(Tail, Acc, Depth, Quotes);
+parse_with_comments([$" | T], Acc, Depth, true) -> %"
+	parse_with_comments(T, Acc, Depth, false);
+parse_with_comments([$" | T], Acc, Depth, false) -> %"
+	parse_with_comments(T, Acc, Depth, true);
+parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
+	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
+parse_contenttype(undefined) ->
+	undefined;
 parse_contenttype(String) ->
 	[RawType | Parameters] = string:tokens(parse_with_comments(String), ";"),
 	case string:str(RawType, "/") of
@@ -151,7 +162,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 	% find the indices of the first and last boundary
 	case [string:str(Body, Boundary), string:str(Body, Boundary++"--")] of
 		[Start, End] when Start =:= 0; End =:= 0 ->
-			error;
+			erlang:error(bad_boundary);
 		[Start, End] ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
@@ -249,7 +260,8 @@ parse_with_comments_test_() ->
 		},
 		{"some more",
 			fun() ->
-					?assertEqual(":sysmail@  group. org, Muhammed. Ali @Vegas.WBA", parse_with_comments("\":sysmail\"@  group. org, Muhammed.(the greatest) Ali @(the)Vegas.WBA"))
+					?assertEqual(":sysmail@  group. org, Muhammed. Ali @Vegas.WBA", parse_with_comments("\":sysmail\"@  group. org, Muhammed.(the greatest) Ali @(the)Vegas.WBA")),
+					?assertEqual("Pete <pete@silly.test>", parse_with_comments("Pete(A wonderful \\) chap) <pete(his account)@silly.test(his host)>"))
 			end
 		},
 		{"non list values",
@@ -260,7 +272,28 @@ parse_with_comments_test_() ->
 		},
 		{"Parens within quotes ignored",
 			fun() ->
-				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height (from xkcd).eml\""))
+				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height (from xkcd).eml\"")),
+				?assertEqual("Height (from xkcd).eml", parse_with_comments("\"Height \(from xkcd\).eml\""))
+			end
+		},
+		{"Escaped quotes are handled correctly",
+			fun() ->
+					?assertEqual("Hello \"world\"", parse_with_comments("Hello \\\"world\\\"")),
+					?assertEqual("<boss@nil.test>, Giant; \"Big\" Box <sysservices@example.net>", parse_with_comments("<boss@nil.test>, \"Giant; \\\"Big\\\" Box\" <sysservices@example.net>"))
+			end
+		},
+		{"backslash not part of a quoted pair",
+			fun() ->
+					?assertEqual("AC \\ DC", parse_with_comments("AC \\ DC")),
+					?assertEqual("AC  DC", parse_with_comments("AC ( \\ ) DC"))
+			end
+		},
+		{"Unterminated quotes or comments",
+			fun() ->
+					?assertEqual(error, parse_with_comments("\"Hello there ")),
+					?assertEqual(error, parse_with_comments("\"Hello there \\\"")),
+					?assertEqual(error, parse_with_comments("(Hello there ")),
+					?assertEqual(error, parse_with_comments("(Hello there \\\)"))
 			end
 		}
 	].
@@ -280,7 +313,13 @@ parse_contenttype_test_() ->
 			fun() ->
 					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain;\tcharset=us-ascii"))
 			end
-		}
+		},
+		{"invalid contenttypes",
+			fun() ->
+					?assertEqual(error, parse_contenttype("text\\plain; charset=us-ascii")),
+					?assertEqual(error, parse_contenttype("text/plain; charset us-ascii"))
+				end
+			}
 	].
 
 -define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
@@ -289,18 +328,22 @@ parse_example_mails_test_() ->
 	Getmail = fun(File) ->
 		{ok, Bin} = file:read_file(string:concat("testdata/", File)),
 		Email = binary_to_list(Bin),
-		{Headers, Body} = parse_headers(Email),
-		decode(Headers, Body)
+		decode(Email)
 	end,
 	[
 		{"parse a plain text email",
 			fun() ->
 				Decoded = Getmail("Plain-text-only.eml"),
-				?debugFmt("~p", [Decoded]),
+				%?debugFmt("~p", [Decoded]),
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"text", "plain"}, {Type, SubType}),
 				?assertEqual("This message contains only plain text.\r\n", Body)
+			end
+		},
+		{"parse a plain text email with no MIME header",
+			fun() ->
+				?assertError(non_mime, Getmail("Plain-text-only-no-MIME.eml"))
 			end
 		},
 		{"rich text",
@@ -318,13 +361,56 @@ parse_example_mails_test_() ->
 				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
 			end
 		},
+		{"rich text no boundary",
+			fun() ->
+				?assertError(no_boundary, Getmail("rich-text-no-boundary.eml"))
+			end
+		},
+		{"rich text missing first boundary",
+			fun() ->
+				% TODO - should we handle this more elegantly?
+				Decoded = Getmail("rich-text-missing-first-boundary.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"multipart", "alternative"}, {Type, SubType}),
+				?assertEqual(1, length(Body)),
+				[Html] = Body,
+				?assertEqual(5, tuple_size(Html)),
+				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
+			end
+		},
+		{"rich text missing last boundary",
+			fun() ->
+				?assertError(bad_boundary, Getmail("rich-text-missing-last-boundary.eml"))
+			end
+		},
+		{"rich text missing last boundary",
+			fun() ->
+				?assertError(bad_boundary, Getmail("rich-text-broken-last-boundary.eml"))
+			end
+		},
+		{"rich text missing text contenttype",
+			fun() ->
+				%% pardon my naming here.  apparently 'rich text' in mac mail
+				%% means 'html'.
+				Decoded = Getmail("rich-text-no-text-contenttype.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, Headers, Properties, Body} = Decoded,
+				?assertEqual({"multipart", "alternative"}, {Type, SubType}),
+				?assertEqual(2, length(Body)),
+				[Plain, Html] = Body,
+				?assertEqual({5, 5}, {tuple_size(Plain), tuple_size(Html)}),
+				?assertMatch({"text", "plain", _, _, "This message contains rich text."}, Plain),
+				?assertMatch({"text", "html", _, _, "<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This </b><i>message </i><span class=\"Apple-style-span\" style=\"text-decoration: underline;\">contains </span>rich text.</body></html>"}, Html)
+			end
+		},
 		{"text attachment only",
 			fun() ->
 				Decoded = Getmail("text-attachment-only.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"multipart", "mixed"}, {Type, SubType}),
-				?debugFmt("~p", [Body]),
+				%?debugFmt("~p", [Body]),
 				?assertEqual(1, length(Body)),
 				Rich = "{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}",
 				?assertMatch([{"text", "rtf", _, _, Rich}], Body)
@@ -336,7 +422,7 @@ parse_example_mails_test_() ->
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, Headers, Properties, Body} = Decoded,
 				?assertEqual({"multipart", "mixed"}, {Type, SubType}),
-				?debugFmt("~p", [Body]),
+				%?debugFmt("~p", [Body]),
 				?assertEqual(1, length(Body)),
 				?assertMatch([{"image", "jpeg", _, _, _}], Body),
 				[H | _] = Body,
@@ -348,7 +434,7 @@ parse_example_mails_test_() ->
 				Decoded = Getmail("message-as-attachment.eml"),
 				?assertMatch({"multipart", "mixed", _, _, _}, Decoded),
 				[Body] = element(5, Decoded),
-				?debugFmt("~p", [Body]),
+				%?debugFmt("~p", [Body]),
 				?assertMatch({"message", "rfc822", _, _, _}, Body),
 				Subbody = element(5, Body),
 				?assertMatch({"text", "plain", _, _, _}, Subbody),
@@ -403,7 +489,7 @@ parse_example_mails_test_() ->
 				
 				?assertMatch({"message", "rfc822", _, _, _}, Messagewithin),
 				%?assertEqual(1, length(element(5, Messagewithin))),
-				?debugFmt("~p", [element(5, Messagewithin)]),
+				%?debugFmt("~p", [element(5, Messagewithin)]),
 				?assertMatch({"multipart", "mixed", _, _, [{"message", "rfc822", _, _, {"text", "plain", _, _, "This message contains only plain text.\r\n"}}]}, element(5, Messagewithin)),
 				
 				?assertMatch({"image", "jpeg", _, _, _}, Image),
@@ -432,7 +518,7 @@ parse_example_mails_test_() ->
 				{Headers, B} = parse_headers(Email),
 				Body = string:strip(string:strip(B, left, $\r), left, $\n),
 				Decoded = decode(Headers, Body),
-				?debugFmt("~p", [Decoded]),
+				%?debugFmt("~p", [Decoded]),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		},
