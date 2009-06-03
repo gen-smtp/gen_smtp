@@ -425,7 +425,7 @@ parse_example_mails_test_() ->
 				?assertEqual("This message contains only plain text.\r\n", element(5, Plain))
 			end
 		},
-		{"no \r\n before first boundary",
+		{"no \\r\\n before first boundary",
 			fun() ->
 				{ok, Bin} = file:read_file("testdata/html.eml"),
 				Email = binary_to_list(Bin),
@@ -435,22 +435,42 @@ parse_example_mails_test_() ->
 				?debugFmt("~p", [Decoded]),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
-		}%,
-%		{"testcase1",
-%			fun() ->
-%				Decoded = Getmail("testcase1"),
-%				?debugFmt("~p", [Decoded]),
-%				?assertMatch({"multipart", "mixed", _, _, _}, Decoded),
-%				?assert(false)
-%			end
-%		},
-%		{"Parens not treated as comments in the name of content type message/rfc822",
-%			fun() ->
-%				Decoded = Getmail("testcase1"),
-%				{_, _, _, _, [_, {"message","rfc822", _, [Resname], _}]} = Decoded,
-%				?assertEqual({"name","Height (from xkcd).eml"}, Resname)
-%			end
-%		}
+		},
+		{"testcase1",
+			fun() ->
+				Multipart = "multipart",
+				Alternative = "alternative",
+				Related = "related",
+				Mixed = "mixed",
+				Text = "text",
+				Html = "html",
+				Plain = "plain",
+				Message = "message",
+				Ref822 = "rfc822",
+				Image = "image",
+				Jpeg = "jpeg",
+				Imagemd5 = <<69,175,198,78,52,72,6,233,147,22,50,137,128,180,169,50>>,
+				Decoded = Getmail("testcase1"),
+				?assertMatch({Multipart, Mixed, _, _, [_, _]}, Decoded),
+				[Multi1, Message1] = element(5, Decoded),
+				?assertMatch({Multipart, Alternative, _, _, [_, _]}, Multi1),
+				[Plain1, Html1] = element(5, Multi1),
+				?assertMatch({Text, Plain, _, _, _}, Plain1),
+				?assertMatch({Text, Html, _, _, _}, Html1),
+				?assertMatch({Message, Ref822, _, _, _}, Message1),
+				Multi2 = element(5, Message1),
+				%?debugFmt("~p", [length(element(5, Multi2))]),
+				?assertMatch({Multipart, Alternative, _, _, [_, _]}, Multi2),
+				[Plain2, Related1] = element(5, Multi2),
+				?assertMatch({Text, Plain, _, _, _}, Plain2),
+				?assertMatch({Multipart, Related, _, _, [_, _]}, Related1),
+				[Html2, Image1] = element(5, Related1),
+				?assertMatch({Text, Html, _, _, _}, Html2),
+				?assertMatch({Image, Jpeg, _, _, _}, Image1),
+				Resimage = erlang:md5(element(5, Image1)),
+				?assertEqual(Imagemd5, Resimage)
+			end
+		}
 	].
 
 -endif.
