@@ -470,6 +470,34 @@ parse_example_mails_test_() ->
 				Resimage = erlang:md5(element(5, Image1)),
 				?assertEqual(Imagemd5, Resimage)
 			end
+		},
+		{"testcase2",
+			fun() ->
+				Multipart = "multipart",
+				Alternative = "alternative",
+				Related = "related",
+				Mixed = "mixed",
+				Text = "text",
+				Html = "html",
+				Plain = "plain",
+				Message = "message",
+				Ref822 = "rfc822",
+				Image = "image",
+				Jpeg = "jpeg",
+				Application = "application",
+				Octetstream = "octet-stream",
+				Decoded = Getmail("testcase2"),
+				?assertMatch({Multipart, Mixed, _, _, [_, _, _]}, Decoded),
+				[Plain1, Stream1, Message1] = element(5, Decoded),
+				?assertMatch({Text, Plain, _, _, _}, Plain1),
+				?assertMatch({Application, Octetstream, _, _, _}, Stream1),
+				?assertMatch({Message, Ref822, _, _, _}, Message1),
+				Multi1 = element(5, Message1),
+				?assertMatch({Multipart, Alternative, _, _, [_, _]}, Multi1),
+				[Plain2, Html1] = element(5, Multi1),
+				?assertMatch({Text, Plain, _, _, _}, Plain2),
+				?assertMatch({Text, Html, _, _, _}, Html1)
+			end
 		}
 	].
 
