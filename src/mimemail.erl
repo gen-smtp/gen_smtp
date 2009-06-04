@@ -46,25 +46,36 @@ decode(Headers, Body) ->
 	end.
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
-	case parse_contenttype(proplists:get_value("Content-Type", Headers)) of
+	case parse_content_disposition(proplists:get_value("Content-Disposition", Headers)) of
+		{Disposition, DispositionParams} ->
+			ok;
+		_ -> % defaults
+			Disposition = "inline",
+			DispositionParams = []
+	end,
+
+	case parse_content_type(proplists:get_value("Content-Type", Headers)) of
 		{"multipart", SubType, Parameters} ->
 			case proplists:get_value("boundary", Parameters) of
 				undefined ->
 					erlang:error(no_boundary);
 				Boundary ->
 					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
-					{"multipart", SubType, Headers, Parameters, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
+					Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
+					{"multipart", SubType, Headers, Parameters2, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
 			end;
 		{"message", "rfc822", Parameters} ->
 			{NewHeaders, NewBody} = parse_headers(Body),
-			{"message", "rfc822", Headers, Parameters, decode(NewHeaders, NewBody)};
+			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
+			{"message", "rfc822", Headers, Parameters2, decode(NewHeaders, NewBody)};
 		{Type, SubType, Parameters} ->
 			io:format("body is ~s/~s~n", [Type, SubType]),
-			{Type, SubType, Headers, Parameters, Body};
+			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
+			{Type, SubType, Headers, Parameters2, decode_body(proplists:get_value("Content-Encoding-Type", Headers), Body)};
 		undefined -> % defaults
 			Type = "text",
 			SubType = "plain",
-			Parameters = [{"charset", "us-ascii"}],
+			Parameters = [{"content-type-params", {"charset", "us-ascii"}}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
 			{Type, SubType, Headers, Parameters, Body};
 		error ->
 			error
@@ -82,6 +93,10 @@ fix_headers(Headers) ->
 					"MIME-Version";
 				"content-type" ->
 					"Content-Type";
+				"content-disposition" ->
+					"Content-Disposition";
+				"content-transfer-encoding" ->
+					"Content-Transfer-Encoding";
 				Other ->
 					Header
 			end,
@@ -127,35 +142,45 @@ parse_with_comments([$" | T], Acc, Depth, false) -> %"
 parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
 	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
-parse_contenttype(undefined) ->
+parse_content_type(undefined) ->
 	undefined;
-parse_contenttype(String) ->
-	[RawType | Parameters] = string:tokens(parse_with_comments(String), ";"),
-	case string:str(RawType, "/") of
-		0 ->
-			error;
-		Index ->
-			Type = string:substr(RawType, 1, Index - 1),
-			SubType = string:substr(RawType, Index + 1),
-			F =
-			fun(X) ->
-					Y = string:strip(string:strip(X), both, $\t),
-					case string:str(Y, "=") of
-						0 ->
-							error;
-						Index2 ->
-							Key = string:substr(Y, 1, Index2 - 1),
-							Value = string:substr(Y, Index2 + 1),
-							{string:to_lower(Key), Value}
-					end
-			end,
-			Params = lists:map(F, Parameters),
-			case lists:member(error, Params) of
-				true ->
+parse_content_type(String) ->
+	case parse_content_disposition(String) of
+		{RawType, Parameters} ->
+			case string:str(RawType, "/") of
+				0 ->
 					error;
-				false ->
-					{string:to_lower(Type), string:to_lower(SubType), Params}
-			end
+				Index ->
+					Type = string:substr(RawType, 1, Index - 1),
+					SubType = string:substr(RawType, Index + 1),
+					{string:to_lower(Type), string:to_lower(SubType), Parameters}
+			end;
+		error ->
+			error
+	end.
+
+parse_content_disposition(undefined) ->
+	undefined;
+parse_content_disposition(String) ->
+	[Disposition | Parameters] = string:tokens(parse_with_comments(String), ";"),
+	F =
+	fun(X) ->
+		Y = string:strip(string:strip(X), both, $\t),
+		case string:str(Y, "=") of
+			0 ->
+				error;
+			Index2 ->
+				Key = string:substr(Y, 1, Index2 - 1),
+				Value = string:substr(Y, Index2 + 1),
+				{string:to_lower(Key), Value}
+		end
+	end,
+	Params = lists:map(F, Parameters),
+	case lists:member(error, Params) of
+		true ->
+			error;
+		false ->
+			{string:to_lower(Disposition), Params}
 	end.
 
 split_body_by_boundary(Body, Boundary, MimeVsn) ->
@@ -234,6 +259,54 @@ parse_headers(Body, Line, Headers) ->
 			end
 	end.
 
+decode_body(Type, Body) ->
+	Body.
+
+decode_quoted_printable(Body) ->
+	case string:str(Body, "\r\n") of
+		0 ->
+			decode_quoted_printable([Body], []);
+		Index ->
+			B = [string:substr(Body, 1, Index -1), string:substr(Body, Index + 2)],
+			decode_quoted_printable(B, [])
+	end.
+
+decode_quoted_printable([Line | Rest], Acc) ->
+	decode_quoted_printable(Rest, [decode_quoted_printable_line(Line, []) | Acc]).
+
+decode_quoted_printable_line([], Acc) ->
+	lists:reverse(Acc);
+decode_quoted_printable_line([$=, C | T], Acc) when C =:= $\s orelse C =:= $\t ->
+	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
+		true ->
+			lists:reverse(Acc);
+		false ->
+			throw(badchar)
+	end;
+decode_quoted_printable_line([$=, X, Y | T], Acc) ->
+	case lists:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) end, [X, Y]) of
+		true ->
+			{ok, [C | []], []} = io_lib:fread("~16u", [X, Y]),
+			decode_quoted_printable_line(T, [C | Acc]);
+		false ->
+			% TODO
+			throw(badchar)
+	end;
+decode_quoted_printable_line([$=], Acc) ->
+	% soft newline
+	lists:reverse(Acc);
+decode_quoted_printable_line([H | T], Acc) when H >= $! andalso H =< $< ->
+	decode_quoted_printable_line(T, [H | Acc]);
+decode_quoted_printable_line([H | T], Acc) when H >= $> andalso H =< $~ ->
+	decode_quoted_printable_line(T, [H | Acc]);
+decode_quoted_printable_line([$\s | T], Acc) ->
+	% if the rest of the line is whitespace, truncate it
+	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
+		true ->
+			lists:reverse(Acc);
+		false ->
+			decode_quoted_printable_line(T, [$\s | Acc])
+	end.
 
 -ifdef(EUNIT).
 
@@ -294,28 +367,40 @@ parse_with_comments_test_() ->
 		}
 	].
 	
-parse_contenttype_test_() ->
+parse_content_type_test_() ->
 	[
-		{"parsing contenttypes",
+		{"parsing content types",
 			fun() ->
-					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain; charset=us-ascii (Plain text)")),
-					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain; charset=\"us-ascii\"")),
-					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("Text/Plain; Charset=\"us-ascii\"")),
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_content_type("text/plain; charset=us-ascii (Plain text)")),
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_content_type("text/plain; charset=\"us-ascii\"")),
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_content_type("Text/Plain; Charset=\"us-ascii\"")),
 					?assertEqual({"multipart", "mixed", [{"boundary", "----_=_NextPart_001_01C9DCAE.1F2CB390"}]},
-						parse_contenttype("multipart/mixed; boundary=\"----_=_NextPart_001_01C9DCAE.1F2CB390\""))
+						parse_content_type("multipart/mixed; boundary=\"----_=_NextPart_001_01C9DCAE.1F2CB390\""))
 			end
 		},
-		{"parsing contenttype with a tab in it",
+		{"parsing content type with a tab in it",
 			fun() ->
-					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_contenttype("text/plain;\tcharset=us-ascii"))
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_content_type("text/plain;\tcharset=us-ascii"))
 			end
 		},
-		{"invalid contenttypes",
+		{"invalid content types",
 			fun() ->
-					?assertEqual(error, parse_contenttype("text\\plain; charset=us-ascii")),
-					?assertEqual(error, parse_contenttype("text/plain; charset us-ascii"))
+					?assertEqual(error, parse_content_type("text\\plain; charset=us-ascii")),
+					?assertEqual(error, parse_content_type("text/plain; charset us-ascii"))
 				end
 			}
+	].
+
+parse_content_disposition_test_() ->
+	[
+		{"parsing valid dispositions",
+			fun() ->
+					?assertEqual({"inline", []}, parse_content_disposition("inline")),
+					?assertEqual({"inline", []}, parse_content_disposition("inline;")),
+					?assertEqual({"attachment", [{"filename", "genome.jpeg"}, {"modification-date", "Wed, 12 Feb 1997 16:29:51 -0500"}]}, parse_content_disposition("attachment; filename=genome.jpeg;modification-date=\"Wed, 12 Feb 1997 16:29:51 -0500\";")),
+					?assertEqual({"text/plain", [{"charset", "us-ascii"}]}, parse_content_disposition("text/plain; charset=us-ascii (Plain text)"))
+			end
+		}
 	].
 
 -define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
@@ -385,7 +470,7 @@ parse_example_mails_test_() ->
 				?assertError(bad_boundary, Getmail("rich-text-broken-last-boundary.eml"))
 			end
 		},
-		{"rich text missing text contenttype",
+		{"rich text missing text content type",
 			fun() ->
 				%% pardon my naming here.  apparently 'rich text' in mac mail
 				%% means 'html'.
@@ -422,7 +507,11 @@ parse_example_mails_test_() ->
 				?assertEqual(1, length(Body)),
 				?assertMatch([{"image", "jpeg", _, _, _}], Body),
 				[H | _] = Body,
-				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H)))
+				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H))),
+				[{"image", "jpeg", _, Parameters, _}] = Body,
+				?assertEqual("inline", proplists:get_value("disposition", Parameters)),
+				?assertEqual("spice-logo.jpg", proplists:get_value("filename", proplists:get_value("disposition-params", Parameters))),
+				?assertEqual("spice-logo.jpg", proplists:get_value("name", proplists:get_value("content-type-params", Parameters)))
 			end
 		},
 		{"message attachment only",
@@ -579,6 +668,43 @@ parse_example_mails_test_() ->
 				[Plain2, Html1] = element(5, Multi1),
 				?assertMatch({Text, Plain, _, _, _}, Plain2),
 				?assertMatch({Text, Html, _, _, _}, Html1)
+			end
+		}
+	].
+
+decode_quoted_printable_test_() ->
+	[
+		{"bleh",
+			fun() ->
+					?assertEqual("!", decode_quoted_printable_line("=21", "")),
+					?assertEqual("!!", decode_quoted_printable_line("=21=21", "")),
+					?assertEqual("=:=", decode_quoted_printable_line("=3D:=3D", "")),
+					?assertEqual("Thequickbrownfoxjumpedoverthelazydog.", decode_quoted_printable_line("Thequickbrownfoxjumpedoverthelazydog.", ""))
+			end
+		},
+		{"input with spaces",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.", ""))
+			end
+		},
+		{"input with trailing spaces",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       ", ""))
+			end
+		},
+		{"soft new line",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.       ", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       =", ""))
+			end
+		},
+		{"soft new line with trailing whitespace",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.       ", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       =  	", ""))
+			end
+		},
+		{"invalid input",
+			fun() ->
+					?assertThrow(badchar, decode_quoted_printable_line("=21=G1", ""))
 			end
 		}
 	].
