@@ -428,7 +428,8 @@ parse_content_disposition_test_() ->
 		}
 	].
 
--define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
+%-define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
+-define(IMAGE_MD5, <<110,130,37,247,39,149,224,61,114,198,227,138,113,4,198,60>>).
 
 parse_example_mails_test_() ->
 	Getmail = fun(File) ->
@@ -645,7 +646,8 @@ parse_example_mails_test_() ->
 				Ref822 = "rfc822",
 				Image = "image",
 				Jpeg = "jpeg",
-				Imagemd5 = <<69,175,198,78,52,72,6,233,147,22,50,137,128,180,169,50>>,
+				%Imagemd5 = <<69,175,198,78,52,72,6,233,147,22,50,137,128,180,169,50>>,
+				Imagemd5 = <<179,151,42,139,78,14,182,78,24,160,123,221,217,14,141,5>>,
 				Decoded = Getmail("testcase1"),
 				?assertMatch({Multipart, Mixed, _, _, [_, _]}, Decoded),
 				[Multi1, Message1] = element(5, Decoded),
