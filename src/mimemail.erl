@@ -192,7 +192,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, "\r\n" ++ Boundary, []),
-			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, MimeVsn) end, Parts)
+			lists:map(fun({Headers, Body}) -> decode_component(fix_headers(Headers), Body, MimeVsn) end, Parts)
 	end.
 
 split_body_by_boundary_([], _Boundary, Acc) ->
