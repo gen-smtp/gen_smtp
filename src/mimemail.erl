@@ -69,9 +69,9 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
 			{"message", "rfc822", Headers, Parameters2, decode(NewHeaders, NewBody)};
 		{Type, SubType, Parameters} ->
-			io:format("body is ~s/~s~n", [Type, SubType]),
+			%io:format("body is ~s/~s~n", [Type, SubType]),
 			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-			{Type, SubType, Headers, Parameters2, decode_body(proplists:get_value("Content-Encoding-Type", Headers), Body)};
+			{Type, SubType, Headers, Parameters2, decode_body(proplists:get_value("Content-Transfer-Encoding", Headers), Body)};
 		undefined -> % defaults
 			Type = "text",
 			SubType = "plain",
@@ -259,25 +259,40 @@ parse_headers(Body, Line, Headers) ->
 			end
 	end.
 
+decode_body(undefined, Body) ->
+	Body;
 decode_body(Type, Body) ->
-	Body.
+	case string:to_lower(Type) of
+		"quoted-printable" ->
+			decode_quoted_printable(Body);
+		"base64" ->
+			decode_base64(Body);
+		Other ->
+			Body
+	end.
+
+decode_base64(Body) ->
+	base64:mime_decode_to_string(Body).
 
 decode_quoted_printable(Body) ->
 	case string:str(Body, "\r\n") of
 		0 ->
-			decode_quoted_printable([Body], []);
+			decode_quoted_printable(Body, [], []);
 		Index ->
-			decode_quoted_printable([string:substr(Body, 1, Index +1) | string:substr(Body, Index + 2)], [])
+			decode_quoted_printable(string:substr(Body, 1, Index +1), string:substr(Body, Index + 2), [])
 	end.
 
-decode_quoted_printable([], Acc) ->
+decode_quoted_printable([], [], Acc) ->
 	string:join(lists:reverse(Acc), "");
-decode_quoted_printable([Line | Rest], Acc) ->
+decode_quoted_printable(Line, Rest, Acc) ->
+	%?debugFmt("line ~p~n", [Line]),
+	%?debugFmt("rest ~p~n", [Rest]),
 	case string:str(Rest, "\r\n") of
 		0 ->
-			decode_quoted_printable(Rest, [decode_quoted_printable_line(Line, []) | Acc]);
+			decode_quoted_printable(Rest, [], [decode_quoted_printable_line(Line, []) | Acc]);
 		Index ->
-			decode_quoted_printable([string:substr(Rest, 1, Index +1), string:substr(Rest, Index + 2)],
+			%?debugFmt("next line ~p~nnext rest ~p~n", [string:substr(Rest, 1, Index +1), string:substr(Rest, Index + 2)]),
+			decode_quoted_printable(string:substr(Rest, 1, Index +1), string:substr(Rest, Index + 2),
 				[decode_quoted_printable_line(Line, []) | Acc])
 	end.
 
@@ -517,8 +532,8 @@ parse_example_mails_test_() ->
 				?assertEqual(1, length(Body)),
 				?assertMatch([{"image", "jpeg", _, _, _}], Body),
 				[H | _] = Body,
+				[{"image", "jpeg", _, Parameters, Image}] = Body,
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H))),
-				[{"image", "jpeg", _, Parameters, _}] = Body,
 				?assertEqual("inline", proplists:get_value("disposition", Parameters)),
 				?assertEqual("spice-logo.jpg", proplists:get_value("filename", proplists:get_value("disposition-params", Parameters))),
 				?assertEqual("spice-logo.jpg", proplists:get_value("name", proplists:get_value("content-type-params", Parameters)))
@@ -716,7 +731,8 @@ decode_quoted_printable_test_() ->
 			fun() ->
 					?assertEqual("Now's the time for all folk to come to the aid of their country.", decode_quoted_printable("Now's the time =\r\nfor all folk to come=\r\n to the aid of their country.")),
 					?assertEqual("Now's the time\r\nfor all folk to come\r\n to the aid of their country.", decode_quoted_printable("Now's the time\r\nfor all folk to come\r\n to the aid of their country.")),
-					?assertEqual("hello world", decode_quoted_printable("hello world"))
+					?assertEqual("hello world", decode_quoted_printable("hello world")),
+					?assertEqual("hello\r\n\r\nworld", decode_quoted_printable("hello\r\n\r\nworld"))
 			end
 		},
 		{"invalid input",
