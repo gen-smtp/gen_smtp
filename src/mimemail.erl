@@ -267,15 +267,24 @@ decode_quoted_printable(Body) ->
 		0 ->
 			decode_quoted_printable([Body], []);
 		Index ->
-			B = [string:substr(Body, 1, Index -1), string:substr(Body, Index + 2)],
-			decode_quoted_printable(B, [])
+			decode_quoted_printable([string:substr(Body, 1, Index +1) | string:substr(Body, Index + 2)], [])
 	end.
 
+decode_quoted_printable([], Acc) ->
+	string:join(lists:reverse(Acc), "");
 decode_quoted_printable([Line | Rest], Acc) ->
-	decode_quoted_printable(Rest, [decode_quoted_printable_line(Line, []) | Acc]).
+	case string:str(Rest, "\r\n") of
+		0 ->
+			decode_quoted_printable(Rest, [decode_quoted_printable_line(Line, []) | Acc]);
+		Index ->
+			decode_quoted_printable([string:substr(Rest, 1, Index +1), string:substr(Rest, Index + 2)],
+				[decode_quoted_printable_line(Line, []) | Acc])
+	end.
 
 decode_quoted_printable_line([], Acc) ->
 	lists:reverse(Acc);
+decode_quoted_printable_line([$\r, $\n], Acc) ->
+	string:concat(lists:reverse(Acc), "\r\n");
 decode_quoted_printable_line([$=, C | T], Acc) when C =:= $\s orelse C =:= $\t ->
 	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
 		true ->
@@ -283,13 +292,14 @@ decode_quoted_printable_line([$=, C | T], Acc) when C =:= $\s orelse C =:= $\t -
 		false ->
 			throw(badchar)
 	end;
+decode_quoted_printable_line([$=, $\r, $\n], Acc) ->
+	lists:reverse(Acc);
 decode_quoted_printable_line([$=, X, Y | T], Acc) ->
 	case lists:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) end, [X, Y]) of
 		true ->
 			{ok, [C | []], []} = io_lib:fread("~16u", [X, Y]),
 			decode_quoted_printable_line(T, [C | Acc]);
 		false ->
-			% TODO
 			throw(badchar)
 	end;
 decode_quoted_printable_line([$=], Acc) ->
@@ -702,9 +712,17 @@ decode_quoted_printable_test_() ->
 					?assertEqual("The quick brown fox jumped over the lazy dog.       ", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       =  	", ""))
 			end
 		},
+		{"multiline stuff",
+			fun() ->
+					?assertEqual("Now's the time for all folk to come to the aid of their country.", decode_quoted_printable("Now's the time =\r\nfor all folk to come=\r\n to the aid of their country.")),
+					?assertEqual("Now's the time\r\nfor all folk to come\r\n to the aid of their country.", decode_quoted_printable("Now's the time\r\nfor all folk to come\r\n to the aid of their country.")),
+					?assertEqual("hello world", decode_quoted_printable("hello world"))
+			end
+		},
 		{"invalid input",
 			fun() ->
-					?assertThrow(badchar, decode_quoted_printable_line("=21=G1", ""))
+					?assertThrow(badchar, decode_quoted_printable_line("=21=G1", "")),
+					?assertThrow(badchar, decode_quoted_printable("=21=D1 = g "))
 			end
 		}
 	].
