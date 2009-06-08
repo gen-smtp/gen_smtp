@@ -81,7 +81,8 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 			error
 	end;
 decode_component(Headers, Body, Other) ->
-	io:format("Unknown mime version ~s~n", [Other]).
+	io:format("Unknown mime version ~s~n", [Other]),
+	error.
 
 
 %%% @doc - fix the casing on relevant headers to match RFC2045
@@ -145,18 +146,19 @@ parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
 parse_content_type(undefined) ->
 	undefined;
 parse_content_type(String) ->
-	case parse_content_disposition(String) of
+	try parse_content_disposition(String) of
 		{RawType, Parameters} ->
 			case string:str(RawType, "/") of
-				0 ->
-					error;
+				Index when Index < 2 ->
+					throw(bad_content_type);
 				Index ->
 					Type = string:substr(RawType, 1, Index - 1),
 					SubType = string:substr(RawType, Index + 1),
 					{string:to_lower(Type), string:to_lower(SubType), Parameters}
-			end;
-		error ->
-			error
+			end
+		catch
+			bad_disposition ->
+				throw(bad_content_type)
 	end.
 
 parse_content_disposition(undefined) ->
@@ -167,21 +169,16 @@ parse_content_disposition(String) ->
 	fun(X) ->
 		Y = string:strip(string:strip(X), both, $\t),
 		case string:str(Y, "=") of
-			0 ->
-				error;
-			Index2 ->
-				Key = string:substr(Y, 1, Index2 - 1),
-				Value = string:substr(Y, Index2 + 1),
+			Index when Index < 2 ->
+				throw(bad_disposition);
+			Index ->
+				Key = string:substr(Y, 1, Index - 1),
+				Value = string:substr(Y, Index + 1),
 				{string:to_lower(Key), Value}
 		end
 	end,
 	Params = lists:map(F, Parameters),
-	case lists:member(error, Params) of
-		true ->
-			error;
-		false ->
-			{string:to_lower(Disposition), Params}
-	end.
+	{string:to_lower(Disposition), Params}.
 
 split_body_by_boundary(Body, Boundary, MimeVsn) ->
 	% find the indices of the first and last boundary
@@ -192,7 +189,8 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, "\r\n" ++ Boundary, []),
-			lists:map(fun({Headers, Body}) -> decode_component(fix_headers(Headers), Body, MimeVsn) end, Parts)
+			Res = lists:filter(fun({Headers, Body}) -> length(Body) =/= 0 end, Parts),
+			lists:map(fun({Headers, Body}) -> decode_component(fix_headers(Headers), Body, MimeVsn) end, Res)
 	end.
 
 split_body_by_boundary_([], _Boundary, Acc) ->
@@ -202,7 +200,7 @@ split_body_by_boundary_(Body, Boundary, Acc) ->
 	TrimmedBody = string:substr(Body, string:str(Body, "\r\n") + 2),
 	case string:str(TrimmedBody, Boundary) of
 		0 ->
-			lists:reverse(Acc);
+			lists:reverse([{[], TrimmedBody} | Acc]);
 		Index ->
 			split_body_by_boundary_(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
 				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
@@ -405,13 +403,14 @@ parse_content_type_test_() ->
 		},
 		{"parsing content type with a tab in it",
 			fun() ->
-					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_content_type("text/plain;\tcharset=us-ascii"))
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}]}, parse_content_type("text/plain;\tcharset=us-ascii")),
+					?assertEqual({"text", "plain", [{"charset", "us-ascii"}, {"foo", "bar"}]}, parse_content_type("text/plain;\tcharset=us-ascii;\tfoo=bar"))
 			end
 		},
 		{"invalid content types",
 			fun() ->
-					?assertEqual(error, parse_content_type("text\\plain; charset=us-ascii")),
-					?assertEqual(error, parse_content_type("text/plain; charset us-ascii"))
+					?assertThrow(bad_content_type, parse_content_type("text\\plain; charset=us-ascii")),
+					?assertThrow(bad_content_type, parse_content_type("text/plain; charset us-ascii"))
 				end
 			}
 	].
@@ -424,6 +423,29 @@ parse_content_disposition_test_() ->
 					?assertEqual({"inline", []}, parse_content_disposition("inline;")),
 					?assertEqual({"attachment", [{"filename", "genome.jpeg"}, {"modification-date", "Wed, 12 Feb 1997 16:29:51 -0500"}]}, parse_content_disposition("attachment; filename=genome.jpeg;modification-date=\"Wed, 12 Feb 1997 16:29:51 -0500\";")),
 					?assertEqual({"text/plain", [{"charset", "us-ascii"}]}, parse_content_disposition("text/plain; charset=us-ascii (Plain text)"))
+			end
+		},
+		{"invalid dispositions",
+			fun() ->
+					?assertThrow(bad_disposition, parse_content_disposition("inline; =bar")),
+					?assertThrow(bad_disposition, parse_content_disposition("inline; bar"))
+			end
+		}
+	].
+
+various_parsing_test_() ->
+	[
+		{"split_body_by_boundary test",
+			fun() ->
+					?assertEqual([{[], "foo bar baz"}], split_body_by_boundary_("stuff\r\nfoo bar baz", "--bleh", [])),
+					?assertEqual([{[], "foo\r\n"}, {[], []}, {[], []}, {[], "bar baz"}], split_body_by_boundary_("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", [])),
+					%?assertEqual([{[], []}, {[], []}, {[], "bar baz"}], split_body_by_boundary_("\r\n--bleh\r\n--bleh\r\n", "--bleh", [])),
+					%?debugFmt("~p~n", [split_body_by_boundary("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", "1.0")]),
+					%?assertMatch([{"text", "plain", [], _,"foo\r\n"}], split_body_by_boundary("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", "1.0"))
+					?assertEqual({[], "foo: bar\r\n"}, parse_headers("\r\nfoo: bar\r\n")),
+					?assertEqual({[{"foo", "barbaz"}], []}, parse_headers("foo: bar\r\n baz\r\n")),
+					?assertEqual({[], " foo bar baz\r\nbam"}, parse_headers("\sfoo bar baz\r\nbam")),
+					ok
 			end
 		}
 	].
