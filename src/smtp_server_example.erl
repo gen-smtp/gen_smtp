@@ -54,7 +54,7 @@ handle_RSET(State) ->
 	% reset any relevant internal state
 	State.
 
-handle_VRFY(Address, State) ->
+handle_VRFY(_Address, State) ->
 	{error, "252 VRFY disabled by policy, just send some mail", State}.
 
 handle_other(_Verb, _Args, State) ->
