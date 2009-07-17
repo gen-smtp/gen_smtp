@@ -60,7 +60,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 				undefined ->
 					erlang:error(no_boundary);
 				Boundary ->
-					io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
+					% io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
 					{"multipart", SubType, Headers, Parameters2, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
 			end;
@@ -81,7 +81,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 			error
 	end;
 decode_component(Headers, Body, Other) ->
-	io:format("Unknown mime version ~s~n", [Other]),
+	% io:format("Unknown mime version ~s~n", [Other]),
 	error.
 
 
