@@ -27,10 +27,10 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([encode/2, decode/2, decode/1]).
+-export([encode/1, decode/2, decode/1]).
 
-encode(Headers, BodyList) ->
-	ok.
+encode(Encodable) ->
+	mimemail_encode:encode(Encodable).
 
 decode(All) ->
 	{Headers, Body} = parse_headers(All),
