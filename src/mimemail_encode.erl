@@ -27,7 +27,8 @@
 
 encode({ContentType1, ContentType2, Headers, ContentTypeParams, Parts}) ->
 	io:format("Decoding: ~p/~p~n", [ContentType1, ContentType2]),
-	HeaderLines = lists:map(fun({K,V}) -> K++": "++V end, Headers),
+	HeaderLines = encode_headers(Headers),
+	io:format("Encoded Headers: ~p~n", [HeaderLines]),
 	DataLines 	= lists:map(fun(Part) -> encode_part(ContentTypeParams, Part) end, Parts),
 	HeaderLines ++ ["", ""] ++ DataLines;
 
@@ -276,6 +277,28 @@ split_body_by_boundary_(Body, Boundary, Acc) ->
 		Index ->
 			split_body_by_boundary_(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
 				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
+	end.
+
+encode_headers(Headers) ->
+	encode_headers(Headers, []).
+encode_headers([], EncodedHeaders) ->
+	EncodedHeaders;
+encode_headers([{Key, Value}|T] = Headers, EncodedHeaders) ->
+	encode_headers(T, encode_folded_header(Key++": "++Value, EncodedHeaders)).
+
+encode_folded_header(Header, HeaderLines) ->
+  case string:str(Header, ";") of
+		0 ->
+			HeaderLines ++ [Header];
+		Index ->
+			Remainder = string:substr(Header, Index+1),
+			TabbedRemainder = case Remainder of
+				[$\t|_] -> Remainder;
+				_       -> "\t"++Remainder
+			end,
+			HeaderLines ++
+			[ string:substr(Header, 1, Index) ] ++
+			encode_folded_header(TabbedRemainder, [])
 	end.
 
 parse_headers(Body) ->
