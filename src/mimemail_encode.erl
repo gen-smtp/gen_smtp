@@ -26,28 +26,105 @@
 -export([encode/1]).
 
 encode({ContentType1, ContentType2, Headers, ContentTypeParams, Parts}) ->
-	io:format("Decoding: ~p/~p~n", [ContentType1, ContentType2]),
-	HeaderLines = encode_headers(Headers),
-	io:format("Encoded Headers: ~p~n", [HeaderLines]),
-	DataLines 	= lists:map(fun(Part) -> encode_part(ContentTypeParams, Part) end, Parts),
-	HeaderLines ++ ["", ""] ++ DataLines;
+	{ encode_headers(Headers),
+		encode_component(Headers, ContentTypeParams, Parts) ++ [""] };
 
 encode(_) ->
-	io:format("Not a mime-decoded message~n").
+	io:format("Not a mime-decoded message~n"),
+	erlang:error(non_mime).
 
-encode_part(ContentTypeParams,
-					 {ContentType1, ContentType2,
-	 					PartHeaders, PartParams, Content}) ->
-	case ContentTypeParams of
-		[ {"content-type-params", [{"boundary", Boundary}]},
+
+encode_headers(Headers) ->
+	encode_headers(Headers, []).
+encode_headers([], EncodedHeaders) ->
+	EncodedHeaders;
+encode_headers([{Key, Value}|T] = Headers, EncodedHeaders) ->
+	encode_headers(T, encode_folded_header(Key++": "++Value, EncodedHeaders)).
+
+encode_folded_header(Header, HeaderLines) ->
+  case string:str(Header, ";") of
+		0 ->
+			HeaderLines ++ [Header];
+		Index ->
+			Remainder = string:substr(Header, Index+1),
+			TabbedRemainder = case Remainder of
+				[$\t|_] -> Remainder;
+				_       -> "\t"++Remainder
+			end,
+			HeaderLines ++
+			[ string:substr(Header, 1, Index) ] ++
+			encode_folded_header(TabbedRemainder, [])
+	end.
+
+
+
+encode_component(Headers, Params, Parts) ->
+	case Params of
+		% is this a multipart component?
+		[	{"content-type-params", [{"boundary", Boundary}]},
 			{"disposition", "inline"},
 			{"disposition-params", []}
 		] ->
-			[ Boundary,
-				"Content-Type: "++ContentType1++"/"++ContentType2,
-				Content
-			];
+			io:format("encode_component: multipart~n"),
+			[""] ++  % blank line before start of component
+			lists:flatmap(
+				fun(PartLines) ->
+					["--"++Boundary] ++ % start with the boundary
+					PartLines
+				end,
+				encode_component_parts(Params, Parts)
+			) ++ ["--"++Boundary++"--"]; % final boundary (with /--$/)
+		% is this a simple inline component?
+		[	{"content-type-params", ParamHeaders},
+			{"disposition", "inline"},
+			{"disposition-params", []}
+		] ->
+			io:format("encode_component: simple inline~n"),
+			% this is a string split by newlines
+			string:tokens(Parts, "\r\n");
+	  Other ->
+			io:format("encode_component: Params didn't match: ~p~n", [Params]),
+			io:format(" for headers: ~p~n", [Headers]),
+			io:format(" for parts: ~p~n", [Parts]),
+		  [Parts]
+	end.
 
+encode_component_parts(Params, Parts) ->
+	lists:map(
+		fun(Part) -> encode_component_part(Params, Part) end,
+		Parts
+	).
+
+encode_component_part(Params, Part) ->
+	case Part of
+		{"multipart", SubType, Headers, PartParams, Body} ->
+			encode_component(Headers, PartParams, Body);
+		% {"message", "rfc822", Headers, Params, Body} ->
+		% 	Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
+		% 	{"message", "rfc822", Headers, Parameters2, NewBody};
+		{Type, SubType, Headers, PartParams, Body} ->
+			encode_headers(Headers) ++ [""] ++ [Body];
+		% undefined -> % defaults
+		% 	Type = "text",
+		% 	SubType = "plain",
+		% 	Parameters = [{"content-type-params", {"charset", "us-ascii"}}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
+		% 	{Type, SubType, Headers, Parameters, Body};
+		_ ->
+			io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
+			[]
+	end.
+
+% encode_content_type_header(Type, Subtype, Params) ->
+% 	case Params of
+% 		[{"content-type-params", Headers}, _, _] ->
+% 			Lines = "Content-Type: "++Type++"/"++Subtype++
+% 								string:join(lists:map(fun({K,V}) -> ";\n\t"++K++"="++V end, Headers), ""),
+% 			string:tokens(Lines, "\n");
+% 		Other ->
+% 			io:format("encode_content_type_header: No Match for ~p~n", [Other]),
+% 			[]
+% 	end.
+% 
 		% [ {"content-type-params", [{"boundary", Boundary}]},
 		%       {"disposition","attachment"},
 		%      	{"disposition-params",[{"filename", Fiilename}]}
@@ -57,10 +134,6 @@ encode_part(ContentTypeParams,
 		% 		Content
 		% 	];
 		% 
-		Other ->
-			io:format("encode_part: No Match~n"),
-			Other
-	end.
           % [{"content-type-params",[{"boundary","Apple-Mail-28--711949187"}]},
           %  {"disposition","inline"},
           %  {"disposition-params",[]}],
@@ -262,7 +335,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, "\r\n" ++ Boundary, []),
-			Res = lists:filter(fun({Headers, Body}) -> length(Body) =/= 0 end, Parts),
+			Res = lists:filter(fun({Headers, Data}) -> length(Data) =/= 0 end, Parts),
 			lists:map(fun({Headers, Body}) -> decode_component(fix_headers(Headers), Body, MimeVsn) end, Res)
 	end.
 
@@ -277,28 +350,6 @@ split_body_by_boundary_(Body, Boundary, Acc) ->
 		Index ->
 			split_body_by_boundary_(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
 				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
-	end.
-
-encode_headers(Headers) ->
-	encode_headers(Headers, []).
-encode_headers([], EncodedHeaders) ->
-	EncodedHeaders;
-encode_headers([{Key, Value}|T] = Headers, EncodedHeaders) ->
-	encode_headers(T, encode_folded_header(Key++": "++Value, EncodedHeaders)).
-
-encode_folded_header(Header, HeaderLines) ->
-  case string:str(Header, ";") of
-		0 ->
-			HeaderLines ++ [Header];
-		Index ->
-			Remainder = string:substr(Header, Index+1),
-			TabbedRemainder = case Remainder of
-				[$\t|_] -> Remainder;
-				_       -> "\t"++Remainder
-			end,
-			HeaderLines ++
-			[ string:substr(Header, 1, Index) ] ++
-			encode_folded_header(TabbedRemainder, [])
 	end.
 
 parse_headers(Body) ->
