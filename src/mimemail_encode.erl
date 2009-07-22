@@ -26,8 +26,10 @@
 -export([encode/1]).
 
 encode({ContentType1, ContentType2, Headers, ContentTypeParams, Parts}) ->
-	{ encode_headers(Headers),
-		encode_component(Headers, ContentTypeParams, Parts) ++ [""] };
+	{
+		encode_headers(Headers),
+		encode_component(Headers, ContentTypeParams, Parts) ++ [""]
+	};
 
 encode(_) ->
 	io:format("Not a mime-decoded message~n"),
@@ -65,7 +67,6 @@ encode_component(Headers, Params, Parts) ->
 			{"disposition", "inline"},
 			{"disposition-params", []}
 		] ->
-			io:format("encode_component: multipart~n"),
 			[""] ++  % blank line before start of component
 			lists:flatmap(
 				fun(PartLines) ->
@@ -79,400 +80,75 @@ encode_component(Headers, Params, Parts) ->
 			{"disposition", "inline"},
 			{"disposition-params", []}
 		] ->
-			io:format("encode_component: simple inline~n"),
 			% this is a string split by newlines
 			string:tokens(Parts, "\r\n");
 	  Other ->
-			io:format("encode_component: Params didn't match: ~p~n", [Params]),
-			io:format(" for headers: ~p~n", [Headers]),
-			io:format(" for parts: ~p~n", [Parts]),
 		  [Parts]
 	end.
 
 encode_component_parts(Params, Parts) ->
 	lists:map(
-		fun(Part) -> encode_component_part(Params, Part) end,
+		fun(Part) -> encode_component_part(Part) end,
 		Parts
 	).
 
-encode_component_part(Params, Part) ->
+encode_component_part(Part) ->
 	case Part of
-		{"multipart", SubType, Headers, PartParams, Body} ->
-			encode_component(Headers, PartParams, Body);
-		% {"message", "rfc822", Headers, Params, Body} ->
-		% 	Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-		% 	{"message", "rfc822", Headers, Parameters2, NewBody};
+		{"multipart", _, Headers, PartParams, Body} ->
+			encode_headers(Headers) ++ encode_component(Headers, PartParams, Body);
+
+		{"message", "rfc822", Headers,
+		[{"content-type-params", TypeParams},
+		 {"disposition", "attachment"}, _],
+		Body} ->
+			PartData = case Body of
+				{_,_,_,_,_} -> encode_component_part(Body);
+				String      -> [String]
+			end,
+			encode_headers(Headers) ++ [""] ++ PartData;
+
 		{Type, SubType, Headers, PartParams, Body} ->
-			encode_headers(Headers) ++ [""] ++ [Body];
-		% undefined -> % defaults
-		% 	Type = "text",
-		% 	SubType = "plain",
-		% 	Parameters = [{"content-type-params", {"charset", "us-ascii"}}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-		% 	{Type, SubType, Headers, Parameters, Body};
+			PartData = case Body of
+				{_,_,_,_,_} -> encode_component_part(Body);
+				String      -> [String]
+			end,
+			encode_headers(Headers) ++ [""] ++ encode_body(
+																						proplists:get_value("Content-Transfer-Encoding", Headers),
+																						PartData
+																				 );
+
 		_ ->
 			io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
 			[]
 	end.
 
-% encode_content_type_header(Type, Subtype, Params) ->
-% 	case Params of
-% 		[{"content-type-params", Headers}, _, _] ->
-% 			Lines = "Content-Type: "++Type++"/"++Subtype++
-% 								string:join(lists:map(fun({K,V}) -> ";\n\t"++K++"="++V end, Headers), ""),
-% 			string:tokens(Lines, "\n");
-% 		Other ->
-% 			io:format("encode_content_type_header: No Match for ~p~n", [Other]),
-% 			[]
-% 	end.
-% 
-		% [ {"content-type-params", [{"boundary", Boundary}]},
-		%       {"disposition","attachment"},
-		%      	{"disposition-params",[{"filename", Fiilename}]}
-		% ] ->
-		% 	[ Boundary,
-		% 		"Content-Type: "++ContentType1++"/"++ContentType2,
-		% 		Content
-		% 	];
-		% 
-          % [{"content-type-params",[{"boundary","Apple-Mail-28--711949187"}]},
-          %  {"disposition","inline"},
-          %  {"disposition-params",[]}],
-          % [{"text","plain",
-          %   [{"Content-Type","text/plain;charset=US-ASCII;format=flowed"},
-          %    {"Content-Transfer-Encoding","7bit"}],
-          %   [{"content-type-params",
-          %     [{"charset","US-ASCII"},{"format","flowed"}]},
-          %    {"disposition","inline"},
-          %    {"disposition-params",[]}],
-          %   "This is rich text.\r\n\r\nThe list is html.\r\n\r\nAttchments:\r\nan email containing an attachment of an email.\r\nan email of only plain text.\r\nan image\r\nan rtf file.\r\n"},
-          %  {"multipart","mixed",
-          %   [{"Content-Type",
-          %     "multipart/mixed;boundary=Apple-Mail-29--711949186"}],
-          %   [{"content-type-params",[{"boundary","Apple-Mail-29--711949186"}]},
-          %    {"disposition","inline"},
-
-					% --Apple-Mail-28--711949187
-					% Content-Type: text/plain;
-					% 	charset=US-ASCII;
-					% 	format=flowed
-					% Content-Transfer-Encoding: 7bit
-					% 
-					% This is rich text.
-					% 
-					% The list is html.
-					% 
-					% Attchments:
-					% an email containing an attachment of an email.
-					% an email of only plain text.
-					% an image
-					% an rtf file.
-					% 
-					% --Apple-Mail-28--711949187
-					% Content-Type: multipart/mixed;
-					% 	boundary=Apple-Mail-29--711949186
-
-find_boundary(ContentTypeParams) ->
-	case ContentTypeParams of
-		[{"content-type-params", [{"boundary", Boundary}]},_,_] -> Boundary;
-	  _ -> erlang:error("No Boundary Found")
-  end.
-	
-
-decode(All) ->
-	{Headers, Body} = parse_headers(All),
-	decode(Headers, Body).
-
-decode(Headers, Body) ->
-	FixedHeaders = fix_headers(Headers),
-	case parse_with_comments(proplists:get_value("MIME-Version", FixedHeaders)) of
-		undefined ->
-			erlang:error(non_mime);
-		Other ->
-			decode_component(FixedHeaders, Body, Other)
-	end.
-
-decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
-	case parse_content_disposition(proplists:get_value("Content-Disposition", Headers)) of
-		{Disposition, DispositionParams} ->
-			ok;
-		_ -> % defaults
-			Disposition = "inline",
-			DispositionParams = []
-	end,
-
-	case parse_content_type(proplists:get_value("Content-Type", Headers)) of
-		{"multipart", SubType, Parameters} ->
-			case proplists:get_value("boundary", Parameters) of
-				undefined ->
-					erlang:error(no_boundary);
-				Boundary ->
-					% io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
-					Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-					{"multipart", SubType, Headers, Parameters2, split_body_by_boundary(Body, "--"++Boundary, MimeVsn)}
-			end;
-		{"message", "rfc822", Parameters} ->
-			{NewHeaders, NewBody} = parse_headers(Body),
-			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-			{"message", "rfc822", Headers, Parameters2, decode(NewHeaders, NewBody)};
-		{Type, SubType, Parameters} ->
-			%io:format("body is ~s/~s~n", [Type, SubType]),
-			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-			{Type, SubType, Headers, Parameters2, decode_body(proplists:get_value("Content-Transfer-Encoding", Headers), Body)};
-		undefined -> % defaults
-			Type = "text",
-			SubType = "plain",
-			Parameters = [{"content-type-params", {"charset", "us-ascii"}}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-			{Type, SubType, Headers, Parameters, Body};
-		error ->
-			error
-	end;
-decode_component(Headers, Body, Other) ->
-	% io:format("Unknown mime version ~s~n", [Other]),
-	error.
-
-
-%%% @doc - fix the casing on relevant headers to match RFC2045
-fix_headers(Headers) ->
-	F =
-	fun({Header, Value}) ->
-			NewHeader = case string:to_lower(Header) of
-				"mime-version" ->
-					"MIME-Version";
-				"content-type" ->
-					"Content-Type";
-				"content-disposition" ->
-					"Content-Disposition";
-				"content-transfer-encoding" ->
-					"Content-Transfer-Encoding";
-				Other ->
-					Header
-			end,
-			{NewHeader, Value}
-	end,
-	lists:map(F, Headers).
-
-parse_with_comments(Value) when is_list(Value) ->
-	parse_with_comments(Value, "", 0, false);
-parse_with_comments(Value) ->
-	Value.
-
-parse_with_comments([], Acc, Depth, Quotes) when Depth > 0; Quotes ->
-	error;
-parse_with_comments([], Acc, Depth, _Quotes) ->
-	string:strip(lists:reverse(Acc));
-parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) when Depth > 0 ->
-	[H | T2] = Tail,
-	case H of
-		_ when H > 32, H < 127 ->
-			parse_with_comments(T2, Acc, Depth, Quotes);
-		_ ->
-			parse_with_comments(Tail, Acc, Depth, Quotes)
-	end;
-parse_with_comments([$\\ | Tail], Acc, Depth, Quotes) ->
-	[H | T2] = Tail,
-	case H of
-		_ when H > 32, H < 127 ->
-			parse_with_comments(T2, [H | Acc], Depth, Quotes);
-		_ ->
-			parse_with_comments(Tail, [$\\ | Acc], Depth, Quotes)
-	end;
-parse_with_comments([$( | Tail], Acc, Depth, Quotes) when not Quotes ->
-	parse_with_comments(Tail, Acc, Depth + 1, Quotes);
-parse_with_comments([$) | Tail], Acc, Depth, Quotes) when Depth > 0, not Quotes ->
-	parse_with_comments(Tail, Acc, Depth - 1, Quotes);
-parse_with_comments([_H | Tail], Acc, Depth, Quotes) when Depth > 0 ->
-	parse_with_comments(Tail, Acc, Depth, Quotes);
-parse_with_comments([$" | T], Acc, Depth, true) -> %"
-	parse_with_comments(T, Acc, Depth, false);
-parse_with_comments([$" | T], Acc, Depth, false) -> %"
-	parse_with_comments(T, Acc, Depth, true);
-parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
-	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
-
-parse_content_type(undefined) ->
-	undefined;
-parse_content_type(String) ->
-	try parse_content_disposition(String) of
-		{RawType, Parameters} ->
-			case string:str(RawType, "/") of
-				Index when Index < 2 ->
-					throw(bad_content_type);
-				Index ->
-					Type = string:substr(RawType, 1, Index - 1),
-					SubType = string:substr(RawType, Index + 1),
-					{string:to_lower(Type), string:to_lower(SubType), Parameters}
-			end
-		catch
-			bad_disposition ->
-				throw(bad_content_type)
-	end.
-
-parse_content_disposition(undefined) ->
-	undefined;
-parse_content_disposition(String) ->
-	[Disposition | Parameters] = string:tokens(parse_with_comments(String), ";"),
-	F =
-	fun(X) ->
-		Y = string:strip(string:strip(X), both, $\t),
-		case string:str(Y, "=") of
-			Index when Index < 2 ->
-				throw(bad_disposition);
-			Index ->
-				Key = string:substr(Y, 1, Index - 1),
-				Value = string:substr(Y, Index + 1),
-				{string:to_lower(Key), Value}
-		end
-	end,
-	Params = lists:map(F, Parameters),
-	{string:to_lower(Disposition), Params}.
-
-split_body_by_boundary(Body, Boundary, MimeVsn) ->
-	% find the indices of the first and last boundary
-	case [string:str(Body, Boundary), string:str(Body, Boundary++"--")] of
-		[Start, End] when Start =:= 0; End =:= 0 ->
-			erlang:error(bad_boundary);
-		[Start, End] ->
-			NewBody = string:substr(Body, Start + length(Boundary), End - Start),
-			% from now on, we can be sure that each boundary is preceeded by a CRLF
-			Parts = split_body_by_boundary_(NewBody, "\r\n" ++ Boundary, []),
-			Res = lists:filter(fun({Headers, Data}) -> length(Data) =/= 0 end, Parts),
-			lists:map(fun({Headers, Body}) -> decode_component(fix_headers(Headers), Body, MimeVsn) end, Res)
-	end.
-
-split_body_by_boundary_([], _Boundary, Acc) ->
-	lists:reverse(Acc);
-split_body_by_boundary_(Body, Boundary, Acc) ->
-	% trim the incomplete first line
-	TrimmedBody = string:substr(Body, string:str(Body, "\r\n") + 2),
-	case string:str(TrimmedBody, Boundary) of
-		0 ->
-			lists:reverse([{[], TrimmedBody} | Acc]);
-		Index ->
-			split_body_by_boundary_(string:substr(TrimmedBody, Index + length(Boundary)), Boundary,
-				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
-	end.
-
-parse_headers(Body) ->
-	case string:str(Body, "\r\n") of
-		0 ->
-			{[], Body};
-		1 ->
-			{[], string:substr(Body, 3)};
-		Index ->
-			parse_headers(string:substr(Body, Index+2), string:substr(Body, 1, Index - 1), [])
-	end.
-
-
-parse_headers(Body, [H | T] = Line, []) when H =:= $\s; H =:= $\t ->
-	% folded headers
-	{[], Line++"\r\n"++Body};
-parse_headers(Body, [H | T] = Line, Headers) when H =:= $\s; H =:= $\t ->
-	% folded headers
-	[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
-	FieldValue = string:concat(OldFieldValue, T),
-	%?debugFmt("~p = ~p~n", [FieldName, FieldValue]),
-	case string:str(Body, "\r\n") of
-		0 ->
-			{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
-		1 ->
-			{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), string:substr(Body, 3)};
-		Index2 ->
-			parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | OtherHeaders])
-	end;
-parse_headers(Body, Line, Headers) ->
-	%?debugFmt("line: ~p, nextpart ~p~n", [Line, string:substr(Body, 1, 10)]),
-	case string:str(Line, ":") of
-		0 ->
-			{lists:reverse(Headers), Line++"\r\n"++Body};
-		Index ->
-			FieldName = string:substr(Line, 1, Index - 1),
-			F = fun(X) -> X > 32 andalso X < 127 end,
-			case lists:all(F, FieldName) of
-				true ->
-					FieldValue = string:strip(string:substr(Line, Index+1)),
-					case string:str(Body, "\r\n") of
-						0 ->
-							{lists:reverse([{FieldName, FieldValue} | Headers]), Body};
-						1 ->
-							{lists:reverse([{FieldName, FieldValue} | Headers]), string:substr(Body, 3)};
-						Index2 ->
-							parse_headers(string:substr(Body, Index2 + 2), string:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | Headers])
-					end;
-				false ->
-					{lists:reverse(Headers), Line++"\r\n"++Body}
-			end
-	end.
-
-decode_body(undefined, Body) ->
+encode_body(undefined, Body) ->
 	Body;
-decode_body(Type, Body) ->
+encode_body(Type, Body) ->
 	case string:to_lower(Type) of
 		"quoted-printable" ->
-			decode_quoted_printable(Body);
+			% TODO: examine whether this could be necessary to implement
+			% encode_quoted_printable(Body);
+			Body;
 		"base64" ->
-			decode_base64(Body);
+			[InnerBody] = Body,
+			wrap_to_76(base64:encode_to_string(InnerBody));
 		Other ->
 			Body
 	end.
 
-decode_base64(Body) ->
-	base64:mime_decode_to_string(Body).
+wrap_to_76(String) ->
+	wrap_to_76(String, []).
+wrap_to_76([], Lines) ->
+	Lines;
+wrap_to_76(String, Lines) when length(String) >= 76 ->
+	wrap_to_76(
+		string:substr(String, 76+1),
+		Lines ++ [string:substr(String, 1, 76)]
+	);
+wrap_to_76(String, Lines) ->
+	wrap_to_76(
+		[],
+		Lines ++ [String]
+	).
 
-decode_quoted_printable(Body) ->
-	case string:str(Body, "\r\n") of
-		0 ->
-			decode_quoted_printable(Body, [], []);
-		Index ->
-			decode_quoted_printable(string:substr(Body, 1, Index +1), string:substr(Body, Index + 2), [])
-	end.
-
-decode_quoted_printable([], [], Acc) ->
-	string:join(lists:reverse(Acc), "");
-decode_quoted_printable(Line, Rest, Acc) ->
-	%?debugFmt("line ~p~n", [Line]),
-	%?debugFmt("rest ~p~n", [Rest]),
-	case string:str(Rest, "\r\n") of
-		0 ->
-			decode_quoted_printable(Rest, [], [decode_quoted_printable_line(Line, []) | Acc]);
-		Index ->
-			%?debugFmt("next line ~p~nnext rest ~p~n", [string:substr(Rest, 1, Index +1), string:substr(Rest, Index + 2)]),
-			decode_quoted_printable(string:substr(Rest, 1, Index +1), string:substr(Rest, Index + 2),
-				[decode_quoted_printable_line(Line, []) | Acc])
-	end.
-
-decode_quoted_printable_line([], Acc) ->
-	lists:reverse(Acc);
-decode_quoted_printable_line([$\r, $\n], Acc) ->
-	string:concat(lists:reverse(Acc), "\r\n");
-decode_quoted_printable_line([$=, C | T], Acc) when C =:= $\s orelse C =:= $\t ->
-	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
-		true ->
-			lists:reverse(Acc);
-		false ->
-			throw(badchar)
-	end;
-decode_quoted_printable_line([$=, $\r, $\n], Acc) ->
-	lists:reverse(Acc);
-decode_quoted_printable_line([$=, X, Y | T], Acc) ->
-	case lists:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) end, [X, Y]) of
-		true ->
-			{ok, [C | []], []} = io_lib:fread("~16u", [X, Y]),
-			decode_quoted_printable_line(T, [C | Acc]);
-		false ->
-			throw(badchar)
-	end;
-decode_quoted_printable_line([$=], Acc) ->
-	% soft newline
-	lists:reverse(Acc);
-decode_quoted_printable_line([H | T], Acc) when H >= $! andalso H =< $< ->
-	decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line([H | T], Acc) when H >= $> andalso H =< $~ ->
-	decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line([$\s | T], Acc) ->
-	% if the rest of the line is whitespace, truncate it
-	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
-		true ->
-			lists:reverse(Acc);
-		false ->
-			decode_quoted_printable_line(T, [$\s | Acc])
-	end.
