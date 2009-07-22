@@ -402,10 +402,12 @@ encode_component_part(Part) ->
 				{_,_,_,_,_} -> encode_component_part(Body);
 				String      -> [String]
 			end,
-			encode_headers(Headers) ++ [""] ++ encode_body(
-																						proplists:get_value("Content-Transfer-Encoding", Headers),
-																						PartData
-																				 );
+			encode_headers(Headers)
+			++ [""] ++
+			encode_body(
+					proplists:get_value("Content-Transfer-Encoding", Headers),
+					PartData
+			 );
 
 		_ ->
 			io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
