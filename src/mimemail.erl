@@ -371,22 +371,16 @@ encode_component(Params, Parts) ->
 		] ->
 			[""] ++  % blank line before start of component
 			lists:flatmap(
-				fun(PartLines) ->
+				fun(Part) ->
 					["--"++Boundary] ++ % start with the boundary
-					PartLines
+					encode_component_part(Part)
 				end,
-				encode_component_parts(Params, Parts)
+				Parts
 			) ++ ["--"++Boundary++"--"]; % final boundary (with /--$/)
 
 		% or an inline component?
 	  _ -> [Parts]
 	end.
-
-encode_component_parts(Params, Parts) ->
-	lists:map(
-		fun(Part) -> encode_component_part(Part) end,
-		Parts
-	).
 
 encode_component_part(Part) ->
 	case Part of
