@@ -42,6 +42,19 @@ decode(Headers, Body) ->
 			decode_component(FixedHeaders, Body, Other)
 	end.
 
+encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
+  string:join(
+		encode_headers(Headers)
+		++
+		encode_component(ContentTypeParams, Parts)
+		++
+		[""],
+		"\r\n"
+	);
+encode(_) ->
+	io:format("Not a mime-decoded DATA~n"),
+	erlang:error(non_mime).
+
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 	case parse_content_disposition(proplists:get_value("Content-Disposition", Headers)) of
 		{Disposition, DispositionParams} ->
@@ -328,16 +341,6 @@ decode_quoted_printable_line([$\s | T], Acc) ->
 			decode_quoted_printable_line(T, [$\s | Acc])
 	end.
 
-
-encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
-	{
-		encode_headers(Headers),
-		encode_component(ContentTypeParams, Parts) ++ [""]
-	};
-
-encode(_) ->
-	io:format("Not a mime-decoded DATA~n"),
-	erlang:error(non_mime).
 
 encode_headers(Headers) ->
 	encode_headers(Headers, []).
