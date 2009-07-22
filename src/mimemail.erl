@@ -29,9 +29,6 @@
 
 -export([encode/1, decode/2, decode/1]).
 
-encode(Encodable) ->
-	mimemail_encode:encode(Encodable).
-
 decode(All) ->
 	{Headers, Body} = parse_headers(All),
 	decode(Headers, Body).
@@ -330,6 +327,132 @@ decode_quoted_printable_line([$\s | T], Acc) ->
 		false ->
 			decode_quoted_printable_line(T, [$\s | Acc])
 	end.
+
+
+encode({ContentType1, ContentType2, Headers, ContentTypeParams, Parts}) ->
+	{
+		encode_headers(Headers),
+		encode_component(Headers, ContentTypeParams, Parts) ++ [""]
+	};
+
+encode(_) ->
+	io:format("Not a mime-decoded DATA~n"),
+	erlang:error(non_mime).
+
+encode_headers(Headers) ->
+	encode_headers(Headers, []).
+encode_headers([], EncodedHeaders) ->
+	EncodedHeaders;
+encode_headers([{Key, Value}|T] = Headers, EncodedHeaders) ->
+	encode_headers(T, encode_folded_header(Key++": "++Value, EncodedHeaders)).
+
+encode_folded_header(Header, HeaderLines) ->
+  case string:str(Header, ";") of
+		0 ->
+			HeaderLines ++ [Header];
+		Index ->
+			Remainder = string:substr(Header, Index+1),
+			TabbedRemainder = case Remainder of
+				[$\t|_] -> Remainder;
+				_       -> "\t"++Remainder
+			end,
+			HeaderLines ++
+			[ string:substr(Header, 1, Index) ] ++
+			encode_folded_header(TabbedRemainder, [])
+	end.
+
+encode_component(Headers, Params, Parts) ->
+	case Params of
+		% is this a multipart component?
+		[	{"content-type-params", [{"boundary", Boundary}]},
+			{"disposition", "inline"},
+			{"disposition-params", []}
+		] ->
+			[""] ++  % blank line before start of component
+			lists:flatmap(
+				fun(PartLines) ->
+					["--"++Boundary] ++ % start with the boundary
+					PartLines
+				end,
+				encode_component_parts(Params, Parts)
+			) ++ ["--"++Boundary++"--"]; % final boundary (with /--$/)
+		% is this a simple inline component?
+		[	{"content-type-params", ParamHeaders},
+			{"disposition", "inline"},
+			{"disposition-params", []}
+		] ->
+			% this is a string split by newlines
+			string:tokens(Parts, "\r\n");
+
+	  Other -> [Parts]
+	end.
+
+encode_component_parts(Params, Parts) ->
+	lists:map(
+		fun(Part) -> encode_component_part(Part) end,
+		Parts
+	).
+
+encode_component_part(Part) ->
+	case Part of
+		{"multipart", _, Headers, PartParams, Body} ->
+			encode_headers(Headers) ++ encode_component(Headers, PartParams, Body);
+
+		{"message", "rfc822", Headers,
+		[{"content-type-params", TypeParams},
+		 {"disposition", "attachment"}, _],
+		Body} ->
+			PartData = case Body of
+				{_,_,_,_,_} -> encode_component_part(Body);
+				String      -> [String]
+			end,
+			encode_headers(Headers) ++ [""] ++ PartData;
+
+		{Type, SubType, Headers, PartParams, Body} ->
+			PartData = case Body of
+				{_,_,_,_,_} -> encode_component_part(Body);
+				String      -> [String]
+			end,
+			encode_headers(Headers) ++ [""] ++ encode_body(
+																						proplists:get_value("Content-Transfer-Encoding", Headers),
+																						PartData
+																				 );
+
+		_ ->
+			io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
+			[]
+	end.
+
+encode_body(undefined, Body) ->
+	Body;
+encode_body(Type, Body) ->
+	case string:to_lower(Type) of
+		"quoted-printable" ->
+			% TODO: examine whether this could be necessary to implement
+			% encode_quoted_printable(Body);
+			Body;
+		"base64" ->
+			[InnerBody] = Body,
+			wrap_to_76(base64:encode_to_string(InnerBody));
+		Other ->
+			Body
+	end.
+
+wrap_to_76(String) ->
+	wrap_to_76(String, []).
+wrap_to_76([], Lines) ->
+	Lines;
+wrap_to_76(String, Lines) when length(String) >= 76 ->
+	wrap_to_76(
+		string:substr(String, 76+1),
+		Lines ++ [string:substr(String, 1, 76)]
+	);
+wrap_to_76(String, Lines) ->
+	wrap_to_76(
+		[],
+		Lines ++ [String]
+	).
+
 
 -ifdef(EUNIT).
 
