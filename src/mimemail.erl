@@ -329,10 +329,10 @@ decode_quoted_printable_line([$\s | T], Acc) ->
 	end.
 
 
-encode({ContentType1, ContentType2, Headers, ContentTypeParams, Parts}) ->
+encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
 	{
 		encode_headers(Headers),
-		encode_component(Headers, ContentTypeParams, Parts) ++ [""]
+		encode_component(ContentTypeParams, Parts) ++ [""]
 	};
 
 encode(_) ->
@@ -343,7 +343,7 @@ encode_headers(Headers) ->
 	encode_headers(Headers, []).
 encode_headers([], EncodedHeaders) ->
 	EncodedHeaders;
-encode_headers([{Key, Value}|T] = Headers, EncodedHeaders) ->
+encode_headers([{Key, Value}|T] = _Headers, EncodedHeaders) ->
 	encode_headers(T, encode_folded_header(Key++": "++Value, EncodedHeaders)).
 
 encode_folded_header(Header, HeaderLines) ->
@@ -361,8 +361,9 @@ encode_folded_header(Header, HeaderLines) ->
 			encode_folded_header(TabbedRemainder, [])
 	end.
 
-encode_component(Headers, Params, Parts) ->
+encode_component(Params, Parts) ->
 	case Params of
+
 		% is this a multipart component?
 		[	{"content-type-params", [{"boundary", Boundary}]},
 			{"disposition", "inline"},
@@ -376,15 +377,9 @@ encode_component(Headers, Params, Parts) ->
 				end,
 				encode_component_parts(Params, Parts)
 			) ++ ["--"++Boundary++"--"]; % final boundary (with /--$/)
-		% is this a simple inline component?
-		[	{"content-type-params", ParamHeaders},
-			{"disposition", "inline"},
-			{"disposition-params", []}
-		] ->
-			% this is a string split by newlines
-			string:tokens(Parts, "\r\n");
 
-	  Other -> [Parts]
+		% or an inline component?
+	  _ -> [Parts]
 	end.
 
 encode_component_parts(Params, Parts) ->
@@ -396,10 +391,10 @@ encode_component_parts(Params, Parts) ->
 encode_component_part(Part) ->
 	case Part of
 		{"multipart", _, Headers, PartParams, Body} ->
-			encode_headers(Headers) ++ encode_component(Headers, PartParams, Body);
+			encode_headers(Headers) ++ encode_component(PartParams, Body);
 
 		{"message", "rfc822", Headers,
-		[{"content-type-params", TypeParams},
+		[{"content-type-params", _TypeParams},
 		 {"disposition", "attachment"}, _],
 		Body} ->
 			PartData = case Body of
@@ -408,7 +403,7 @@ encode_component_part(Part) ->
 			end,
 			encode_headers(Headers) ++ [""] ++ PartData;
 
-		{Type, SubType, Headers, PartParams, Body} ->
+		{_Type, _SubType, Headers, _PartParams, Body} ->
 			PartData = case Body of
 				{_,_,_,_,_} -> encode_component_part(Body);
 				String      -> [String]
