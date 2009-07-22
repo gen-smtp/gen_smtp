@@ -425,8 +425,7 @@ encode_body(Type, Body) ->
 		"base64" ->
 			[InnerBody] = Body,
 			wrap_to_76(base64:encode_to_string(InnerBody));
-		Other ->
-			Body
+		_ -> Body
 	end.
 
 wrap_to_76(String) ->
