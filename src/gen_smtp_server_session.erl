@@ -222,7 +222,7 @@ handle_info(_Info, State) ->
 
 %% @hidden
 terminate(Reason, State) ->
-	io:format("Session terminating due to ~p~n", [Reason]),
+	% io:format("Session terminating due to ~p~n", [Reason]),
 	gen_tcp:close(State#state.socket),
 	ok.
 

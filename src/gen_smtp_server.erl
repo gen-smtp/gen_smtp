@@ -117,7 +117,7 @@ handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSo
 		end,
 
 		%% New client connected
-		io:format("new client connection.~n", []),
+		% io:format("new client connection.~n", []),
 		Sessions = case gen_smtp_server_session:start(CliSocket, State#state.module, State#state.hostname, length(State#state.sessions) + 1) of
 			{ok, Pid} ->
 				link(Pid),
