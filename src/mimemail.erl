@@ -375,7 +375,8 @@ encode_component(Params, Parts) ->
 					encode_component_part(Part)
 				end,
 				Parts
-			) ++ ["--"++Boundary++"--"]; % final boundary (with /--$/)
+			) ++ ["--"++Boundary++"--"] % final boundary (with /--$/)
+			  ++ [""]; % blank line at the end of the multipart component
 
 		% or an inline component?
 	  _ -> [Parts]
@@ -415,7 +416,7 @@ encode_body(Type, Body) ->
 			Body;
 		"base64" ->
 			[InnerBody] = Body,
-			wrap_to_76(base64:encode_to_string(InnerBody));
+			wrap_to_76(base64:encode_to_string(InnerBody)) ++ [""];
 		_ -> Body
 	end.
 
