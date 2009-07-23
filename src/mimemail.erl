@@ -384,17 +384,9 @@ encode_component(Params, Parts) ->
 encode_component_part(Part) ->
 	case Part of
 		{"multipart", _, Headers, PartParams, Body} ->
-			encode_headers(Headers) ++ encode_component(PartParams, Body);
-
-		{"message", "rfc822", Headers,
-		[{"content-type-params", _TypeParams},
-		 {"disposition", "attachment"}, _],
-		Body} ->
-			PartData = case Body of
-				{_,_,_,_,_} -> encode_component_part(Body);
-				String      -> [String]
-			end,
-			encode_headers(Headers) ++ [""] ++ PartData;
+			encode_headers(Headers)
+			++ [""] ++
+			encode_component(PartParams, Body);
 
 		{_Type, _SubType, Headers, _PartParams, Body} ->
 			PartData = case Body of
