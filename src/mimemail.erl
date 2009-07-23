@@ -44,11 +44,7 @@ decode(Headers, Body) ->
 
 encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
   string:join(
-		encode_headers(Headers)
-		++
-		encode_component(ContentTypeParams, Parts)
-		++
-		[""],
+		encode_component(ContentTypeParams, Parts),
 		"\r\n"
 	);
 encode(_) ->
