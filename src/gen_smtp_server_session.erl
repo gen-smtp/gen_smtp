@@ -59,6 +59,7 @@
 		hostname = erlang:error({undefined, hostname}) :: string(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [string()],
+		waitingauth = false :: bool(),
 		readmessage = false :: bool(),
 		readheaders = false :: bool(),
 		callbackstate :: any()
@@ -303,9 +304,12 @@ handle_request({"AUTH", AuthType}, #state{socket = Socket, module = Module, exte
 					gen_tcp:send(Socket, "504 Unrecognized authentication type\r\n");
 				true ->
 					case AuthType of
+						"LOGIN" ->
+							% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
+							gen_tcp:send(Socket, "334 VXNlcm5hbWU\r\n"),
+							{ok, State#state{waitingauth = true}};
 						"PLAIN" ->    {ok, State};	% not yet implemented
-						"LOGIN" ->    {ok, State};	% not yet implemented
-						"CRAM-MD5" -> {ok, State}		% not yet implemented
+						"CRAM-MD5" -> {ok, State}	% not yet implemented
 					end
 			end
 	end.
