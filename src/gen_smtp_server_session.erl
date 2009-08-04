@@ -47,7 +47,8 @@
 		to = [] :: [string()],
 		data = "" :: string(),
 		headers = [] :: [{string(), string()}], %proplist
-		expectedsize :: pos_integer()
+		expectedsize :: pos_integer(),
+		auth = undefined :: {string(), string()} % {"username", "password"}
 	}
 ).
 
@@ -288,6 +289,27 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 			gen_tcp:send(Socket, Message++"\r\n"),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
+
+handle_request({"AUTH", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
+	gen_tcp:send(Socket, "503 Error: send EHLO first\r\n"),
+	{ok, State};
+handle_request({"AUTH", AuthType}, #state{socket = Socket, module = Module, extensions = Extensions} = State) ->
+	case has_extension(Extensions, "AUTH") of
+		false ->
+			gen_tcp:send(Socket, "502 Error: AUTH not implemented\r\n");
+		{true, AvailableTypes} ->
+			case lists:member(AuthType, string:tokens(AvailableTypes, " ")) of
+				false ->
+					gen_tcp:send(Socket, "504 Unrecognized authentication type\r\n");
+				true ->
+					case AuthType of
+						"PLAIN" ->    {ok, State};	% not yet implemented
+						"LOGIN" ->    {ok, State};	% not yet implemented
+						"CRAM-MD5" -> {ok, State}		% not yet implemented
+					end
+			end
+	end.
+
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
