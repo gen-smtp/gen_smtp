@@ -241,7 +241,8 @@ parse_request(Packet) ->
 				"QUIT" -> {"QUIT", []};
 				"DATA" -> {"DATA", []};
 				% likely a base64-encoded client reply
-				_      -> {Request, []};
+				_      -> {Request, []}
+			end;
 		Index ->
 			Verb = string:substr(Request, 1, Index - 1),
 			Parameters = string:strip(string:substr(Request, Index + 1), left, $\s),
@@ -338,9 +339,11 @@ handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 	case erlang:function_exported(Module, handle_AUTH, 3) of
 		true ->
 			case Module:handle_AUTH(Username, Password, NewState) of
-				{ok, ModuleState} -> {ok, ModuleState};
+				{ok, ModuleState} ->
+					gen_tcp:send(Socket, "235 Authentication successful.\r\n"),
+					{ok, ModuleState};
 				_ ->
-					gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
+					gen_tcp:send(Socket, "535 Authentication failed.\r\n"),
 					{ok, NewState}
 				end;
 		false ->
