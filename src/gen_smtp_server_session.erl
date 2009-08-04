@@ -312,7 +312,7 @@ handle_request({"AUTH", AuthType}, #state{socket = Socket, module = Module, exte
 						"CRAM-MD5" -> {ok, State}	% not yet implemented
 					end
 			end
-	end.
+	end;
 
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
