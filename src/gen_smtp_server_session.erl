@@ -59,7 +59,7 @@
 		hostname = erlang:error({undefined, hostname}) :: string(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [string()],
-		waitingauth = false :: bool(),
+		waitingauth = false :: bool() | string(),
 		readmessage = false :: bool(),
 		readheaders = false :: bool(),
 		callbackstate :: any()
@@ -307,7 +307,7 @@ handle_request({"AUTH", AuthType}, #state{socket = Socket, module = Module, exte
 						"LOGIN" ->
 							% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
 							gen_tcp:send(Socket, "334 VXNlcm5hbWU\r\n"),
-							{ok, State#state{waitingauth = true}};
+							{ok, State#state{waitingauth = "LOGIN"}};
 						"PLAIN" ->    {ok, State};	% not yet implemented
 						"CRAM-MD5" -> {ok, State}	% not yet implemented
 					end
