@@ -235,9 +235,13 @@ code_change(_OldVsn, State, _Extra) ->
 parse_request(Packet) ->
 	Request = string:strip(string:strip(string:strip(string:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case string:str(Request, " ") of
-		0 -> % whole thing is the verb
-			%io:format("got a ~s request~n", [Request]),
-			{string:to_upper(Request), []};
+		0 ->
+			% io:format("got a ~s request~n", [Request]),
+			case string:to_upper(Request) of
+				"QUIT" -> {"QUIT", []};
+				"DATA" -> {"DATA", []};
+				% likely a base64-encoded client reply
+				_      -> {Request, []};
 		Index ->
 			Verb = string:substr(Request, 1, Index - 1),
 			Parameters = string:strip(string:substr(Request, Index + 1), left, $\s),
