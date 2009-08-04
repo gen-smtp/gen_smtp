@@ -48,7 +48,7 @@
 		data = "" :: string(),
 		headers = [] :: [{string(), string()}], %proplist
 		expectedsize :: pos_integer(),
-		auth = undefined :: {string(), string()} % {"username", "password"}
+		auth = {[], []} :: {string(), string()} % {"username", "password"}
 	}
 ).
 
@@ -294,24 +294,55 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 handle_request({"AUTH", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send EHLO first\r\n"),
 	{ok, State};
-handle_request({"AUTH", AuthType}, #state{socket = Socket, module = Module, extensions = Extensions} = State) ->
+handle_request({"AUTH", AuthType}, #state{socket = Socket, extensions = Extensions, envelope = Envelope} = State) ->
 	case has_extension(Extensions, "AUTH") of
 		false ->
 			gen_tcp:send(Socket, "502 Error: AUTH not implemented\r\n");
 		{true, AvailableTypes} ->
-			case lists:member(AuthType, string:tokens(AvailableTypes, " ")) of
+			case lists:member(string:to_upper(AuthType), string:tokens(AvailableTypes, " ")) of
 				false ->
-					gen_tcp:send(Socket, "504 Unrecognized authentication type\r\n");
+					gen_tcp:send(Socket, "504 Unrecognized authentication type\r\n"),
+					{ok, State};
 				true ->
-					case AuthType of
+					case string:to_upper(AuthType) of
 						"LOGIN" ->
 							% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
-							gen_tcp:send(Socket, "334 VXNlcm5hbWU\r\n"),
-							{ok, State#state{waitingauth = "LOGIN"}};
+							gen_tcp:send(Socket, "334 VXNlcm5hbWU6\r\n"),
+							{ok, State#state{waitingauth = "LOGIN", envelope = Envelope#envelope{auth = {[], []}}}};
 						"PLAIN" ->    {ok, State};	% not yet implemented
 						"CRAM-MD5" -> {ok, State}	% not yet implemented
 					end
 			end
+	end;
+
+% the client sends a username response to auth-login
+handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", envelope = #envelope{auth = {[],[]}}} = State) ->
+	Envelope = State#state.envelope,
+	Username = base64:decode_to_string(Username64),
+	% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
+	gen_tcp:send(Socket, "334 UGFzc3dvcmQ6\r\n"),
+	% store the provided username in envelope.auth
+	NewState = State#state{envelope = Envelope#envelope{auth = {Username, []}}},
+	{ok, NewState};
+
+% the client sends a password response to auth-login
+handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", module = Module, envelope = #envelope{auth = {Username,[]}}} = State) ->
+	Envelope = State#state.envelope,
+	Password = base64:decode_to_string(Password64),
+	% store the provided password in envelope.auth
+	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {Username, Password}}},
+	case erlang:function_exported(Module, handle_AUTH, 3) of
+		true ->
+			case Module:handle_AUTH(Username, Password, NewState) of
+				{ok, ModuleState} -> {ok, ModuleState};
+				_ ->
+					gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
+					{ok, NewState}
+				end;
+		false ->
+			io:format("Please define handle_auth/3 in your server module or remove AUTH from your module extensions~n"),
+			gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
+			{ok, NewState}
 	end;
 
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
