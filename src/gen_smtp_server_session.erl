@@ -335,14 +335,15 @@ handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 	Envelope = State#state.envelope,
 	Password = base64:decode_to_string(Password64),
 	% store the provided password in envelope.auth
-	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {Username, Password}}},
+	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
 	case erlang:function_exported(Module, handle_AUTH, 3) of
 		true ->
-			case Module:handle_AUTH(Username, Password, NewState) of
-				{ok, ModuleState} ->
+			case Module:handle_AUTH(Username, Password, State#state.callbackstate) of
+				{ok, CallbackState} ->
 					gen_tcp:send(Socket, "235 Authentication successful.\r\n"),
-					{ok, ModuleState};
-				_ ->
+					{ok, NewState#state{callbackstate = CallbackState,
+					                    envelope = Envelope#envelope{auth = {Username, Password}}}};
+				Other ->
 					gen_tcp:send(Socket, "535 Authentication failed.\r\n"),
 					{ok, NewState}
 				end;
