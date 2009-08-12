@@ -314,10 +314,22 @@ handle_request({"AUTH", AuthType}, #state{socket = Socket, extensions = Extensio
 							% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
 							gen_tcp:send(Socket, "334 VXNlcm5hbWU6\r\n"),
 							{ok, State#state{waitingauth = "LOGIN", envelope = Envelope#envelope{auth = {[], []}}}};
-						"PLAIN" ->    {ok, State};	% not yet implemented
+						"PLAIN" ->
+							gen_tcp:send(Socket, "334\r\n"),
+							{ok, State#state{waitingauth = "PLAIN", envelope = Envelope#envelope{auth = {[], []}}}};
 						"CRAM-MD5" -> {ok, State}	% not yet implemented
 					end
 			end
+	end;
+
+% the client sends a \0username\0password response to auth-plain
+handle_request({Username64, []}, #state{socket = Socket, waitingauth = "PLAIN", envelope = #envelope{auth = {[],[]}}} = State) ->
+	case string:tokens(base64:decode_to_string(Username64), [0]) of
+		[Username, Password] ->
+			try_auth(Username, Password, State);
+		_ ->
+			% TODO error
+			{ok, State#state{waitingauth=false}}
 	end;
 
 % the client sends a username response to auth-login
@@ -332,26 +344,27 @@ handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 
 % the client sends a password response to auth-login
 handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", module = Module, envelope = #envelope{auth = {Username,[]}}} = State) ->
-	Envelope = State#state.envelope,
+	%Envelope = State#state.envelope,
 	Password = base64:decode_to_string(Password64),
+	try_auth(Username, Password, State);
 	% store the provided password in envelope.auth
-	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
-	case erlang:function_exported(Module, handle_AUTH, 3) of
-		true ->
-			case Module:handle_AUTH(Username, Password, State#state.callbackstate) of
-				{ok, CallbackState} ->
-					gen_tcp:send(Socket, "235 Authentication successful.\r\n"),
-					{ok, NewState#state{callbackstate = CallbackState,
-					                    envelope = Envelope#envelope{auth = {Username, Password}}}};
-				Other ->
-					gen_tcp:send(Socket, "535 Authentication failed.\r\n"),
-					{ok, NewState}
-				end;
-		false ->
-			io:format("Please define handle_auth/3 in your server module or remove AUTH from your module extensions~n"),
-			gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
-			{ok, NewState}
-	end;
+	%NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
+	%case erlang:function_exported(Module, handle_AUTH, 3) of
+		%true ->
+			%case Module:handle_AUTH(Username, Password, State#state.callbackstate) of
+				%{ok, CallbackState} ->
+					%gen_tcp:send(Socket, "235 Authentication successful.\r\n"),
+					%{ok, NewState#state{callbackstate = CallbackState,
+					                    %envelope = Envelope#envelope{auth = {Username, Password}}}};
+				%Other ->
+					%gen_tcp:send(Socket, "535 Authentication failed.\r\n"),
+					%{ok, NewState}
+				%end;
+		%false ->
+			%io:format("Please define handle_auth/3 in your server module or remove AUTH from your module extensions~n"),
+			%gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
+			%{ok, NewState}
+	%end;
 
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
@@ -583,6 +596,27 @@ has_extension(Exts, Ext) ->
 trim_crlf(String) ->
 	string:strip(string:strip(String, right, $\n), right, $\r).
 
+try_auth(Username, Password, #state{module = Module, socket = Socket, envelope = Envelope} = State) ->
+	% clear out waiting auth
+	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
+	case erlang:function_exported(Module, handle_AUTH, 3) of
+		true ->
+			case Module:handle_AUTH(Username, Password, State#state.callbackstate) of
+				{ok, CallbackState} ->
+					gen_tcp:send(Socket, "235 Authentication successful.\r\n"),
+					{ok, NewState#state{callbackstate = CallbackState,
+					                    envelope = Envelope#envelope{auth = {Username, Password}}}};
+				Other ->
+					gen_tcp:send(Socket, "535 Authentication failed.\r\n"),
+					{ok, NewState}
+				end;
+		false ->
+			io:format("Please define handle_auth/3 in your server module or remove AUTH from your module extensions~n"),
+			gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
+			{ok, NewState}
+	end.
+
+
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->
 	[
@@ -732,9 +766,178 @@ smtp_session_test_() ->
 								?assertMatch("501 Syntax: HELO hostname\r\n",  Packet2)
 						end
 					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"A rejected HELO",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO invalid\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("554 invalid hostname\r\n",  Packet2)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"A rejected EHLO",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO invalid\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("554 invalid hostname\r\n",  Packet2)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"EHLO response",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo))
+						end
+					}
 			end
-
 		]
 	}.
+
+smtp_session_auth_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				Self = self(),
+				spawn(fun() ->
+							{ok, ListenSock} = gen_tcp:listen(9876, [list, {packet, line}, {reuseaddr, true}, {keepalive, true}, {backlog, 30}, {active, false}]),
+							{ok, X} = gen_tcp:accept(ListenSock),
+							inet:setopts(X, [list, {packet, line}, {reuseaddr, true}, {keepalive, true}, {backlog, 30}, {active, false}]),
+							gen_tcp:controlling_process(X, Self),
+							Self ! X
+					end),
+				{ok, CSock} = gen_tcp:connect("localhost", 9876,  [list, {packet, line}, {active, false}]),
+				receive
+					SSock when is_port(SSock) ->
+						?debugFmt("Got server side of the socket ~p, client is ~p~n", [SSock, CSock])
+				end,
+				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example_auth, "localhost", 1),
+				gen_tcp:controlling_process(SSock, Pid),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+				gen_tcp:close(CSock)
+		end,
+		[fun({CSock, _Pid}) ->
+					{"EHLO response includes AUTH",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo))
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"A successful AUTH PLAIN",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH PLAIN\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334\r\n",  Packet4),
+								String = binary_to_list(base64:encode("\0username\0PaSSw0rd")),
+								gen_tcp:send(CSock, String++"\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("235 Authentication successful.\r\n",  Packet5)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"An unsuccessful AUTH PLAIN",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH PLAIN\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334\r\n",  Packet4),
+								String = binary_to_list(base64:encode("\0username\0NotThePassword")),
+								gen_tcp:send(CSock, String++"\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("535 Authentication failed.\r\n",  Packet5)
+						end
+					}
+			end
+		]
+	}.
+
 
 -endif.
