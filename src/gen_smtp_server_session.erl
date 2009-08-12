@@ -816,6 +816,35 @@ smtp_session_test_() ->
 								?assertEqual(ok, Foo(Foo))
 						end
 					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Unsupported AUTH PLAIN",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH PLAIN\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("502 Error: AUTH not implemented\r\n",  Packet4)
+						end
+					}
 			end
 		]
 	}.
@@ -933,6 +962,80 @@ smtp_session_auth_test_() ->
 								gen_tcp:send(CSock, String++"\r\n"),
 								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
 								?assertMatch("535 Authentication failed.\r\n",  Packet5)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"A successful AUTH LOGIN",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH LOGIN\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334 VXNlcm5hbWU6\r\n",  Packet4),
+								String = binary_to_list(base64:encode("username")),
+								gen_tcp:send(CSock, String++"\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334 UGFzc3dvcmQ6\r\n",  Packet5),
+								PString = binary_to_list(base64:encode("PaSSw0rd")),
+								gen_tcp:send(CSock, PString++"\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("235 Authentication successful.\r\n",  Packet6)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"An unsuccessful AUTH LOGIN",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH LOGIN\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334 VXNlcm5hbWU6\r\n",  Packet4),
+								String = binary_to_list(base64:encode("username2")),
+								gen_tcp:send(CSock, String++"\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334 UGFzc3dvcmQ6\r\n",  Packet5),
+								PString = binary_to_list(base64:encode("PaSSw0rd")),
+								gen_tcp:send(CSock, PString++"\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("535 Authentication failed.\r\n",  Packet6)
 						end
 					}
 			end
