@@ -33,7 +33,7 @@
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/4, start/4]).
+-export([start_link/4, start/4, compute_cram_digest/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -60,6 +60,7 @@
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [string()],
 		waitingauth = false :: bool() | string(),
+		authdata :: 'undefined' | string(),
 		readmessage = false :: bool(),
 		readheaders = false :: bool(),
 		callbackstate :: any()
@@ -90,6 +91,8 @@ start(Socket, Module, Hostname, SessionCount) ->
 	gen_server:start(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
 init([Socket, Module, Hostname, SessionCount]) ->
+	{A1, A2, A3} = now(),
+	random:seed(A1, A2, A3),
 	{ok, {PeerName, _Port}} = inet:peername(Socket),
 	case Module:init(Hostname, SessionCount, PeerName) of
 		{ok, Banner, CallbackState} ->
@@ -317,18 +320,32 @@ handle_request({"AUTH", AuthType}, #state{socket = Socket, extensions = Extensio
 						"PLAIN" ->
 							gen_tcp:send(Socket, "334\r\n"),
 							{ok, State#state{waitingauth = "PLAIN", envelope = Envelope#envelope{auth = {[], []}}}};
-						"CRAM-MD5" -> {ok, State}	% not yet implemented
+						"CRAM-MD5" ->
+							crypto:start(), % ensure crypto is started, we're gonna need it
+							String = get_cram_string(State#state.hostname),
+							gen_tcp:send(Socket, "334 "++String++"\r\n"),
+							{ok, State#state{waitingauth = "CRAM-MD5", authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
 					end
 			end
+	end;
+
+% the client sends a response to auth-cram-md5
+handle_request({Username64, []}, #state{socket = Socket, waitingauth = "CRAM-MD5", envelope = #envelope{auth = {[],[]}}} = State) ->
+	case string:tokens(base64:decode_to_string(Username64), " ") of
+		[Username, Digest] ->
+			try_auth('cram-md5', Username, {Digest, State#state.authdata}, State#state{authdata=undefined});
+		_ ->
+			% TODO error
+			{ok, State#state{waitingauth=false, authdata=undefined}}
 	end;
 
 % the client sends a \0username\0password response to auth-plain
 handle_request({Username64, []}, #state{socket = Socket, waitingauth = "PLAIN", envelope = #envelope{auth = {[],[]}}} = State) ->
 	case string:tokens(base64:decode_to_string(Username64), [0]) of
 		[_Identity, Username, Password] ->
-			try_auth(Username, Password, State);
+			try_auth('plain', Username, Password, State);
 		[Username, Password] ->
-			try_auth(Username, Password, State);
+			try_auth('plain', Username, Password, State);
 		_ ->
 			% TODO error
 			{ok, State#state{waitingauth=false}}
@@ -347,7 +364,7 @@ handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 % the client sends a password response to auth-login
 handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", module = Module, envelope = #envelope{auth = {Username,[]}}} = State) ->
 	Password = base64:decode_to_string(Password64),
-	try_auth(Username, Password, State);
+	try_auth('login', Username, Password, State);
 
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	gen_tcp:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
@@ -579,26 +596,32 @@ has_extension(Exts, Ext) ->
 trim_crlf(String) ->
 	string:strip(string:strip(String, right, $\n), right, $\r).
 
-try_auth(Username, Password, #state{module = Module, socket = Socket, envelope = Envelope} = State) ->
+try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope} = State) ->
 	% clear out waiting auth
 	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
-	case erlang:function_exported(Module, handle_AUTH, 3) of
+	case erlang:function_exported(Module, handle_AUTH, 4) of
 		true ->
-			case Module:handle_AUTH(Username, Password, State#state.callbackstate) of
+			case Module:handle_AUTH(AuthType, Username, Credential, State#state.callbackstate) of
 				{ok, CallbackState} ->
 					gen_tcp:send(Socket, "235 Authentication successful.\r\n"),
 					{ok, NewState#state{callbackstate = CallbackState,
-					                    envelope = Envelope#envelope{auth = {Username, Password}}}};
+					                    envelope = Envelope#envelope{auth = {Username, Credential}}}};
 				Other ->
 					gen_tcp:send(Socket, "535 Authentication failed.\r\n"),
 					{ok, NewState}
 				end;
 		false ->
-			io:format("Please define handle_auth/3 in your server module or remove AUTH from your module extensions~n"),
+			io:format("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
 			gen_tcp:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
 			{ok, NewState}
 	end.
 
+get_cram_string(Hostname) ->
+	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
+
+compute_cram_digest(Key, Data) ->
+	Bin = crypto:md5_mac(Key, Data),
+	string:to_lower(lists:flatten([io_lib:format("~2.16.0B", [X]) || X <- binary_to_list(Bin)])).
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->
@@ -1053,6 +1076,80 @@ smtp_session_auth_test_() ->
 								gen_tcp:send(CSock, PString++"\r\n"),
 								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
 								?assertMatch("535 Authentication failed.\r\n",  Packet6)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"A successful AUTH CRAM-MD5",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH CRAM-MD5\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334 "++_,  Packet4),
+
+								["334", Seed64] = string:tokens(trim_crlf(Packet4), " "),
+								Seed = base64:decode_to_string(Seed64),
+								Digest = compute_cram_digest("PaSSw0rd", Seed),
+								String = binary_to_list(base64:encode("username "++Digest)),
+								gen_tcp:send(CSock, String++"\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("235 Authentication successful.\r\n",  Packet5)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"An unsuccessful AUTH CRAM-MD5",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F);
+											{tcp, CSock, "250 AUTH"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												ok;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo)),
+								gen_tcp:send(CSock, "AUTH CRAM-MD5\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("334 "++_,  Packet4),
+
+								["334", Seed64] = string:tokens(trim_crlf(Packet4), " "),
+								Seed = base64:decode_to_string(Seed64),
+								Digest = compute_cram_digest("Passw0rd", Seed),
+								String = binary_to_list(base64:encode("username "++Digest)),
+								gen_tcp:send(CSock, String++"\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("535 Authentication failed.\r\n",  Packet5)
 						end
 					}
 			end
