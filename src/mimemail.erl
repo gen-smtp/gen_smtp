@@ -34,16 +34,17 @@ decode(All) ->
 	decode(Headers, Body).
 
 decode(Headers, Body) ->
-	FixedHeaders = fix_headers(Headers),
-	case parse_with_comments(proplists:get_value("MIME-Version", FixedHeaders)) of
+	%FixedHeaders = fix_headers(Headers),
+	case parse_with_comments(get_header_value("MIME-Version", Headers)) of
 		undefined ->
 			erlang:error(non_mime);
 		Other ->
-			decode_component(FixedHeaders, Body, Other)
+			decode_component(Headers, Body, Other)
 	end.
 
 encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
-  string:join(
+	string:join(encode_headers(Headers), "\r\n") ++ "\r\n\r\n" ++ 
+	string:join(
 		encode_component(ContentTypeParams, Parts),
 		"\r\n"
 	);
@@ -52,7 +53,7 @@ encode(_) ->
 	erlang:error(non_mime).
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
-	case parse_content_disposition(proplists:get_value("Content-Disposition", Headers)) of
+	case parse_content_disposition(get_header_value("Content-Disposition", Headers)) of
 		{Disposition, DispositionParams} ->
 			ok;
 		_ -> % defaults
@@ -60,7 +61,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 			DispositionParams = []
 	end,
 
-	case parse_content_type(proplists:get_value("Content-Type", Headers)) of
+	case parse_content_type(get_header_value("Content-Type", Headers)) of
 		{"multipart", SubType, Parameters} ->
 			case proplists:get_value("boundary", Parameters) of
 				undefined ->
@@ -77,7 +78,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 		{Type, SubType, Parameters} ->
 			%io:format("body is ~s/~s~n", [Type, SubType]),
 			Parameters2 = [{"content-type-params", Parameters}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-			{Type, SubType, Headers, Parameters2, decode_body(proplists:get_value("Content-Transfer-Encoding", Headers), Body)};
+			{Type, SubType, Headers, Parameters2, decode_body(get_header_value("Content-Transfer-Encoding", Headers), Body)};
 		undefined -> % defaults
 			Type = "text",
 			SubType = "plain",
@@ -110,6 +111,18 @@ fix_headers(Headers) ->
 			{NewHeader, Value}
 	end,
 	lists:map(F, Headers).
+
+get_header_value(Needle, Headers) ->
+	F =
+	fun({Header, _Value}) ->
+			string:to_lower(Header) =:= string:to_lower(Needle)
+	end,
+	case lists:filter(F, Headers) of
+		[{_Header, Value}|_T] ->
+			Value;
+		_ ->
+			undefined
+	end.
 
 parse_with_comments(Value) when is_list(Value) ->
 	parse_with_comments(Value, "", 0, false);
@@ -397,7 +410,7 @@ encode_component_part(Part) ->
 			encode_headers(Headers)
 			++ [""] ++
 			encode_body(
-					proplists:get_value("Content-Transfer-Encoding", Headers),
+					get_header_value("Content-Transfer-Encoding", Headers),
 					PartData
 			 );
 
@@ -871,6 +884,26 @@ decode_quoted_printable_test_() ->
 			end
 		}
 	].
+
+roundtrip_test_() ->
+	[
+		{"roundtrip test",
+			fun() ->
+					{ok, Bin} = file:read_file("testdata/the-gamut.eml"),
+					Email = binary_to_list(Bin),
+					Decoded = decode(Email),
+					Encoded = encode(Decoded),
+					%{ok, F1} = file:open("f1", [write]),
+					%{ok, F2} = file:open("f2", [write]),
+					%file:write(F1, Email),
+					%file:write(F2, Encoded),
+					%file:close(F1),
+					%file:close(F2),
+					?assertEqual(Email, Encoded)
+			end
+		}
+	].
+
 
 -endif.
 
