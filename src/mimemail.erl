@@ -91,33 +91,13 @@ decode_component(Headers, Body, Other) ->
 	% io:format("Unknown mime version ~s~n", [Other]),
 	error.
 
-
-%%% @doc - fix the casing on relevant headers to match RFC2045
-fix_headers(Headers) ->
-	F =
-	fun({Header, Value}) ->
-			NewHeader = case string:to_lower(Header) of
-				"mime-version" ->
-					"MIME-Version";
-				"content-type" ->
-					"Content-Type";
-				"content-disposition" ->
-					"Content-Disposition";
-				"content-transfer-encoding" ->
-					"Content-Transfer-Encoding";
-				Other ->
-					Header
-			end,
-			{NewHeader, Value}
-	end,
-	lists:map(F, Headers).
-
 get_header_value(Needle, Headers) ->
 	F =
 	fun({Header, _Value}) ->
 			string:to_lower(Header) =:= string:to_lower(Needle)
 	end,
 	case lists:filter(F, Headers) of
+		% TODO if there's duplicate headers, should we use the first or the last?
 		[{_Header, Value}|_T] ->
 			Value;
 		_ ->
@@ -209,7 +189,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, "\r\n" ++ Boundary, []),
 			Res = lists:filter(fun({Headers, Body}) -> length(Body) =/= 0 end, Parts),
-			lists:map(fun({Headers, Body}) -> decode_component(fix_headers(Headers), Body, MimeVsn) end, Res)
+			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, MimeVsn) end, Res)
 	end.
 
 split_body_by_boundary_([], _Boundary, Acc) ->
@@ -887,9 +867,24 @@ decode_quoted_printable_test_() ->
 
 roundtrip_test_() ->
 	[
-		{"roundtrip test",
+		{"roundtrip test for the gamut",
 			fun() ->
 					{ok, Bin} = file:read_file("testdata/the-gamut.eml"),
+					Email = binary_to_list(Bin),
+					Decoded = decode(Email),
+					Encoded = encode(Decoded),
+					%{ok, F1} = file:open("f1", [write]),
+					%{ok, F2} = file:open("f2", [write]),
+					%file:write(F1, Email),
+					%file:write(F2, Encoded),
+					%file:close(F1),
+					%file:close(F2),
+					?assertEqual(Email, Encoded)
+			end
+		},
+		{"round trip plain text only email",
+			fun() ->
+					{ok, Bin} = file:read_file("testdata/Plain-text-only.eml"),
 					Email = binary_to_list(Bin),
 					Decoded = decode(Email),
 					Encoded = encode(Decoded),

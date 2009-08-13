@@ -345,6 +345,12 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 							String = get_cram_string(State#state.hostname),
 							gen_tcp:send(Socket, "334 "++String++"\r\n"),
 							{ok, State#state{waitingauth = "CRAM-MD5", authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
+						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
+							%crypto:start(), % ensure crypto is started, we're gonna need it
+							%Nonce = get_digest_nonce(),
+							%Response = io_lib:format("nonce=\"~s\",realm=\"~s\",qop=\"auth\",algorithm=md5-sess,charset=utf-8", Nonce, State#state.hostname),
+							%gen_tcp:send(Socket, "334 "++Response++"\r\n"),
+							%{ok, State#state{waitingauth = "DIGEST-MD5", authdata=base64:decode_to_string(Nonce), envelope = Envelope#envelope{auth = {[], []}}}}
 					end
 			end
 	end;
@@ -638,6 +644,11 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 
 get_cram_string(Hostname) ->
 	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
+
+get_digest_nonce() ->
+	A = [io_lib:format("~2.16.0B", [X]) || X <- erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
+	B = [io_lib:format("~2.16.0B", [X]) || X <- erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
+	binary_to_list(base64:encode(A ++ B)).
 
 compute_cram_digest(Key, Data) ->
 	Bin = crypto:md5_mac(Key, Data),
