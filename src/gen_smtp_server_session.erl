@@ -84,12 +84,16 @@ behaviour_info(callbacks) ->
 behaviour_info(_Other) ->
 	undefined.
 
+% TODO - there should be an Options parameter instead of SessionCount (and possibly Hostname)
+-spec(start_link/4 :: (Socket :: port(), Module :: atom(), Hostname :: string(), SessionCount :: pos_integer()) -> {'ok', pid()}).
 start_link(Socket, Module, Hostname, SessionCount) ->
 	gen_server:start_link(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
+-spec(start/4 :: (Socket :: port(), Module :: atom(), Hostname :: string(), SessionCount :: pos_integer()) -> {'ok', pid()}).
 start(Socket, Module, Hostname, SessionCount) ->
 	gen_server:start(?MODULE, [Socket, Module, Hostname, SessionCount], []).
 
+-spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()} | 'ignore').
 init([Socket, Module, Hostname, SessionCount]) ->
 	{A1, A2, A3} = now(),
 	random:seed(A1, A2, A3),
@@ -118,8 +122,6 @@ handle_call(Request, _From, State) ->
 %% @hidden
 handle_cast(_Msg, State) ->
 	{noreply, State}.
-
-	
 
 handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
 	%io:format("done reading message~n"),
@@ -226,6 +228,7 @@ handle_info(_Info, State) ->
 	{noreply, State}.
 
 %% @hidden
+-spec(terminate/2 :: (Reason :: any(), State :: #state{}) -> 'ok').
 terminate(Reason, State) ->
 	% io:format("Session terminating due to ~p~n", [Reason]),
 	gen_tcp:close(State#state.socket),
@@ -235,6 +238,7 @@ terminate(Reason, State) ->
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
 
+-spec(parse_request/1 :: (Packet :: string()) -> {string(), list()}).
 parse_request(Packet) ->
 	Request = string:strip(string:strip(string:strip(string:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case string:str(Request, " ") of
@@ -558,6 +562,7 @@ handle_request({Verb, Args}, #state{socket = Socket, module = Module} = State) -
 	gen_tcp:send(Socket, Message++"\r\n"),
 	{ok, State#state{callbackstate = CallbackState}}.
 
+-spec(parse_encoded_address/1 :: (Address :: string()) -> {string(), string()} | 'error').
 parse_encoded_address([]) ->
 	error; % empty
 parse_encoded_address("<@" ++ Address) ->
@@ -574,6 +579,7 @@ parse_encoded_address(" " ++ Address) ->
 parse_encoded_address(Address) ->
 	parse_encoded_address(Address, "", {false, false}).
 
+-spec(parse_encoded_address/3 :: (Address :: string(), Acc :: string(), Flags :: {bool(), bool()}) -> {string(), string()}).
 parse_encoded_address([], Acc, {_Quotes, false}) ->
 	{lists:reverse(Acc), []};
 parse_encoded_address([], _Acc, {_Quotes, true}) ->
@@ -608,6 +614,7 @@ parse_encoded_address([_H | _Tail], _Acc, {false, _AB}) ->
 parse_encoded_address([H | Tail], Acc, Quotes) ->
 	parse_encoded_address(Tail, [H | Acc], Quotes).
 
+-spec(has_extension/2 :: (Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false').
 has_extension(Exts, Ext) ->
 	Extension = string:to_upper(Ext),
 	Extensions = lists:map(fun({X, Y}) -> {string:to_upper(X), Y} end, Exts),
@@ -619,9 +626,11 @@ has_extension(Exts, Ext) ->
 			{true, Value}
 	end.
 
+-spec(trim_crlf/1 :: (String :: string()) -> string()).
 trim_crlf(String) ->
 	string:strip(string:strip(String, right, $\n), right, $\r).
 
+-spec(try_auth/4 :: (AuthType :: 'login' | 'plain' | 'cram-md5', Username :: string(), Credential :: string() | {string(), string()}, State :: #state{}) -> {'ok', #state{}}).
 try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope} = State) ->
 	% clear out waiting auth
 	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
@@ -642,17 +651,18 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 			{ok, NewState}
 	end.
 
+-spec(get_cram_string/1 :: (Hostname :: string()) -> string()).
 get_cram_string(Hostname) ->
 	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
+%get_digest_nonce() ->
+	%A = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
+	%B = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
+	%binary_to_list(base64:encode(lists:flatten(A ++ B))).
 
-get_digest_nonce() ->
-	A = [io_lib:format("~2.16.0B", [X]) || X <- erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
-	B = [io_lib:format("~2.16.0B", [X]) || X <- erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
-	binary_to_list(base64:encode(A ++ B)).
-
+-spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> string()).
 compute_cram_digest(Key, Data) ->
 	Bin = crypto:md5_mac(Key, Data),
-	string:to_lower(lists:flatten([io_lib:format("~2.16.0B", [X]) || X <- binary_to_list(Bin)])).
+	lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->

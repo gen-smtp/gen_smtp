@@ -29,11 +29,13 @@
 
 -export([encode/1, decode/2, decode/1]).
 
+-spec(decode/1 :: (Email :: string()) -> {string(), string(), [{string(), string()}], [{string(), string()}], list()}).
 decode(All) ->
 	{Headers, Body} = parse_headers(All),
 	decode(Headers, Body).
 
-decode(Headers, Body) ->
+-spec(decode/2 :: (Headers :: [{string(), string()}], Body :: string()) -> {string(), string(), [{string(), string()}], [{string(), string()}], list()}).
+decode(Headers, Body) -> 
 	%FixedHeaders = fix_headers(Headers),
 	case parse_with_comments(get_header_value("MIME-Version", Headers)) of
 		undefined ->
@@ -42,6 +44,7 @@ decode(Headers, Body) ->
 			decode_component(Headers, Body, Other)
 	end.
 
+-spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
 encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
 	string:join(encode_headers(Headers), "\r\n") ++ "\r\n\r\n" ++ 
 	string:join(
@@ -83,14 +86,13 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= "1.0" ->
 			Type = "text",
 			SubType = "plain",
 			Parameters = [{"content-type-params", {"charset", "us-ascii"}}, {"disposition", Disposition}, {"disposition-params", DispositionParams}],
-			{Type, SubType, Headers, Parameters, Body};
-		error ->
-			error
+			{Type, SubType, Headers, Parameters, Body}
 	end;
 decode_component(Headers, Body, Other) ->
 	% io:format("Unknown mime version ~s~n", [Other]),
 	error.
 
+-spec(get_header_value/2 :: (Needle :: string(), Headers :: [{string(), string()}]) -> string() | 'undefined').
 get_header_value(Needle, Headers) ->
 	F =
 	fun({Header, _Value}) ->
@@ -104,11 +106,14 @@ get_header_value(Needle, Headers) ->
 			undefined
 	end.
 
+-spec(parse_with_comments/1 :: (Value :: string()) -> string() | 'error';
+	(Value :: atom()) -> atom()).
 parse_with_comments(Value) when is_list(Value) ->
 	parse_with_comments(Value, "", 0, false);
 parse_with_comments(Value) ->
 	Value.
 
+-spec(parse_with_comments/4 :: (Value :: string(), Acc :: string(), Depth :: non_neg_integer(), Quotes :: bool()) -> string() | 'error').
 parse_with_comments([], Acc, Depth, Quotes) when Depth > 0; Quotes ->
 	error;
 parse_with_comments([], Acc, Depth, _Quotes) ->
@@ -142,6 +147,8 @@ parse_with_comments([$" | T], Acc, Depth, false) -> %"
 parse_with_comments([H | Tail], Acc, Depth, Quotes) ->
 	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
+-spec(parse_content_type/1 :: (Value :: 'undefined') -> 'undefined';
+	(Value :: string()) -> {string(), string(), string()}).
 parse_content_type(undefined) ->
 	undefined;
 parse_content_type(String) ->
@@ -160,6 +167,8 @@ parse_content_type(String) ->
 				throw(bad_content_type)
 	end.
 
+-spec(parse_content_disposition/1 :: (Value :: 'undefined') -> 'undefined';
+	(String :: string()) -> {string(), string()}).
 parse_content_disposition(undefined) ->
 	undefined;
 parse_content_disposition(String) ->
@@ -205,6 +214,7 @@ split_body_by_boundary_(Body, Boundary, Acc) ->
 				[parse_headers(string:substr(TrimmedBody, 1, Index - 1)) | Acc])
 	end.
 
+-spec(parse_headers/1 :: (Body :: string()) -> {[{string(), string()}], string()}).
 parse_headers(Body) ->
 	case string:str(Body, "\r\n") of
 		0 ->
@@ -256,6 +266,7 @@ parse_headers(Body, Line, Headers) ->
 			end
 	end.
 
+-spec(decode_body/2 :: (Type :: string() | 'undefined', Body :: string()) -> string()).
 decode_body(undefined, Body) ->
 	Body;
 decode_body(Type, Body) ->
