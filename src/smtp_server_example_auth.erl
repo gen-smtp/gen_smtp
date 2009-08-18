@@ -23,7 +23,7 @@ handle_HELO(Hostname, State) ->
 
 handle_EHLO(Hostname, Extensions, State) ->
 	io:format("EHLO from ~s~n", [Hostname]),
-	MyExtensions = lists:append(Extensions, [{"AUTH", "PLAIN LOGIN CRAM-MD5"}]),
+	MyExtensions = lists:append(Extensions, [{"AUTH", "PLAIN LOGIN CRAM-MD5"}, {"STARTTLS", true}]),
 	{ok, MyExtensions, State}.
 
 handle_MAIL(From, State) ->
