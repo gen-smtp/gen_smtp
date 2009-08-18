@@ -1001,7 +1001,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1033,7 +1033,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1069,7 +1069,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1108,7 +1108,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1147,7 +1147,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1184,7 +1184,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1221,7 +1221,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1258,7 +1258,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1297,7 +1297,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1340,7 +1340,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1383,7 +1383,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1426,7 +1426,7 @@ smtp_session_auth_test_() ->
 												F(F, Acc);
 											{tcp, CSock, "250 AUTH"++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
-												Acc;
+												true;
 											{tcp, CSock, "250 "++Packet3} ->
 												inet:setopts(CSock, [{active, once}]),
 												Acc;
@@ -1453,5 +1453,239 @@ smtp_session_auth_test_() ->
 		]
 	}.
 
+smtp_session_tls_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				Self = self(),
+				spawn(fun() ->
+							{ok, ListenSock} = gen_tcp:listen(9876, [list, {packet, line}, {reuseaddr, true}, {keepalive, true}, {backlog, 30}, {active, false}]),
+							{ok, X} = gen_tcp:accept(ListenSock),
+							inet:setopts(X, [list, {packet, line}, {reuseaddr, true}, {keepalive, true}, {backlog, 30}, {active, false}]),
+							gen_tcp:controlling_process(X, Self),
+							Self ! X
+					end),
+				{ok, CSock} = gen_tcp:connect("localhost", 9876,  [list, {packet, line}, {active, false}]),
+				receive
+					SSock when is_port(SSock) ->
+						?debugFmt("Got server side of the socket ~p, client is ~p~n", [SSock, CSock])
+				end,
+				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example_auth, "localhost", 1),
+				gen_tcp:controlling_process(SSock, Pid),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+				gen_tcp:close(CSock)
+		end,
+		[fun({CSock, _Pid}) ->
+					{"EHLO response includes STARTTLS",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, true);
+											{tcp, CSock, "250-"++Packet3} ->
+												?debugFmt("XX~sXX", [Packet3]),
+												inet:setopts(CSock, [{active, once}]),
+												F(F, Acc);
+											{tcp, CSock, "250 STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												true;
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												Acc;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false))
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"STARTTLS does a SSL handshake",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, true);
+											{tcp, CSock, "250-"++Packet3} ->
+												?debugFmt("XX~sXX", [Packet3]),
+												inet:setopts(CSock, [{active, once}]),
+												F(F, Acc);
+											{tcp, CSock, "250 STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												true;
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												Acc;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								gen_tcp:send(CSock, "STARTTLS\r\n"),
+								receive {tcp, CSock, Packet4} -> ok end,
+								?assertMatch("220 "++_,  Packet4),
+								application:start(ssl),
+								Result = ssl:connect(CSock, [{ssl_impl, new}]),
+								?assertMatch({ok, Socket}, Result),
+								{ok, Socket} = Result
+								%ssl:setopts(Socket, [{active, once}]),
+								%ssl:send(Socket, "EHLO somehost.com\r\n"),
+								%receive {ssl, Socket, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
+								%?assertEqual("Foo", Packet5),
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"After STARTTLS, EHLO doesn't report STARTTLS",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, true);
+											{tcp, CSock, "250-"++Packet3} ->
+												?debugFmt("XX~sXX", [Packet3]),
+												inet:setopts(CSock, [{active, once}]),
+												F(F, Acc);
+											{tcp, CSock, "250 STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												true;
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												Acc;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								gen_tcp:send(CSock, "STARTTLS\r\n"),
+								receive {tcp, CSock, Packet4} -> ok end,
+								?assertMatch("220 "++_,  Packet4),
+								application:start(ssl),
+								Result = ssl:connect(CSock, [{ssl_impl, new}]),
+								?assertMatch({ok, Socket}, Result),
+								{ok, Socket} = Result,
+								ssl:setopts(Socket, [{active, once}]),
+								ssl:send(Socket, "EHLO somehost.com\r\n"),
+								receive {ssl, Socket, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet5),
+								Bar = fun(F, Acc) ->
+										receive
+											{ssl, Socket, "250-STARTTLS"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												F(F, true);
+											{ssl, Socket, "250-"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												F(F, Acc);
+											{ssl, Socket, "250 STARTTLS"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												true;
+											{ssl, Socket, "250 "++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												Acc;
+											R ->
+												ssl:setopts(Socket, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(false, Bar(Bar, false))
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"After STARTTLS, re-negotiating STARTTLS is an error",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, true);
+											{tcp, CSock, "250-"++Packet3} ->
+												?debugFmt("XX~sXX", [Packet3]),
+												inet:setopts(CSock, [{active, once}]),
+												F(F, Acc);
+											{tcp, CSock, "250 STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												true;
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												Acc;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								gen_tcp:send(CSock, "STARTTLS\r\n"),
+								receive {tcp, CSock, Packet4} -> ok end,
+								?assertMatch("220 "++_,  Packet4),
+								application:start(ssl),
+								Result = ssl:connect(CSock, [{ssl_impl, new}]),
+								?assertMatch({ok, Socket}, Result),
+								{ok, Socket} = Result,
+								ssl:setopts(Socket, [{active, once}]),
+								ssl:send(Socket, "EHLO somehost.com\r\n"),
+								receive {ssl, Socket, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet5),
+								Bar = fun(F, Acc) ->
+										receive
+											{ssl, Socket, "250-STARTTLS"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												F(F, true);
+											{ssl, Socket, "250-"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												F(F, Acc);
+											{ssl, Socket, "250 STARTTLS"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												true;
+											{ssl, Socket, "250 "++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												Acc;
+											R ->
+												ssl:setopts(Socket, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(false, Bar(Bar, false)),
+								ssl:send(Socket, "STARTTLS\r\n"),
+								receive {ssl, Socket, Packet6} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("500 "++_,  Packet6)
+						end
+					}
+			end
+		]
+	}.
 
 -endif.
