@@ -1015,6 +1015,18 @@ smtp_session_auth_test_() ->
 					}
 			end,
 			fun({CSock, _Pid}) ->
+					{"AUTH before EHLO is error",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "AUTH CRAZY\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("503 "++_,  Packet4)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
 					{"Unknown authentication type",
 						fun() ->
 								inet:setopts(CSock, [{active, once}]),
@@ -1682,6 +1694,42 @@ smtp_session_tls_test_() ->
 								ssl:send(Socket, "STARTTLS\r\n"),
 								receive {ssl, Socket, Packet6} -> ssl:setopts(Socket, [{active, once}]) end,
 								?assertMatch("500 "++_,  Packet6)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"After STARTTLS, re-negotiating STARTTLS is an error",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, true);
+											{tcp, CSock, "250-"++Packet3} ->
+												?debugFmt("XX~sXX", [Packet3]),
+												inet:setopts(CSock, [{active, once}]),
+												F(F, Acc);
+											{tcp, CSock, "250 STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												true;
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												Acc;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								gen_tcp:send(CSock, "STARTTLS foo\r\n"),
+								receive {tcp, CSock, Packet4} -> ok end,
+								?assertMatch("501 "++_,  Packet4)
 						end
 					}
 			end
