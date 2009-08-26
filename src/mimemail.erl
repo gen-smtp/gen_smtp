@@ -339,7 +339,9 @@ decode_quoted_printable_line([$\s | T], Acc) ->
 			lists:reverse(Acc);
 		false ->
 			decode_quoted_printable_line(T, [$\s | Acc])
-	end.
+	end;
+decode_quoted_printable_line(Line, Acc) ->
+	decode_quoted_printable_line([], [Line | Acc]).
 
 
 encode_headers(Headers) ->
