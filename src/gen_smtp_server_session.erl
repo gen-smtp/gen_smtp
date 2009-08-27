@@ -166,7 +166,7 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 	%io:format("Header candidate: ~p~n", [String]),
 	NewState = case String of % first, check for a leading space or tab
 		[H | _T] when H =:= $\s; H =:= $\t ->
-			% TODO - check for "invisible line"
+			% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
 			case Envelope#envelope.headers of
 				[] ->
 					% if the header list is empty, this means that this line can't be a continuation of a previous header

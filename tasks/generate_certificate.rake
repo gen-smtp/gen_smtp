@@ -43,5 +43,6 @@ file "server.crt" => ["server.key", "server.csr"] do
 	`openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt`
 end
 
+desc "Generate a self-signed SSL certificate for TLS support"
 task :generate_self_signed_certificate => ["server.crt"]
 
