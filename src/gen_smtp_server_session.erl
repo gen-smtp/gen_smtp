@@ -593,6 +593,7 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 			gen_tcp:send(Socket, "220 OK\r\n"),
 			crypto:start(),
 			application:start(ssl),
+			% TODO: certfile and keyfile should be at configurable locations
 			case ssl:ssl_accept(Socket, [{ssl_imp, new}, {depth, 0}, {certfile, "server.crt"}, {keyfile, "server.key"}], 5000) of
 				{ok, NewSocket} ->
 					io:format("SSL negotiation sucessful~n"),
