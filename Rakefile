@@ -1,5 +1,7 @@
 require 'rake/clean'
 
+Dir['tasks/**/*.rake'].each { |rake| load rake }
+
 def percent_to_color(per)
 	if ENV['COLORTERM'].to_s.downcase == 'yes' or ENV['TERM'] =~ /-color$/
 		if per >= 90.0
