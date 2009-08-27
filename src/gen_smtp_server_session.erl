@@ -1699,7 +1699,7 @@ smtp_session_tls_test_() ->
 					}
 			end,
 			fun({CSock, _Pid}) ->
-					{"After STARTTLS, re-negotiating STARTTLS is an error",
+					{"STARTTLS can't take any parameters",
 						fun() ->
 								inet:setopts(CSock, [{active, once}]),
 								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
