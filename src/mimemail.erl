@@ -332,17 +332,14 @@ decode_quoted_printable_line([H | T], Acc) when H >= $! andalso H =< $< ->
 	decode_quoted_printable_line(T, [H | Acc]);
 decode_quoted_printable_line([H | T], Acc) when H >= $> andalso H =< $~ ->
 	decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line([$\s | T], Acc) ->
+decode_quoted_printable_line([H | T], Acc) when H =:= $\s; H =:= $\t ->
 	% if the rest of the line is whitespace, truncate it
 	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
 		true ->
 			lists:reverse(Acc);
 		false ->
-			decode_quoted_printable_line(T, [$\s | Acc])
-	end;
-decode_quoted_printable_line(Line, Acc) ->
-	decode_quoted_printable_line([], [Line | Acc]).
-
+			decode_quoted_printable_line(T, [H | Acc])
+	end.
 
 encode_headers(Headers) ->
 	encode_headers(Headers, []).
@@ -704,7 +701,8 @@ parse_example_mails_test_() ->
 		},
 		{"Outlook 2007 with leading tabs in quoted-printable.",
 			fun() ->
-				Getmail("outlook-2007.eml")
+				Decoded = Getmail("outlook-2007.eml"),
+				?assertMatch({"multipart", "alternative", _, _, _}, Decoded)
 			end
 		},
 		{"The gamut",
@@ -852,9 +850,27 @@ decode_quoted_printable_test_() ->
 					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.", ""))
 			end
 		},
+		{"input with tabs",
+			fun() ->
+					?assertEqual("The\tquick brown fox jumped over\tthe lazy dog.", decode_quoted_printable_line("The\tquick brown fox jumped over\tthe lazy dog.", ""))
+			end
+		},
 		{"input with trailing spaces",
 			fun() ->
 					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       ", ""))
+			end
+		},
+		{"input with non-strippable trailing whitespace",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.        ", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       =20", "")),
+					?assertEqual("The quick brown fox jumped over the lazy dog.       \t", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.       =09", "")),
+					?assertEqual("The quick brown fox jumped over the lazy dog.\t \t \t \t ", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.\t \t \t =09=20", "")),
+					?assertEqual("The quick brown fox jumped over the lazy dog.\t \t \t \t ", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.\t \t \t =09=20\t                  \t", ""))
+			end
+		},
+		{"input with trailing tabs",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line("The quick brown fox jumped over the lazy dog.\t\t\t\t\t", ""))
 			end
 		},
 		{"soft new line",
