@@ -702,6 +702,11 @@ parse_example_mails_test_() ->
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))				
 			end
 		},
+		{"Outlook 2007 with leading tabs in quoted-printable.",
+			fun() ->
+				Getmail("outlook-2007.eml")
+			end
+		},
 		{"The gamut",
 			fun() ->
 				% multipart/alternative
