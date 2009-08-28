@@ -66,5 +66,5 @@ handle_AUTH('cram-md5', "username", {Digest, Seed}, State) ->
 handle_AUTH(_Type, _Username, _Password, _State) ->
 	error.
 
-handle_other(_Verb, _Args, State) ->
-	{"500 Error: command not recognized", State}.
+handle_other(Verb, _Args, State) ->
+	{lists:flatten(io_lib:format("500 Error: command not recognized : '~s'", [Verb])), State}.
