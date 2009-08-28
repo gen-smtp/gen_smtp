@@ -153,7 +153,7 @@ handle_info({_Proto, Socket, ".\r\n"}, #state{readmessage = true, envelope = Env
 			end
 	end;
 handle_info({_Proto, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
-	?debugFmt("Header terminator~n", []),
+	%io:format("Header terminator~n", []),
 	active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
@@ -163,7 +163,7 @@ handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope =
 		String ->
 			String
 	end,
-	?debugFmt("Header candidate: ~p~n", [String]),
+	%io:format("Header candidate: ~p~n", [String]),
 	NewState = case String of % first, check for a leading space or tab
 		[H | _T] when H =:= $\s; H =:= $\t ->
 			% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
@@ -543,7 +543,7 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 			{ok, State};
 		_Else ->
 			socket_send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
-			?debugFmt("switching to data read mode~n", []),
+			%io:format("switching to data read mode~n", []),
 			{ok, State#state{readheaders = true}}
 	end;
 handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
