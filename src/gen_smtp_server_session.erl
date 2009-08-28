@@ -64,6 +64,7 @@
 		readmessage = false :: bool(),
 		readheaders = false :: bool(),
 		tls = false :: bool(),
+		proto = tcp :: 'tcp' | 'ssl',
 		callbackstate :: any()
 	}
 ).
@@ -124,14 +125,14 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
+handle_info({Proto, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module, proto = Proto} = State) ->
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
 	Valid = case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
 			case length(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
-					gen_tcp:send(Socket, "552 Message too large\r\n"),
+					socket_send({Proto, Socket}, "552 Message too large\r\n"),
 					false;
 				false ->
 					true
@@ -143,27 +144,27 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 		true ->
 			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.headers, Envelope#envelope.data, State#state.callbackstate) of
 				{ok, Reference, CallbackState} ->
-					gen_tcp:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
-					inet:setopts(Socket, [{active, once}]),
+					socket_send({Proto, Socket}, io_lib:format("250 queued as ~s\r\n", [Reference])),
+					socket_setopts({Proto, Socket}, [{active, once}]),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT};
 				{error, Message, CallbackState} ->
-					gen_tcp:send(Socket, Message++"\r\n"),
-					inet:setopts(Socket, [{active, once}]),
+					socket_send(Socket, Message++"\r\n"),
+					socket_setopts({Proto, Socket}, [{active, once}]),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
 			end
 	end;
-handle_info({tcp, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
-	%io:format("Header terminator~n"),
-	inet:setopts(Socket, [{active, once}]),
+handle_info({Proto, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope, proto = Proto} = State) ->
+	?debugFmt("Header terminator~n", []),
+	socket_setopts({Proto, Socket}, [{active, once}]),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
-handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
+handle_info({Proto, Socket, Packet}, #state{readheaders = true, envelope = Envelope, proto = Proto} = State) ->
 	case Packet of
 		"." ++ String ->
 			String;
 		String ->
 			String
 	end,
-	%io:format("Header candidate: ~p~n", [String]),
+	?debugFmt("Header candidate: ~p~n", [String]),
 	NewState = case String of % first, check for a leading space or tab
 		[H | _T] when H =:= $\s; H =:= $\t ->
 			% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
@@ -197,9 +198,9 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 					end
 			end
 	end,
-	inet:setopts(Socket, [{active, once}]),
+	socket_setopts({Proto, Socket}, [{active, once}]),
 	{noreply, NewState, ?TIMEOUT};
-handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
+handle_info({Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope, proto = Proto} = State) ->
 	%io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
 	case Packet of
@@ -208,7 +209,7 @@ handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelop
 		String ->
 			String
 	end,
-	inet:setopts(Socket, [{active, once}]),
+	socket_setopts({Proto, Socket}, [{active, once}]),
 	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}}, ?TIMEOUT};
 handle_info({tcp, Socket, Packet}, State) ->
 	case handle_request(parse_request(Packet), State) of
@@ -555,7 +556,7 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 			{ok, State};
 		_Else ->
 			socket_send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
-			%io:format("switching to data read mode~n"),
+			?debugFmt("switching to data read mode~n", []),
 			{ok, State#state{readheaders = true}}
 	end;
 handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
@@ -599,7 +600,7 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 					io:format("SSL negotiation sucessful~n"),
 					{ok, State#state{socket = {ssl, NewSocket}, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
-							readheaders=false, tls=true}};
+							readheaders=false, tls=true, proto=ssl}};
 				{error, Reason} ->
 					io:format("SSL handshake failed : ~p~n", [Reason]),
 					socket_send(Socket, "454 TLS negotiation failed\r\n"),
@@ -724,8 +725,17 @@ compute_cram_digest(Key, Data) ->
 
 socket_send({ssl, Socket}, Message) ->
 	ssl:send(Socket, Message);
+socket_send({tcp, Socket}, Message) ->
+	gen_tcp:send(Socket, Message);
 socket_send(Socket, Message) ->
 	gen_tcp:send(Socket, Message).
+
+socket_setopts({ssl, Socket}, Options) ->
+	ssl:setopts(Socket, Options);
+socket_setopts({tcp, Socket}, Options) ->
+	inet:setopts(Socket, Options);
+socket_setopts(Socket, Options) ->
+	inet:setopts(Socket, Options).
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->
@@ -1798,22 +1808,46 @@ smtp_session_tls_test_() ->
 								application:start(ssl),
 								{ok, Socket} = ssl:connect(CSock, [{ssl_impl, new}]),
 								ssl:setopts(Socket, [{active, once}]),
+								ssl:send(Socket, "EHLO somehost.com\r\n"),
+								receive {ssl, Socket, PacketN} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250-localhost\r\n",  PacketN),
+								Bar = fun(F, Acc) ->
+										receive
+											{ssl, Socket, "250-STARTTLS"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												F(F, true);
+											{ssl, Socket, "250-"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												F(F, Acc);
+											{ssl, Socket, "250 STARTTLS"++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												true;
+											{ssl, Socket, "250 "++_} ->
+												ssl:setopts(Socket, [{active, once}]),
+												Acc;
+											R ->
+												ssl:setopts(Socket, [{active, once}]),
+												error
+										end
+								end,
+								?assertEqual(false, Bar(Bar, false)),
+
 								ssl:send(Socket, "MAIL FROM: <user@somehost.com>\r\n"),
-								receive {ssl, CSock, Packet3} -> ssl:setopts(Socket, [{active, once}]) end,
+								receive {ssl, Socket, Packet3} -> ssl:setopts(Socket, [{active, once}]) end,
 								?assertMatch("250 "++_,  Packet3),
 								ssl:send(Socket, "RCPT TO: <user@otherhost.com>\r\n"),
-								receive {ssl, CSock, Packet4} -> ssl:setopts(Socket, [{active, once}]) end,
+								receive {ssl, Socket, Packet4} -> ssl:setopts(Socket, [{active, once}]) end,
 								?assertMatch("250 "++_,  Packet4),
 								ssl:send(Socket, "DATA\r\n"),
-								receive {ssl, CSock, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
-								?assertMatch("250 "++_,  Packet5),
+								receive {ssl, Socket, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("354 "++_,  Packet5),
 								ssl:send(Socket, "Subject: tls message\r\n"),
 								ssl:send(Socket, "To: <user@otherhost>\r\n"),
 								ssl:send(Socket, "From: <user@somehost.com>\r\n"),
 								ssl:send(Socket, "\r\n"),
 								ssl:send(Socket, "message body"),
 								ssl:send(Socket, "\r\n.\r\n"),
-								receive {ssl, CSock, Packet6} -> ssl:setopts(Socket, [{active, once}]) end,
+								receive {ssl, Socket, Packet6} -> ssl:setopts(Socket, [{active, once}]) end,
 								?assertMatch("250 "++_, Packet6),
 								?debugFmt("Message send, received: ~p~n", [Packet6])
 						end
