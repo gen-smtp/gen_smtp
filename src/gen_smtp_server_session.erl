@@ -1733,6 +1733,59 @@ smtp_session_tls_test_() ->
 								?assertMatch("501 "++_,  Packet4)
 						end
 					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"After STARTTLS, message is received by server",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								ReadExtensions = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, true);
+											{tcp, CSock, "250-"++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												F(F, Acc);
+											{tcp, CSock, "250 STARTTLS"++_} ->
+												inet:setopts(CSock, [{active, once}]),
+												true;
+											{tcp, CSock, "250 "++Packet3} ->
+												inet:setopts(CSock, [{active, once}]),
+												Acc;
+											R ->
+												inet:setopts(CSock, [{active, once}]),
+												error
+										end
+								end,
+								ReadExtensions(ReadExtensions, false),
+								gen_tcp:send(CSock, "STARTTLS\r\n"),
+								receive {tcp, CSock, _} -> ok end,
+								application:start(ssl),
+								{ok, Socket} = ssl:connect(CSock, [{ssl_impl, new}]),
+								ssl:setopts(Socket, [{active, once}]),
+								ssl:send(Socket, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {ssl, CSock, Packet3} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250 "++_,  Packet3),
+								ssl:send(Socket, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {ssl, CSock, Packet4} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250 "++_,  Packet4),
+								ssl:send(Socket, "DATA\r\n"),
+								receive {ssl, CSock, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250 "++_,  Packet5),
+								ssl:send(Socket, "Subject: tls message\r\n"),
+								ssl:send(Socket, "To: <user@otherhost>\r\n"),
+								ssl:send(Socket, "From: <user@somehost.com>\r\n"),
+								ssl:send(Socket, "\r\n"),
+								ssl:send(Socket, "message body"),
+								ssl:send(Socket, "\r\n.\r\n"),
+								receive {ssl, CSock, Packet6} -> ssl:setopts(Socket, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet6),
+								?debugFmt("Message send, received: ~p~n", [Packet6])
+						end
+					}
 			end
 		]
 	}.
