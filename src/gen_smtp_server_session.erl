@@ -955,6 +955,36 @@ smtp_session_test_() ->
 								?assertMatch("502 Error: AUTH not implemented\r\n",  Packet4)
 						end
 					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet3),
+								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet4),
+								gen_tcp:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("354 "++_, Packet5),
+								gen_tcp:send(CSock, "Subject: tls message\r\n"),
+								gen_tcp:send(CSock, "To: <user@otherhost>\r\n"),
+								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
+								gen_tcp:send(CSock, "\r\n"),
+								gen_tcp:send(CSock, "message body"),
+								gen_tcp:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 queued as"++_, Packet6),
+								?debugFmt("Message send, received: ~p~n", [Packet6])
+						end
+					}
 			end
 		]
 	}.
