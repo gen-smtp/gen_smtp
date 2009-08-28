@@ -124,14 +124,14 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
+handle_info({_SocketType, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
 	Valid = case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
 			case length(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
-					gen_tcp:send(Socket, "552 Message too large\r\n"),
+					socket_send(Socket, "552 Message too large\r\n"),
 					false;
 				false ->
 					true
@@ -143,20 +143,20 @@ handle_info({tcp, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelo
 		true ->
 			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.headers, Envelope#envelope.data, State#state.callbackstate) of
 				{ok, Reference, CallbackState} ->
-					gen_tcp:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
-					inet:setopts(Socket, [{active, once}]),
+					socket_send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
+					active_once(Socket),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT};
 				{error, Message, CallbackState} ->
-					gen_tcp:send(Socket, Message++"\r\n"),
-					inet:setopts(Socket, [{active, once}]),
+					socket_send(Socket, Message++"\r\n"),
+					active_once(Socket),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
 			end
 	end;
-handle_info({tcp, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
+handle_info({_SocketType, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
 	%io:format("Header terminator~n"),
-	inet:setopts(Socket, [{active, once}]),
+	active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
-handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
+handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
 	case Packet of
 		"." ++ String ->
 			String;
@@ -197,9 +197,9 @@ handle_info({tcp, Socket, Packet}, #state{readheaders = true, envelope = Envelop
 					end
 			end
 	end,
-	inet:setopts(Socket, [{active, once}]),
+	active_once(Socket),
 	{noreply, NewState, ?TIMEOUT};
-handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
+handle_info({_SocketType, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
 	%io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
 	case Packet of
@@ -208,37 +208,29 @@ handle_info({tcp, Socket, Packet}, #state{readmessage = true, envelope = Envelop
 		String ->
 			String
 	end,
-	inet:setopts(Socket, [{active, once}]),
+	active_once(Socket),
 	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}}, ?TIMEOUT};
-handle_info({tcp, Socket, Packet}, State) ->
+handle_info({_SocketType, Socket, Packet}, State) ->
 	case handle_request(parse_request(Packet), State) of
 		{ok, NewState} ->
-			case NewState#state.socket of
-				{ssl, SSLSocket} ->
-					ssl:setopts(SSLSocket, [{active, once}]);
-				Socket ->
-					inet:setopts(Socket, [{active, once}])
-			end,
-			{noreply, NewState, ?TIMEOUT};
-		{stop, Reason, NewState} ->
-			{stop, Reason, NewState}
-	end;
-handle_info({ssl, Socket, Packet}, State) ->
-	case handle_request(parse_request(Packet), State) of
-		{ok, NewState} ->
-			ssl:setopts(Socket, [{active, once}]),
+			active_once(NewState#state.socket),
 			{noreply, NewState, ?TIMEOUT};
 		{stop, Reason, NewState} ->
 			{stop, Reason, NewState}
 	end;
 handle_info({tcp_closed, _Socket}, State) ->
-	%io:format("Connection closed~n"),
+	io:format("TCP Connection closed~n"),
+	{stop, normal, State};
+handle_info({ssl_closed, _Socket}, State) ->
+	io:format("SSL Connection closed~n"),
 	{stop, normal, State};
 handle_info(timeout, #state{socket = {ssl, Socket}} = State) ->
+	io:format("SSL timeout exceeded~n"),
 	ssl:send(Socket, "421 Error: timeout exceeded\r\n"),
 	ssl:close(Socket),
 	{stop, normal, State};
 handle_info(timeout, #state{socket = Socket} = State) ->
+	io:format("TCP timeout exceeded~n"),
 	gen_tcp:send(Socket, "421 Error: timeout exceeded\r\n"),
 	gen_tcp:close(Socket),
 	{stop, normal, State};
@@ -249,7 +241,7 @@ handle_info(Info, State) ->
 %% @hidden
 -spec(terminate/2 :: (Reason :: any(), State :: #state{}) -> 'ok').
 terminate(Reason, State) ->
-	% io:format("Session terminating due to ~p~n", [Reason]),
+	io:format("Session terminating due to ~p~n", [Reason]),
 	case State#state.socket of
 		{ssl, Socket} ->
 			ssl:close(Socket);
@@ -357,7 +349,7 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 				true ->
 					case string:to_upper(AuthType) of
 						"LOGIN" ->
-							% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
+							% socket_send(Socket, "334 " ++ base64:encode_to_string("Username:")),
 							socket_send(Socket, "334 VXNlcm5hbWU6\r\n"),
 							{ok, State#state{waitingauth = "LOGIN", envelope = Envelope#envelope{auth = {[], []}}}};
 						"PLAIN" when Parameters =/= false ->
@@ -383,7 +375,7 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 							%crypto:start(), % ensure crypto is started, we're gonna need it
 							%Nonce = get_digest_nonce(),
 							%Response = io_lib:format("nonce=\"~s\",realm=\"~s\",qop=\"auth\",algorithm=md5-sess,charset=utf-8", Nonce, State#state.hostname),
-							%gen_tcp:send(Socket, "334 "++Response++"\r\n"),
+							%socket_send(Socket, "334 "++Response++"\r\n"),
 							%{ok, State#state{waitingauth = "DIGEST-MD5", authdata=base64:decode_to_string(Nonce), envelope = Envelope#envelope{auth = {[], []}}}}
 					end
 			end
@@ -415,7 +407,7 @@ handle_request({Username64, []}, #state{socket = Socket, waitingauth = "PLAIN", 
 handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", envelope = #envelope{auth = {[],[]}}} = State) ->
 	Envelope = State#state.envelope,
 	Username = base64:decode_to_string(Username64),
-	% gen_tcp:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
+	% socket_send(Socket, "334 " ++ base64:encode_to_string("Password:")),
 	socket_send(Socket, "334 UGFzc3dvcmQ6\r\n"),
 	% store the provided username in envelope.auth
 	NewState = State#state{envelope = Envelope#envelope{auth = {Username, []}}},
@@ -722,10 +714,19 @@ compute_cram_digest(Key, Data) ->
 	Bin = crypto:md5_mac(Key, Data),
 	lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
+socket_send({sslsocket,_,_} = Socket, Message) ->
+	socket_send({ssl, Socket}, Message);
 socket_send({ssl, Socket}, Message) ->
 	ssl:send(Socket, Message);
 socket_send(Socket, Message) ->
 	gen_tcp:send(Socket, Message).
+
+active_once({sslsocket,_,_} = Socket) ->
+	active_once({ssl, Socket});
+active_once({ssl, Socket}) ->
+	ssl:setopts(Socket, [{active, once}]);
+active_once(Socket) ->
+	inet:setopts(Socket, [{active, once}]).
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->
@@ -1767,53 +1768,75 @@ smtp_session_tls_test_() ->
 			fun({CSock, _Pid}) ->
 					{"After STARTTLS, message is received by server",
 						fun() ->
-								inet:setopts(CSock, [{active, once}]),
-								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								active_once(CSock),
+								receive {tcp, CSock, Packet} -> active_once(CSock) end,
 								gen_tcp:send(CSock, "EHLO somehost.com\r\n"),
-								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								receive {tcp, CSock, Packet2} -> active_once(CSock) end,
 								ReadExtensions = fun(F, Acc) ->
 										receive
 											{tcp, CSock, "250-STARTTLS"++_} ->
-												inet:setopts(CSock, [{active, once}]),
+												active_once(CSock),
 												F(F, true);
 											{tcp, CSock, "250-"++Packet3} ->
-												inet:setopts(CSock, [{active, once}]),
+												active_once(CSock),
 												F(F, Acc);
 											{tcp, CSock, "250 STARTTLS"++_} ->
-												inet:setopts(CSock, [{active, once}]),
+												active_once(CSock),
 												true;
 											{tcp, CSock, "250 "++Packet3} ->
-												inet:setopts(CSock, [{active, once}]),
+												active_once(CSock),
 												Acc;
 											R ->
-												inet:setopts(CSock, [{active, once}]),
+												active_once(CSock),
 												error
 										end
 								end,
-								ReadExtensions(ReadExtensions, false),
+								?assertEqual(true, ReadExtensions(ReadExtensions, false)),
 								gen_tcp:send(CSock, "STARTTLS\r\n"),
 								receive {tcp, CSock, _} -> ok end,
 								application:start(ssl),
 								{ok, Socket} = ssl:connect(CSock, [{ssl_impl, new}]),
-								ssl:setopts(Socket, [{active, once}]),
+								active_once(Socket),
+								ssl:send(Socket, "EHLO somehost.com\r\n"),
+								ReadSSLExtensions = fun(F, Acc) ->
+										receive
+											{ssl, Socket, "250-STARTTLS"++_} ->
+												active_once(Socket),
+												F(F, true);
+											{ssl, Socket, "250-"++_} ->
+												active_once(Socket),
+												F(F, Acc);
+											{ssl, Socket, "250 STARTTLS"++_} ->
+												active_once(Socket),
+												true;
+											{ssl, Socket, "250 "++_} ->
+												active_once(Socket),
+												Acc;
+											R ->
+												?debugFmt("ReadSSLExtensions error: ~p~n", [R]),
+												active_once(Socket),
+												error
+										end
+								end,
+								active_once(Socket),
+								ReadSSLExtensions(ReadSSLExtensions, false),
 								ssl:send(Socket, "MAIL FROM: <user@somehost.com>\r\n"),
-								receive {ssl, CSock, Packet3} -> ssl:setopts(Socket, [{active, once}]) end,
-								?assertMatch("250 "++_,  Packet3),
+								receive {ssl, Socket, Packet4} -> active_once(Socket) end,
+								?assertMatch("250 "++_, Packet4),
 								ssl:send(Socket, "RCPT TO: <user@otherhost.com>\r\n"),
-								receive {ssl, CSock, Packet4} -> ssl:setopts(Socket, [{active, once}]) end,
-								?assertMatch("250 "++_,  Packet4),
-								ssl:send(Socket, "DATA\r\n"),
-								receive {ssl, CSock, Packet5} -> ssl:setopts(Socket, [{active, once}]) end,
+								receive {ssl, Socket, Packet5} -> active_once(Socket) end,
 								?assertMatch("250 "++_,  Packet5),
+								ssl:send(Socket, "DATA\r\n"),
+								receive {ssl, Socket, Packet6} -> active_once(Socket) end,
+								?assertMatch("354 "++_, Packet6),
 								ssl:send(Socket, "Subject: tls message\r\n"),
 								ssl:send(Socket, "To: <user@otherhost>\r\n"),
 								ssl:send(Socket, "From: <user@somehost.com>\r\n"),
 								ssl:send(Socket, "\r\n"),
 								ssl:send(Socket, "message body"),
 								ssl:send(Socket, "\r\n.\r\n"),
-								receive {ssl, CSock, Packet6} -> ssl:setopts(Socket, [{active, once}]) end,
-								?assertMatch("250 "++_, Packet6),
-								?debugFmt("Message send, received: ~p~n", [Packet6])
+								receive {ssl, Socket, Packet7} -> active_once(Socket) end,
+								?assertMatch("250 "++_, Packet7)
 						end
 					}
 			end
