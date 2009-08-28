@@ -240,7 +240,7 @@ terminate(Reason, State) ->
 	% io:format("Session terminating due to ~p~n", [Reason]),
 	case State#state.socket of
 		{ssl, Socket} ->
-			ssl:close(Socket);
+			ssl:shutdown(Socket, write);
 		Socket ->
 			gen_tcp:close(Socket)
 	end,
