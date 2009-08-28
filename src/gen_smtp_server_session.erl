@@ -219,18 +219,14 @@ handle_info({_SocketType, Socket, Packet}, State) ->
 			{stop, Reason, NewState}
 	end;
 handle_info({tcp_closed, _Socket}, State) ->
-	io:format("TCP Connection closed~n"),
 	{stop, normal, State};
 handle_info({ssl_closed, _Socket}, State) ->
-	io:format("SSL Connection closed~n"),
 	{stop, normal, State};
 handle_info(timeout, #state{socket = {ssl, Socket}} = State) ->
-	io:format("SSL timeout exceeded~n"),
 	ssl:send(Socket, "421 Error: timeout exceeded\r\n"),
 	ssl:close(Socket),
 	{stop, normal, State};
 handle_info(timeout, #state{socket = Socket} = State) ->
-	io:format("TCP timeout exceeded~n"),
 	gen_tcp:send(Socket, "421 Error: timeout exceeded\r\n"),
 	gen_tcp:close(Socket),
 	{stop, normal, State};
@@ -241,7 +237,7 @@ handle_info(Info, State) ->
 %% @hidden
 -spec(terminate/2 :: (Reason :: any(), State :: #state{}) -> 'ok').
 terminate(Reason, State) ->
-	io:format("Session terminating due to ~p~n", [Reason]),
+	% io:format("Session terminating due to ~p~n", [Reason]),
 	case State#state.socket of
 		{ssl, Socket} ->
 			ssl:close(Socket);
