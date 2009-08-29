@@ -19,18 +19,34 @@
 %%% OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 %%% WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-%% @doc Facilitates transparent tcp/ssl socket handling
-
+%% @doc Facilitates transparent gen_tcp/ssl socket handling
+-module(socket).
 
 %% API
--export().
+-export([connect/3, connect/4, connect/5]).
+-export([listen/2, accept/3]).
+-export([send/2, recv/2, recv/3]).
+-export([controlling_process/2]).
+-export([close/1, shutdown/2]).
+-export([type/1]).
 
 %%%-----------------------------------------------------------------
 %%% API
 %%%-----------------------------------------------------------------
-
-
+connect(Protocol, Address, Port) -> 
+	connect(Protocol, Address, Port, [], infinity).
+connect(Protocol, Address, Port, Opts) -> 
+	connect(Protocol, Address, Port, Opts, infinity).
+connect(Protocol, Address, Port, Opts, Time) ->
+	apply(mod(Protocol), connect, [Address, Port, Opts, Time]).
+	
 %%%-----------------------------------------------------------------
 %%% Internal functions (OS_Mon configuration)
 %%%-----------------------------------------------------------------
 
+mod({sslsocket,_,_}) -> % an ssl application socket
+	ssl;
+mod(ssl) ->
+	ssl;
+mod(_) ->
+	gen_tcp.
