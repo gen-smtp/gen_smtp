@@ -222,7 +222,7 @@ handle_info({tcp_closed, _Socket}, State) ->
 	{stop, normal, State};
 handle_info({ssl_closed, _Socket}, State) ->
 	{stop, normal, State};
-handle_info(timeout, #state{socket = {ssl, Socket}} = State) ->
+handle_info(timeout, #state{socket = Socket} = State) when element(1, Socket) =:= sslsocket ->
 	ssl:send(Socket, "421 Error: timeout exceeded\r\n"),
 	ssl:close(Socket),
 	{stop, normal, State};
@@ -239,7 +239,7 @@ handle_info(Info, State) ->
 terminate(Reason, State) ->
 	% io:format("Session terminating due to ~p~n", [Reason]),
 	case State#state.socket of
-		{ssl, Socket} ->
+		{sslsocket, _} = Socket ->
 			ssl:shutdown(Socket, write);
 		Socket ->
 			gen_tcp:close(Socket)
@@ -585,7 +585,7 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 			case ssl:ssl_accept(Socket, [{ssl_imp, new}, {depth, 0}, {certfile, "server.crt"}, {keyfile, "server.key"}], 5000) of
 				{ok, NewSocket} ->
 					io:format("SSL negotiation sucessful~n"),
-					{ok, State#state{socket = {ssl, NewSocket}, envelope=undefined,
+					{ok, State#state{socket = NewSocket, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							readheaders=false, tls=true}};
 				{error, Reason} ->
@@ -711,17 +711,11 @@ compute_cram_digest(Key, Data) ->
 	lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 socket_send({sslsocket,_,_} = Socket, Message) ->
-	socket_send({ssl, Socket}, Message);
-socket_send({ssl, Socket}, Message) ->
 	ssl:send(Socket, Message);
-socket_send({tcp, Socket}, Message) ->
-	gen_tcp:send(Socket, Message);
 socket_send(Socket, Message) ->
 	gen_tcp:send(Socket, Message).
 
 active_once({sslsocket,_,_} = Socket) ->
-	active_once({ssl, Socket});
-active_once({ssl, Socket}) ->
 	ssl:setopts(Socket, [{active, once}]);
 active_once(Socket) ->
 	inet:setopts(Socket, [{active, once}]).
