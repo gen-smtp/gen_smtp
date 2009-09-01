@@ -66,6 +66,22 @@ mod(_) ->
 -define(TCP_CONNECT_OPTIONS,[list,
                             {packet, line},
                             {active, false}]).
+-define(SSL_LISTEN_OPTIONS, [list,
+                            {packet, line},
+                            {reuseaddr, true},
+                            {keepalive, true},
+                            {backlog, 30},
+                            {ssl_imp, new},
+                            {depth, 0},
+                            {certfile, "server.crt"},
+                            {keyfile, "server.key"},
+                            {active, false}]).
+-define(SSL_CONNECT_OPTIONS,[list,
+                            {packet, line},
+                            {depth, 0},
+                            {certfile, "server.crt"},
+                            {keyfile, "server.key"},
+                            {active, false}]).
 connect_test() ->
 	[
 		{"connecting via tcp",
@@ -80,6 +96,21 @@ connect_test() ->
 			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT,  ?TCP_CONNECT_OPTIONS),
 			?assert(is_port(ClientSocket)),
 			gen_tcp:close(ClientSocket)
+		end
+		},
+		{"connecting via ssl",
+		fun() ->
+			Self = self(),
+			spawn(fun() ->
+						{ok, ListenSock} = ssl:listen(?TEST_PORT, ?SSL_LISTEN_OPTIONS),
+						{ok, ServerSocket} = ssl:transport_accept(ListenSock),
+						ssl:ssl_accept(ServerSocket),
+						inet:setopts(ServerSocket, ?TCP_LISTEN_OPTIONS),
+						gen_tcp:controlling_process(ServerSocket, Self)
+				end),
+			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT,  ?SSL_CONNECT_OPTIONS),
+			?assertMatch([sslsocket|_], tuple_to_list(ClientSocket)),
+			ssl:close(ClientSocket)
 		end
 		}
 	].
