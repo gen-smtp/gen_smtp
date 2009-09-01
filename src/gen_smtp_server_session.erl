@@ -240,7 +240,7 @@ terminate(Reason, State) ->
 	% io:format("Session terminating due to ~p~n", [Reason]),
 	case State#state.socket of
 		{ssl, Socket} ->
-			ssl:shutdown(Socket, write);
+			ssl:close(Socket);
 		Socket ->
 			gen_tcp:close(Socket)
 	end,
@@ -582,7 +582,7 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 			crypto:start(),
 			application:start(ssl),
 			% TODO: certfile and keyfile should be at configurable locations
-			case ssl:ssl_accept(Socket, [{ssl_imp, new}, {depth, 0}, {certfile, "server.crt"}, {keyfile, "server.key"}], 5000) of
+			case ssl:ssl_accept(Socket, [{ssl_imp, new}, {reuse_sessions, false}, {depth, 0}, {certfile, "server.crt"}, {keyfile, "server.key"}], 5000) of
 				{ok, NewSocket} ->
 					io:format("SSL negotiation sucessful~n"),
 					{ok, State#state{socket = {ssl, NewSocket}, envelope=undefined,
