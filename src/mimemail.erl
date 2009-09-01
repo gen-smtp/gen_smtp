@@ -438,7 +438,6 @@ wrap_to_76(String, Lines) ->
 	).
 
 encode_quoted_printable(Body) ->
-	?debugFmt("input: ~p~n", [Body]),
 	[encode_quoted_printable(Body, [], 0)].
 
 encode_quoted_printable(Body, Acc, L) when L >= 75 ->
