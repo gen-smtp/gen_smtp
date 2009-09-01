@@ -22,13 +22,17 @@
 %% @doc Facilitates transparent gen_tcp/ssl socket handling
 -module(socket).
 
+-ifdef(EUNIT).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 %% API
 -export([connect/3, connect/4, connect/5]).
--export([listen/2, accept/3]).
--export([send/2, recv/2, recv/3]).
--export([controlling_process/2]).
--export([close/1, shutdown/2]).
--export([type/1]).
+% -export([listen/2, accept/3]).
+% -export([send/2, recv/2, recv/3]).
+% -export([controlling_process/2]).
+% -export([close/1, shutdown/2]).
+% -export([type/1]).
 
 %%%-----------------------------------------------------------------
 %%% API
@@ -50,3 +54,34 @@ mod(ssl) ->
 	ssl;
 mod(_) ->
 	gen_tcp.
+
+-ifdef(EUNIT).
+-define(TEST_PORT, 7586).
+-define(TCP_LISTEN_OPTIONS, [list,
+                            {packet, line},
+                            {reuseaddr, true},
+                            {keepalive, true},
+                            {backlog, 30},
+                            {active, false}]).
+-define(TCP_CONNECT_OPTIONS,[list,
+                            {packet, line},
+                            {active, false}]).
+connect_test() ->
+	[
+		{"connecting via tcp",
+		fun() ->
+			Self = self(),
+			spawn(fun() ->
+						{ok, ListenSock} = gen_tcp:listen(?TEST_PORT, ?TCP_LISTEN_OPTIONS),
+						{ok, ServerSocket} = gen_tcp:accept(ListenSock),
+						inet:setopts(ServerSocket, ?TCP_LISTEN_OPTIONS),
+						gen_tcp:controlling_process(ServerSocket, Self)
+				end),
+			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT,  ?TCP_CONNECT_OPTIONS),
+			?assert(is_port(ClientSocket)),
+			gen_tcp:close(ClientSocket)
+		end
+		}
+	].
+
+-endif.
