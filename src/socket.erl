@@ -85,13 +85,6 @@ listen(tcp, Port, Options) ->
 %%% Internal functions (OS_Mon configuration)
 %%%-----------------------------------------------------------------
 
-mod({sslsocket,_,_}) -> % an ssl application socket
-	ssl;
-mod(ssl) ->
-	ssl;
-mod(_) ->
-	gen_tcp.
-
 tcp_listen_options([list|Options]) ->
 	tcp_listen_options(Options);
 tcp_listen_options(Options) ->
