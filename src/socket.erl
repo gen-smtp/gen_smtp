@@ -125,7 +125,7 @@ shutdown(Socket, How) ->
 
 type(Socket) when is_port(Socket) ->
 	tcp;
-type(Socket) ->
+type(_Socket) ->
 	ssl.
 
 %%%-----------------------------------------------------------------
@@ -223,6 +223,24 @@ accept_test_() ->
 			spawn(fun()->ssl:connect("localhost", ?TEST_PORT, ssl_connect_options([])) end),
 			accept(ListenSocket),
 			ssl:close(ListenSocket)
+		end
+		}
+	].
+
+type_test_() ->
+	[
+		{"a tcp socket returns 'tcp'",
+		fun() ->
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+			?assertMatch(tcp, type(ListenSocket)),
+			close(ListenSocket)
+		end
+		},
+		{"an ssl socket returns 'ssl'",
+		fun() ->
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
+			?assertMatch(ssl, type(ListenSocket)),
+			close(ListenSocket)
 		end
 		}
 	].
