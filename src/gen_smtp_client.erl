@@ -46,9 +46,37 @@ send_it(Email, Options, Parent, Ref) ->
 			Parent ! {failed, Ref};
 		{ok, Socket, Host, Banner} ->
 			io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
+			{ok, Extensions} = try_EHLO(Socket, Options),
+			io:format("Extensions are ~p~n", [Extensions]),
+				%{ok, Extensions} ->
+					
 			ok
 	end,
 	ok.
+
+try_EHLO(Socket, Options) ->
+	case gen_tcp:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n") of
+		ok ->
+			Reply = read_multiline_reply(Socket, "250", []),
+			[_ | Reply2] = re:split(Reply, "\r\n", [{return, list}, trim]),
+			%io:format("~p~n", [Reply2]),
+			Extensions = lists:map(fun(Entry) ->
+						Body = string:substr(Entry, 5),
+						case re:split(Body, " ", [{return, list}, trim,
+									{parts, 2}]) of
+							[Verb, Parameters] ->
+								{string:to_upper(Verb), Parameters};
+							[Body] ->
+								case string:str(Body, "=") of
+									0 ->
+										{string:to_upper(Body), true};
+									_ ->
+										[]
+								end
+						end
+				end, Reply2),
+			{ok, Extensions}
+		end.
 
 %% try connecting to all returned MX records until
 %% success
