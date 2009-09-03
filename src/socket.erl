@@ -176,8 +176,7 @@ connect_test_() ->
 				ListenSocket when is_port(ListenSocket) -> ok
 			end,
 			?assert(is_port(ClientSocket)),
-			gen_tcp:close(ClientSocket),
-			gen_tcp:close(ListenSocket)
+			close(ListenSocket)
 		end
 		},
 		{"listen and connect via ssl",
@@ -197,8 +196,7 @@ connect_test_() ->
 			end,
 			io:format("ClientSocket: ~p~n", [ClientSocket]),
 			?assertMatch([sslsocket|_], tuple_to_list(ClientSocket)),
-			ssl:close(ClientSocket),
-			ssl:close(ListenSocket)
+			close(ListenSocket)
 		end
 		}
 	].
