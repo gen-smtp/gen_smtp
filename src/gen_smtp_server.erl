@@ -77,21 +77,18 @@ stop(Pid) ->
 
 %% @hidden
 init([Module, Options]) ->
-	FQDN = guess_FQDN(),
-	%NewOptions = lists:umerge(fun({X1,_Y1}, {X2,_Y2}) -> X1 < X2 end, lists:sort(Options), lists:sort([{domain, FQDN}, {address, IP}, {port, ?PORT}])),
-	NewOptions = lists:ukeymerge(1, lists:sort(Options), lists:sort([{domain, FQDN}, {address, {0,0,0,0}}, {port, ?PORT}])),
+	DefaultOptions = [{domain, guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}],
+	NewOptions = lists:ukeymerge(1, lists:sort(Options), lists:sort(DefaultOptions)),
 	io:format("Options: ~p~n", [NewOptions]),
 	io:format("~p starting at ~p~n", [?MODULE, node()]),
 	process_flag(trap_exit, true),
-	Opts = [list, {packet, line}, {reuseaddr, true},
-		{keepalive, true}, {backlog, 30}, {active, false}, {ip, proplists:get_value(address, NewOptions)}],
-	case gen_tcp:listen(proplists:get_value(port, NewOptions), Opts) of
+	case socket:listen(proplists:get_value(protocol, NewOptions), proplists:get_value(port, NewOptions), [{ip, proplists:get_value(address, NewOptions)}]) of
 		{ok, Listen_socket} ->
 			%%Create first accepting process
 			{ok, Ref} = prim_inet:async_accept(Listen_socket, -1),
 			{ok, #state{listener = Listen_socket, acceptor = Ref, module = Module, hostname = proplists:get_value(domain, NewOptions)}};
 		{error, Reason} ->
-			io:format("Could not start gen_tcp:  ~p~n", [Reason]),
+			io:format("Could not listen on socket because:  ~p~n", [Reason]),
 			{stop, Reason}
 	end.
 
