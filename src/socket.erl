@@ -151,9 +151,20 @@ ssl_connect_options(Options) ->
 	[list|proplist_merge(Options, ?SSL_CONNECT_OPTIONS)].
 
 proplist_merge(PrimaryList, DefaultList) ->
-	lists:ukeymerge(1,
+	Merged = lists:ukeymerge(1,
 		lists:keysort(1, PrimaryList),
 		lists:keysort(1, DefaultList)
+	),
+	%% remove all the values that don't belong here
+	lists:filter(
+		fun(Option) ->
+			case Option of
+				{Key,_} ->
+					proplists:is_defined(Key, DefaultList);
+				_ -> false
+			end
+		end,
+		Merged
 	).
 
 
@@ -249,6 +260,11 @@ type_test_() ->
 
 option_test_() ->
 	[
+		{"options removes bogus values",
+		fun() ->
+			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([{notvalid,whatever}]))
+		end
+		},
 		{"tcp_listen_options has defaults",
 		fun() ->
 			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([]))
