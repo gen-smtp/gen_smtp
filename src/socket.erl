@@ -57,7 +57,7 @@
 -export([send/2, recv/2, recv/3]).
 -export([controlling_process/2]).
 -export([close/1, shutdown/2]).
-% -export([type/1]).
+-export([type/1]).
 
 %%%-----------------------------------------------------------------
 %%% API
@@ -122,6 +122,11 @@ shutdown(Socket, How) when is_port(Socket) ->
 	gen_tcp:shutdown(Socket, How);
 shutdown(Socket, How) ->
 	ssl:shutdown(Socket, How).
+
+type(Socket) when is_port(Socket) ->
+	tcp;
+type(Socket) ->
+	ssl.
 
 %%%-----------------------------------------------------------------
 %%% Internal functions (OS_Mon configuration)
