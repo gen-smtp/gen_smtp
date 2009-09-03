@@ -54,7 +54,7 @@
 %% API
 -export([connect/3, connect/4, connect/5]).
 -export([listen/2, accept/2]).
-% -export([send/2, recv/2, recv/3]).
+-export([send/2, recv/2, recv/3]).
 % -export([controlling_process/2]).
 % -export([close/1, shutdown/2]).
 % -export([type/1]).
@@ -96,6 +96,18 @@ accept(Socket, Timeout) ->
 			ssl:ssl_accept(TransportSocket);
 		Error -> Error
 	end.
+
+send(Socket, Data) when is_port(Socket) ->
+	gen_tcp:send(Socket, Data);
+send(Socket, Data) ->
+	ssl:send(Socket, Data).
+
+recv(Socket, Length) ->
+	recv(Socket, Length, infinity).
+recv(Socket, Length, Timeout) when is_port(Socket) ->
+	gen_tcp:recv(Socket, Length, Timeout);
+recv(Socket, Data, Timeout) ->
+	ssl:recv(Socket, Data, Timeout).
 
 %%%-----------------------------------------------------------------
 %%% Internal functions (OS_Mon configuration)
