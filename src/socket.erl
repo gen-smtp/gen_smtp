@@ -33,6 +33,7 @@
 -define(SSL_LISTEN_OPTIONS, [ {packet, line},
                               {reuseaddr, true},
                               {keepalive, true},
+                              {reuse_sessions, false},
                               {backlog, 30},
                               {ssl_imp, new},
                               {depth, 0},
@@ -52,8 +53,7 @@
 
 %% API
 -export([connect/3, connect/4, connect/5]).
--export([listen/2]).
-% -export([accept/3]).
+-export([listen/2, accept/2]).
 % -export([send/2, recv/2, recv/3]).
 % -export([controlling_process/2]).
 % -export([close/1, shutdown/2]).
@@ -69,9 +69,7 @@ connect(Protocol, Address, Port, Opts) ->
 connect(tcp, Address, Port, Opts, Time) ->
 	gen_tcp:connect(Address, Port, tcp_connect_options(Opts), Time);
 connect(ssl, Address, Port, Opts, Time) ->
-	Ret = ssl:connect(Address, Port, ssl_connect_options(Opts), Time),
-	io:format("connecting: ~p~n", [Ret]),
-	Ret.
+	ssl:connect(Address, Port, ssl_connect_options(Opts), Time).
 	
 
 listen(Protocol, Port) ->
@@ -80,6 +78,24 @@ listen(ssl, Port, Options) ->
 	ssl:listen(Port, ssl_listen_options(Options));
 listen(tcp, Port, Options) ->
 	gen_tcp:listen(Port, tcp_listen_options(Options)).
+
+accept(Socket) ->
+	accept(Socket, infinity).
+accept(Socket, Timeout) when is_port(Socket) ->
+	io:format("Socket: ~p~n", [Socket]),
+	case gen_tcp:accept(Socket, Timeout) of
+		{ok, NewSocket} ->
+			{ok, Opts} = inet:getopts(Socket, [active,keepalive,packet,reuseaddr]),
+			inet:setopts(NewSocket, [list|Opts]),
+			{ok, NewSocket};
+		Error -> Error
+	end;
+accept(Socket, Timeout) ->
+	case ssl:transport_accept(Socket, Timeout) of
+		{ok, TransportSocket} ->
+			ssl:ssl_accept(TransportSocket);
+		Error -> Error
+	end.
 
 %%%-----------------------------------------------------------------
 %%% Internal functions (OS_Mon configuration)
@@ -108,7 +124,6 @@ proplist_merge(PrimaryList, DefaultList) ->
 		lists:keysort(1, PrimaryList),
 		lists:keysort(1, DefaultList)
 	).
-	
 
 
 -ifdef(EUNIT).
@@ -121,8 +136,7 @@ connect_test_() ->
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
 						?assert(is_port(ListenSocket)),
-						{ok, ServerSocket} = gen_tcp:accept(ListenSocket),
-						inet:setopts(ServerSocket, tcp_listen_options([])),
+						{ok, ServerSocket} = accept(ListenSocket),
 						gen_tcp:controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
@@ -143,8 +157,7 @@ connect_test_() ->
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
 						?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
-						{ok, ServerSocket} = ssl:transport_accept(ListenSocket),
-						ssl:ssl_accept(ServerSocket),
+						accept(ListenSocket),
 						Self ! ListenSocket
 				end),
 			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT,  []),
@@ -159,4 +172,27 @@ connect_test_() ->
 		}
 	].
 
+accept_test_() ->
+	[
+		{"Accept via tcp",
+		fun() ->
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+			?assert(is_port(ListenSocket)),
+			spawn(fun()-> gen_tcp:connect("localhost", ?TEST_PORT, tcp_connect_options([])) end),
+			{ok, ServerSocket} = gen_tcp:accept(ListenSocket),
+			?assert(is_port(ListenSocket)),
+ 			gen_tcp:close(ServerSocket),
+			gen_tcp:close(ListenSocket)
+		end
+		},
+		{"Accept via ssl",
+		fun() ->
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
+			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
+			spawn(fun()->ssl:connect("localhost", ?TEST_PORT, ssl_connect_options([])) end),
+			accept(ListenSocket),
+			ssl:close(ListenSocket)
+		end
+		}
+	].
 -endif.
