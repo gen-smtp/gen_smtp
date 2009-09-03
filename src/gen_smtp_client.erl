@@ -50,27 +50,56 @@ send(Email, Options) ->
 send_it(Email, Options, Parent, Ref) ->
 	RelayDomain = proplists:get_value(relay, Options),
 	MXRecords = mxlookup(RelayDomain),
-	case connect(MXRecords, Options) of
+	%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
+	Hosts = case MXRecords of
+		[] ->
+			[{0, RelayDomain}]; % maybe we're supposed to relay to a host directly
+		_ ->
+			MXRecords
+	end,
+	case connect(Hosts, Options) of
 		failed ->
-			Parent ! {failed, Ref};
+			Parent ! {failed, no_connection, Ref};
 		{ok, Socket, Host, Banner} ->
 			io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
 			{ok, Extensions} = try_EHLO(Socket, Options),
 			io:format("Extensions are ~p~n", [Extensions]),
-			case {proplists:get_value(tls, Options),
+			{Extensions2, Socket2} = case {proplists:get_value(tls, Options),
 					proplists:get_value("STARTTLS", Extensions)} of
-				{Atom, true} when Atom =:= always; Atom =:= if_available ->
+				{Atom, true} when Atom =:= always ->
 					io:format("Starting TLS~n"),
-					try_STARTTLS(Socket);
+					case try_STARTTLS(Socket, Options) of
+						false ->
+							io:format("TLS failed~n"),
+							Parent ! {failed, no_ssl, Ref},
+							erlang:exit(no_ssl);
+						{E, S} ->
+							io:format("TLS started~n"),
+							{E, S}
+					end;
+				{Atom, true} when Atom =:= if_available ->
+					io:format("Starting TLS~n"),
+					case try_STARTTLS(Socket, Options) of
+						false ->
+							io:format("TLS failed~n"),
+							{Extensions, Socket};
+						{E, S} ->
+							io:format("TLS started~n"),
+							{E, S}
+					end;
+				{always, _} ->
+					Parent ! {failed, no_ssl, Ref},
+					erlang:exit(no_ssl);
 				_ ->
-					Socket
+					{Extensions, Socket}
 			end,
+			io:format("Extensions are ~p~n", [Extensions]),
 			ok
 	end,
 	ok.
 
 try_EHLO(Socket, Options) ->
-	case gen_tcp:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n") of
+	case socket:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n") of
 		ok ->
 			Reply = read_multiline_reply(Socket, "250", []),
 			[_ | Reply2] = re:split(Reply, "\r\n", [{return, list}, trim]),
@@ -94,8 +123,25 @@ try_EHLO(Socket, Options) ->
 		end.
 
 %% attempt to upgrade socket to TLS
-try_STARTTLS(Socket) ->
-	Socket.
+try_STARTTLS(Socket, Options) ->
+	socket:send(Socket, "STARTTLS\r\n"),
+	case socket:recv(Socket, 0) of
+		{ok, "220 "++_} ->
+			crypto:start(),
+			application:start(ssl),
+			case socket:to_ssl_client(Socket, [], 5000) of
+				{ok, NewSocket} ->
+					%NewSocket;
+					{ok, Extensions} = try_EHLO(NewSocket, Options),
+					{NewSocket, Extensions};
+				Else ->
+					io:format("~p~n", [Else]),
+					false
+			end;
+		Resp ->
+			io:format("STARTTLS response: ~p~n", [Resp]),
+			false
+	end.
 
 %% try connecting to all returned MX records until
 %% success
@@ -103,9 +149,25 @@ connect([], Options) ->
 	failed;
 connect([{_, Host} | Tail], Options) ->
 	SockOpts = [list, {packet, line}, {keepalive, true}, {active, false}],
-	case gen_tcp:connect(Host, 25, SockOpts, 5000) of
+	Proto = case proplists:get_value(ssl, Options) of
+		true ->
+			crypto:start(),
+			application:start(ssl),
+			ssl;
+		false ->
+			tcp
+	end,
+	Port = case proplists:get_value(port, Options) of
+		undefined when Proto =:= ssl ->
+						465;
+		undefined when Proto =:= tcp ->
+			25;
+		OPort when is_integer(OPort) ->
+			OPort
+	end,
+	case socket:connect(Proto, Host, Port, SockOpts, 5000) of
 		{ok, Socket} ->
-			case gen_tcp:recv(Socket, 0) of
+			case socket:recv(Socket, 0) of
 				{ok, "220-"++_ = Banner} ->
 					Banner2 = read_multiline_reply(Socket, "220", [Banner]),
 					{ok, Socket, Host, Banner2};
@@ -113,7 +175,7 @@ connect([{_, Host} | Tail], Options) ->
 					{ok, Socket, Host, Banner};
 				Other ->
 					io:format("got ~p~n", [Other]),
-					gen_tcp:close(Socket),
+					socket:close(Socket),
 					connect(Tail, Options)
 			end;
 		{error, Reason} ->
@@ -124,7 +186,7 @@ connect([{_, Host} | Tail], Options) ->
 read_multiline_reply(Socket, Code, Acc) ->
 	End = Code++" ",
 	Cont = Code++"-",
-	case gen_tcp:recv(Socket, 0) of
+	case socket:recv(Socket, 0) of
 		{ok, Packet} ->
 			case {string:substr(Packet, 1, 3), string:substr(Packet, 4, 1)} of
 				{Code, " "} ->
