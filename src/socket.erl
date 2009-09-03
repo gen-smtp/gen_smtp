@@ -53,7 +53,7 @@
 
 %% API
 -export([connect/3, connect/4, connect/5]).
--export([listen/2, accept/1, accept/2]).
+-export([listen/2, listen/3, accept/1, accept/2]).
 -export([send/2, recv/2, recv/3]).
 -export([controlling_process/2]).
 -export([peername/1]).
