@@ -59,6 +59,8 @@
 -export([peername/1]).
 -export([close/1, shutdown/2]).
 -export([active_once/1]).
+-export([to_ssl_server/1,to_ssl_server/2,to_ssl_server/3]).
+-export([to_ssl_client/1,to_ssl_client/2,to_ssl_client/3]).
 -export([type/1]).
 
 %%%-----------------------------------------------------------------
@@ -86,7 +88,7 @@ accept(Socket, Timeout) when is_port(Socket) ->
 	case gen_tcp:accept(Socket, Timeout) of
 		{ok, NewSocket} ->
 			{ok, Opts} = inet:getopts(Socket, [active,keepalive,packet,reuseaddr]),
-			inet:setopts(NewSocket, [list|Opts]),
+			inet:setopts(NewSocket, Opts),
 			{ok, NewSocket};
 		Error -> Error
 	end;
@@ -134,6 +136,24 @@ active_once(Socket) when is_port(Socket) ->
 	inet:setopts(Socket, [{active, once}]);
 active_once(Socket) ->
 	ssl:setopts(Socket, [{active, once}]).
+
+%% @doc Upgrade a TCP connection to SSL
+to_ssl_server(Socket) ->
+	to_ssl_server(Socket, []).
+to_ssl_server(Socket, Options) ->
+	to_ssl_server(Socket, Options, infinity).
+to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
+	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
+to_ssl_server(Socket, Options, Timeout) ->
+	erlang:error(ssl_connected, "Socket is already using SSL").
+to_ssl_client(Socket) ->
+	to_ssl_client(Socket, []).
+to_ssl_client(Socket, Options) ->
+	to_ssl_client(Socket, Options, infinity).
+to_ssl_client(Socket, Options, Timeout) when is_port(Socket) ->
+	ssl:connect(Socket, ssl_connect_options(Options), Timeout);
+to_ssl_client(Socket, Options, Timeout) ->
+	erlang:error(ssl_connected, "Socket is already using SSL").
 
 type(Socket) when is_port(Socket) ->
 	tcp;
@@ -251,9 +271,9 @@ accept_test_() ->
 		fun() ->
 			application:start(crypto),
 			application:start(ssl),
-			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
-			spawn(fun()->connect(ssl, "localhost", ?TEST_PORT, ssl_connect_options([])) end),
+			spawn(fun()->connect(ssl, "localhost", ?TEST_PORT) end),
 			accept(ListenSocket),
 			close(ListenSocket)
 		end
@@ -264,7 +284,7 @@ type_test_() ->
 	[
 		{"a tcp socket returns 'tcp'",
 		fun() ->
-			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			?assertMatch(tcp, type(ListenSocket)),
 			close(ListenSocket)
 		end
@@ -273,7 +293,7 @@ type_test_() ->
 		fun() ->
 			application:start(crypto),
 			application:start(ssl),
-			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
 			?assertMatch(ssl, type(ListenSocket)),
 			close(ListenSocket)
 		end
@@ -398,4 +418,63 @@ option_test_() ->
 		}
 	].
 
+ssl_upgrade_test_() ->
+	[
+		{"TCP connection can be upgraded to ssl",
+		fun() ->
+			Self = self(),
+			application:start(crypto),
+			application:start(ssl),
+			spawn(fun() ->
+			      	{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			      	{ok, ServerSocket} = accept(ListenSocket),
+			      	Self ! ServerSocket,
+			      	{ok, NewServerSocket} = socket:to_ssl_server(ServerSocket),
+			      	Self ! NewServerSocket
+			      end),
+			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
+			?assert(is_port(ClientSocket)),
+			receive ServerSocket -> ok end,
+			?assert(is_port(ServerSocket)),
+			{ok, NewClientSocket} = to_ssl_client(ClientSocket),
+			?assertMatch([sslsocket|_], tuple_to_list(NewClientSocket)),
+			receive NewServerSocket -> ok end,
+			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
+			close(NewServerSocket),
+			close(NewClientSocket)
+		end
+		},
+		{"SSL server connection can't be upgraded again",
+		fun() ->
+			Self = self(),
+			application:start(crypto),
+			application:start(ssl),
+			spawn(fun() ->
+			      	{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
+			      	{ok, ServerSocket} = accept(ListenSocket),
+			      	?assertException(error, ssl_connected, to_ssl_server(ServerSocket)),
+			      	close(ServerSocket)
+			      end),
+			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
+			close(ClientSocket)
+		end
+		},
+		{"SSL client connection can't be upgraded again",
+		fun() ->
+			Self = self(),
+			application:start(crypto),
+			application:start(ssl),
+			spawn(fun() ->
+			      	{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
+			      	{ok, ServerSocket} = accept(ListenSocket),
+			      	Self ! ServerSocket
+			      end),
+			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT),
+			receive ServerSocket -> ok end,
+			?assertException(error, ssl_connected, to_ssl_client(ClientSocket)),
+			close(ServerSocket),
+			close(ClientSocket)
+		end
+		}
+	].
 -endif.
