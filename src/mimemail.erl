@@ -414,9 +414,8 @@ encode_body(undefined, Body) ->
 encode_body(Type, Body) ->
 	case string:to_lower(Type) of
 		"quoted-printable" ->
-			% TODO: examine whether this could be necessary to implement
-			% encode_quoted_printable(Body);
-			Body;
+			[InnerBody] = Body,
+			encode_quoted_printable(InnerBody);
 		"base64" ->
 			[InnerBody] = Body,
 			wrap_to_76(base64:encode_to_string(InnerBody)) ++ [""];
@@ -438,6 +437,62 @@ wrap_to_76(String, Lines) ->
 		Lines ++ [String]
 	).
 
+encode_quoted_printable(Body) ->
+	[encode_quoted_printable(Body, [], 0)].
+
+encode_quoted_printable(Body, Acc, L) when L >= 75 ->
+	LastLine = case string:str(Acc, "\n") of
+		0 ->
+			Acc;
+		Index ->
+			string:substr(Acc, 1, Index-1)
+	end,
+	Len = length(LastLine),
+	case string:str(LastLine, " ") of
+		0 when L =:= 75 ->
+			% uh-oh, no convienient whitespace, just cram a soft newline in
+			encode_quoted_printable(Body, [$\n, $\r, $= | Acc], 0);
+		1 when L =:= 75 ->
+			% whitespace is the last character we wrote
+			encode_quoted_printable(Body, [$\n, $\r, $= | Acc], 0);
+		SIndex when (L - 75) < SIndex ->
+			% okay, we can safely stick some whitespace in
+			Prefix = string:substr(Acc, 1, SIndex-1),
+			Suffix = string:substr(Acc, SIndex),
+			NewAcc = lists:concat([Prefix, "\n\r=", Suffix]),
+			encode_quoted_printable(Body, NewAcc, 0);
+		_ ->
+			% worst case, we're over 75 characters on the line
+			% and there's no obvious break points, just stick one
+			% in at position 75 and call it good. However, we have
+			% to be very careful not to stick the soft newline in
+			% the middle of an existing quoted-printable escape.
+
+			% TODO - fix this to be less stupid
+			I = 3, % assume we're at most 3 over our cutoff
+			Prefix = string:substr(Acc, 1, I),
+			Suffix = string:substr(Acc, I+1),
+			NewAcc = lists:concat([Prefix, "\n\r=", Suffix]),
+			encode_quoted_printable(Body, NewAcc, 0)
+	end;
+encode_quoted_printable([], Acc, _L) ->
+	lists:reverse(Acc);
+encode_quoted_printable([$= | T] , Acc, L) ->
+	encode_quoted_printable(T, [$D, $3, $= | Acc], L+3);
+encode_quoted_printable([$\r, $\n | T] , Acc, L) ->
+	encode_quoted_printable(T, [$\n, $\r | Acc], 0);
+encode_quoted_printable([H | T], Acc, L) when H >= $!, H =< $< ->
+	encode_quoted_printable(T, [H | Acc], L+1);
+encode_quoted_printable([H | T], Acc, L) when H >= $>, H =< $~ ->
+	encode_quoted_printable(T, [H | Acc], L+1);
+encode_quoted_printable([H, $\r, $\n | T], Acc, L) when H =:= $\s; H =< $\t ->
+	[[A, B]] = io_lib:format("~2.16.0B", [H]),
+	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
+encode_quoted_printable([H | T], Acc, L) when H =:= $\s; H =< $\t ->
+	encode_quoted_printable(T, [H | Acc], L+1);
+encode_quoted_printable([H | T], Acc, L) ->
+	[[A, B]]= io_lib:format("=~2.16.0B", [H]),
+	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
 -ifdef(EUNIT).
 
@@ -899,6 +954,43 @@ decode_quoted_printable_test_() ->
 		}
 	].
 
+encode_quoted_printable_test_() ->
+	[
+		{"bleh",
+			fun() ->
+					?assertEqual("!", encode_quoted_printable("!", [], 0)),
+					?assertEqual("!!", encode_quoted_printable("!!", [], 0)),
+					?assertEqual("=3D:=3D", encode_quoted_printable("=:=", [], 0)),
+					?assertEqual("Thequickbrownfoxjumpedoverthelazydog.", encode_quoted_printable("Thequickbrownfoxjumpedoverthelazydog.", [], 0))
+			end
+		},
+		{"input with spaces",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.", encode_quoted_printable("The quick brown fox jumped over the lazy dog.", "", 0))
+			end
+		},
+		{"input with tabs",
+			fun() ->
+					?assertEqual("The\tquick brown fox jumped over\tthe lazy dog.", encode_quoted_printable("The\tquick brown fox jumped over\tthe lazy dog.", "", 0))
+			end
+		},
+		{"input with trailing spaces",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog.      =20\r\n", encode_quoted_printable("The quick brown fox jumped over the lazy dog.       \r\n", "", 0))
+			end
+		},
+		{"add soft newlines",
+			fun() ->
+					?assertEqual("The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.", encode_quoted_printable("The quick brown fox jumped over the lazy dog. The quick brown fox jumped over the lazy dog.", "", 0)),
+					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_ov=\r\ner_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_over_the_lazy_dog.", "", 0)),
+					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=\r\n=3Dver_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=ver_the_lazy_dog.", "", 0)),
+					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=\r\n=3Dover_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.", "", 0)),
+					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.", "", 0))
+			end
+		}
+	].
+
+
 roundtrip_test_() ->
 	[
 		{"roundtrip test for the gamut",
@@ -929,6 +1021,22 @@ roundtrip_test_() ->
 					%file:close(F1),
 					%file:close(F2),
 					?assertEqual(Email, Encoded)
+			end
+		},
+		{"round trip quoted-printable email",
+			fun() ->
+					{ok, Bin} = file:read_file("testdata/testcase1"),
+					Email = binary_to_list(Bin),
+					Decoded = decode(Email),
+					Encoded = encode(Decoded),
+					{ok, F1} = file:open("f1", [write]),
+					{ok, F2} = file:open("f2", [write]),
+					%file:write(F1, Email),
+					%file:write(F2, Encoded),
+					%file:close(F1),
+					%file:close(F2),
+					%?assertEqual(Email, Encoded)
+					ok
 			end
 		}
 	].
