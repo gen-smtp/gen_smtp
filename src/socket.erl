@@ -168,7 +168,7 @@ connect_test_() ->
 						{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
 						?assert(is_port(ListenSocket)),
 						{ok, ServerSocket} = accept(ListenSocket),
-						gen_tcp:controlling_process(ServerSocket, Self),
+						controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
 			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT,  tcp_connect_options([])),
@@ -207,20 +207,20 @@ accept_test_() ->
 		fun() ->
 			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
 			?assert(is_port(ListenSocket)),
-			spawn(fun()-> gen_tcp:connect("localhost", ?TEST_PORT, tcp_connect_options([])) end),
-			{ok, ServerSocket} = gen_tcp:accept(ListenSocket),
+			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT, tcp_connect_options([])) end),
+			{ok, ServerSocket} = accept(ListenSocket),
 			?assert(is_port(ListenSocket)),
- 			gen_tcp:close(ServerSocket),
-			gen_tcp:close(ListenSocket)
+ 			close(ServerSocket),
+			close(ListenSocket)
 		end
 		},
 		{"Accept via ssl",
 		fun() ->
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
-			spawn(fun()->ssl:connect("localhost", ?TEST_PORT, ssl_connect_options([])) end),
+			spawn(fun()->connect(ssl, "localhost", ?TEST_PORT, ssl_connect_options([])) end),
 			accept(ListenSocket),
-			ssl:close(ListenSocket)
+			close(ListenSocket)
 		end
 		}
 	].
