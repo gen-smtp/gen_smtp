@@ -28,11 +28,20 @@
 
 -include_lib("kernel/src/inet_dns.hrl").
 
+-define(DEFAULT_OPTIONS, [
+		{ssl, false}, % whether to connect on 465 in ssl mode
+		{tls, if_available}, % always, never, if_available
+		{auth, if_available},
+		{hostname, guess_FQDN()}
+	]).
+
 send(Email, Options) ->
-	case check_options(Options) of
+	NewOptions = lists:ukeymerge(1, lists:sort(Options),
+		lists:sort(?DEFAULT_OPTIONS)),
+	case check_options(NewOptions) of
 		ok ->
 			Ref = make_ref(),
-			Pid = spawn_link(?MODULE, send_it, [Email, Options, self(), Ref]),
+			Pid = spawn_link(?MODULE, send_it, [Email, NewOptions, self(), Ref]),
 			{ok, Pid, Ref};
 		{error, Reason} ->
 			{error, Reason}
@@ -48,8 +57,14 @@ send_it(Email, Options, Parent, Ref) ->
 			io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
 			{ok, Extensions} = try_EHLO(Socket, Options),
 			io:format("Extensions are ~p~n", [Extensions]),
-				%{ok, Extensions} ->
-					
+			case {proplists:get_value(tls, Options),
+					proplists:get_value("STARTTLS", Extensions)} of
+				{Atom, true} when Atom =:= always; Atom =:= if_available ->
+					io:format("Starting TLS~n"),
+					try_STARTTLS(Socket);
+				_ ->
+					Socket
+			end,
 			ok
 	end,
 	ok.
@@ -77,6 +92,10 @@ try_EHLO(Socket, Options) ->
 				end, Reply2),
 			{ok, Extensions}
 		end.
+
+%% attempt to upgrade socket to TLS
+try_STARTTLS(Socket) ->
+	Socket.
 
 %% try connecting to all returned MX records until
 %% success
@@ -150,3 +169,10 @@ mxlookup(Domain) ->
 		Result ->
 			lists:sort(fun({Pref, _Name}, {Pref2, _Name2}) -> Pref =< Pref2 end, Result)
 	end.
+
+guess_FQDN() ->
+	{ok, Hostname} = inet:gethostname(),
+	{ok, Hostent} = inet:gethostbyname(Hostname),
+	{hostent, FQDN, _Aliases, inet, _, _Addresses} = Hostent,
+	FQDN.
+
