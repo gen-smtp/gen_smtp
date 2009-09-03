@@ -56,6 +56,7 @@
 -export([listen/2, accept/1, accept/2]).
 -export([send/2, recv/2, recv/3]).
 -export([controlling_process/2]).
+-export([peername/1]).
 -export([close/1, shutdown/2]).
 -export([active_once/1]).
 -export([type/1]).
@@ -113,6 +114,11 @@ controlling_process(Socket, NewOwner) when is_port(Socket) ->
 	gen_tcp:controlling_process(Socket, NewOwner);
 controlling_process(Socket, NewOwner) ->
 	ssl:controlling_process(Socket, NewOwner).
+
+peername(Socket) when is_port(Socket) ->
+	inet:peername(Socket);
+peername(Socket) ->
+	ssl:peername(Socket).
 
 close(Socket) when is_port(Socket) ->
 	gen_tcp:close(Socket);
