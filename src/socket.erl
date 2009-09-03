@@ -81,7 +81,6 @@ listen(tcp, Port, Options) ->
 accept(Socket) ->
 	accept(Socket, infinity).
 accept(Socket, Timeout) when is_port(Socket) ->
-	io:format("Socket: ~p~n", [Socket]),
 	case gen_tcp:accept(Socket, Timeout) of
 		{ok, NewSocket} ->
 			{ok, Opts} = inet:getopts(Socket, [active,keepalive,packet,reuseaddr]),
@@ -112,7 +111,6 @@ recv(Socket, Data, Timeout) ->
 controlling_process(Socket, NewOwner) when is_port(Socket) ->
 	gen_tcp:controlling_process(Socket, NewOwner);
 controlling_process(Socket, NewOwner) ->
-	?debugFmt("control ssl: ~p~n", [Socket]),
 	ssl:controlling_process(Socket, NewOwner).
 
 close(Socket) when is_port(Socket) ->
