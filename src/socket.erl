@@ -55,7 +55,7 @@
 -export([connect/3, connect/4, connect/5]).
 -export([listen/2, accept/2]).
 -export([send/2, recv/2, recv/3]).
-% -export([controlling_process/2]).
+-export([controlling_process/2]).
 % -export([close/1, shutdown/2]).
 % -export([type/1]).
 
@@ -107,6 +107,11 @@ recv(Socket, Length, Timeout) when is_port(Socket) ->
 	gen_tcp:recv(Socket, Length, Timeout);
 recv(Socket, Data, Timeout) ->
 	ssl:recv(Socket, Data, Timeout).
+
+controlling_process(Socket, NewOwner) when is_port(Socket) ->
+	gen_tcp:controlling_process(Socket, NewOwner);
+controlling_process(Socket, NewOwner) ->
+	ssl:controlling_process(Socket, NewOwner).
 
 %%%-----------------------------------------------------------------
 %%% Internal functions (OS_Mon configuration)
