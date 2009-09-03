@@ -57,6 +57,7 @@
 -export([send/2, recv/2, recv/3]).
 -export([controlling_process/2]).
 -export([close/1, shutdown/2]).
+-export([active_once/1]).
 -export([type/1]).
 
 %%%-----------------------------------------------------------------
@@ -122,6 +123,11 @@ shutdown(Socket, How) when is_port(Socket) ->
 	gen_tcp:shutdown(Socket, How);
 shutdown(Socket, How) ->
 	ssl:shutdown(Socket, How).
+
+active_once(Socket) when is_port(Socket) ->
+	inet:setopts(Socket, [{active, once}]);
+active_once(Socket) ->
+	ssl:setopts(Socket, [{active, once}]).
 
 type(Socket) when is_port(Socket) ->
 	tcp;
@@ -253,6 +259,28 @@ type_test_() ->
 			application:start(ssl),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
 			?assertMatch(ssl, type(ListenSocket)),
+			close(ListenSocket)
+		end
+		}
+	].
+
+active_once_test_() ->
+	[
+		{"socket is set to active:once on tcp",
+		fun() ->
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+			?assertEqual({ok, [{active,false}]}, inet:getopts(ListenSocket, [active])),
+			active_once(ListenSocket),
+			?assertEqual({ok, [{active,once}]}, inet:getopts(ListenSocket, [active])),
+			close(ListenSocket)
+		end
+		},
+		{"socket is set to active:once on ssl",
+		fun() ->
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
+			?assertEqual({ok, [{active,false}]}, ssl:getopts(ListenSocket, [active])),
+			active_once(ListenSocket),
+			?assertEqual({ok, [{active,once}]}, ssl:getopts(ListenSocket, [active])),
 			close(ListenSocket)
 		end
 		}
