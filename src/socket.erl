@@ -138,23 +138,33 @@ type(_Socket) ->
 %%% Internal functions (OS_Mon configuration)
 %%%-----------------------------------------------------------------
 
-tcp_listen_options([list|Options]) ->
-	tcp_listen_options(Options);
+tcp_listen_options([Format|Options]) when Format =:= list; Format =:= binary ->
+	tcp_listen_options(Options, Format);
 tcp_listen_options(Options) ->
-	[list|proplist_merge(Options, ?TCP_LISTEN_OPTIONS)].
-ssl_listen_options([list|Options]) ->
-	ssl_listen_options(Options);
-ssl_listen_options(Options) ->
-	[list|proplist_merge(Options, ?SSL_LISTEN_OPTIONS)].
+	tcp_listen_options(Options, list).
+tcp_listen_options(Options, Format) ->
+	[Format|proplist_merge(Options, ?TCP_LISTEN_OPTIONS)].
 
-tcp_connect_options([list|Options]) ->
-	tcp_connect_options(Options);
+ssl_listen_options([Format|Options]) when Format =:= list; Format =:= binary ->
+	ssl_listen_options(Options, Format);
+ssl_listen_options(Options) ->
+	ssl_listen_options(Options, list).
+ssl_listen_options(Options, Format) ->
+	[Format|proplist_merge(Options, ?SSL_LISTEN_OPTIONS)].
+
+tcp_connect_options([Format|Options]) when Format =:= list; Format =:= binary ->
+	tcp_connect_options(Options, Format);
 tcp_connect_options(Options) ->
-	[list|proplist_merge(Options, ?TCP_CONNECT_OPTIONS)].
-ssl_connect_options([list|Options]) ->
-	ssl_connect_options(Options);
+	tcp_connect_options(Options, list).
+tcp_connect_options(Options, Format) ->
+	[Format|proplist_merge(Options, ?TCP_CONNECT_OPTIONS)].
+
+ssl_connect_options([Format|Options]) when Format =:= list; Format =:= binary ->
+	ssl_connect_options(Options, Format);
 ssl_connect_options(Options) ->
-	[list|proplist_merge(Options, ?SSL_CONNECT_OPTIONS)].
+	ssl_connect_options(Options, list).
+ssl_connect_options(Options, Format) ->
+	[Format|proplist_merge(Options, ?SSL_CONNECT_OPTIONS)].
 
 proplist_merge(PrimaryList, DefaultList) ->
 	Merged = lists:ukeymerge(1,
@@ -311,6 +321,30 @@ option_test_() ->
 		{"ssl_connect_options has defaults",
 		fun() ->
 			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([]))
+		end
+		},
+		{"tcp_listen_options defaults to list type",
+		fun() ->
+			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([{active,false}])),
+			?assertEqual([binary|?TCP_LISTEN_OPTIONS], tcp_listen_options([binary,{active,false}]))
+		end
+		},
+		{"tcp_connect_options defaults to list type",
+		fun() ->
+			?assertEqual([list|?TCP_CONNECT_OPTIONS], tcp_connect_options([{active,false}])),
+			?assertEqual([binary|?TCP_CONNECT_OPTIONS], tcp_connect_options([binary,{active,false}]))
+		end
+		},
+		{"ssl_listen_options defaults to list type",
+		fun() ->
+			?assertEqual([list|?SSL_LISTEN_OPTIONS], ssl_listen_options([{active,false}])),
+			?assertEqual([binary|?SSL_LISTEN_OPTIONS], ssl_listen_options([binary,{active,false}]))
+		end
+		},
+		{"ssl_connect_options defaults to list type",
+		fun() ->
+			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([{active,false}])),
+			?assertEqual([binary|?SSL_CONNECT_OPTIONS], ssl_connect_options([binary,{active,false}]))
 		end
 		},
 		{"tcp_listen_options merges provided proplist",
