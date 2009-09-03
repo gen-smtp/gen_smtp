@@ -77,18 +77,12 @@ stop(Pid) ->
 
 %% @hidden
 init([Module, Options]) ->
-	FQDN = guess_FQDN(),
-	NewOptions = lists:ukeymerge(1, lists:sort(Options), lists:sort([{domain, FQDN}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}])),
+	DefaultOptions = [{domain, guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}],
+	NewOptions = lists:ukeymerge(1, lists:sort(Options), lists:sort(DefaultOptions)),
 	io:format("Options: ~p~n", [NewOptions]),
 	io:format("~p starting at ~p~n", [?MODULE, node()]),
 	process_flag(trap_exit, true),
-	Opts = [list, {packet, line},
-	              {reuseaddr, true},
-	              {keepalive, true},
-	              {backlog, 30},
-	              {active, false},
-	              {ip, proplists:get_value(address, NewOptions)}],
-	case socket:listen(proplists:get_value(protocol, NewOptions), proplists:get_value(port, NewOptions), Opts) of
+	case socket:listen(proplists:get_value(protocol, NewOptions), proplists:get_value(port, NewOptions), [{ip, proplists:get_value(address, NewOptions)}]) of
 		{ok, Listen_socket} ->
 			%%Create first accepting process
 			{ok, Ref} = prim_inet:async_accept(Listen_socket, -1),
