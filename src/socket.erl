@@ -23,29 +23,29 @@
 -module(socket).
 
 
--define(TCP_LISTEN_OPTIONS,[  {packet, line},
-                              {reuseaddr, true},
-                              {keepalive, true},
+-define(TCP_LISTEN_OPTIONS,[  {active, false},
                               {backlog, 30},
-                              {active, false}]).
--define(TCP_CONNECT_OPTIONS,[ {packet, line},
-                            	{active, false}]).
--define(SSL_LISTEN_OPTIONS, [ {packet, line},
-                              {reuseaddr, true},
                               {keepalive, true},
+                              {packet, line},
+                              {reuseaddr, true}]).
+-define(TCP_CONNECT_OPTIONS,[ {active, false},
+                              {packet, line}]).
+-define(SSL_LISTEN_OPTIONS, [ {active, false},
+                              {backlog, 30},
+                              {certfile, "server.crt"},
+                              {depth, 0},
+                              {keepalive, true},
+                              {keyfile, "server.key"},
+                              {packet, line},
                               {reuse_sessions, false},
-                              {backlog, 30},
-                              {ssl_imp, new},
-                              {depth, 0},
+                              {reuseaddr, true},
+                              {ssl_imp, new}]).
+-define(SSL_CONNECT_OPTIONS,[ {active, false},
                               {certfile, "server.crt"},
-                              {keyfile, "server.key"},
-                              {active, false}]).
--define(SSL_CONNECT_OPTIONS,[ {packet, line},
-                              {ssl_imp, new},
                               {depth, 0},
-                              {certfile, "server.crt"},
                               {keyfile, "server.key"},
-                              {active, false}]).
+                              {packet, line},
+                              {ssl_imp, new}]).
 
 -ifdef(EUNIT).
 -include_lib("eunit/include/eunit.hrl").
@@ -91,8 +91,9 @@ accept(Socket, Timeout) when is_port(Socket) ->
 	end;
 accept(Socket, Timeout) ->
 	case ssl:transport_accept(Socket, Timeout) of
-		{ok, TransportSocket} ->
-			ssl:ssl_accept(TransportSocket);
+		{ok, NewSocket} ->
+			ssl:ssl_accept(NewSocket),
+			{ok, NewSocket};
 		Error -> Error
 	end.
 
@@ -111,6 +112,7 @@ recv(Socket, Data, Timeout) ->
 controlling_process(Socket, NewOwner) when is_port(Socket) ->
 	gen_tcp:controlling_process(Socket, NewOwner);
 controlling_process(Socket, NewOwner) ->
+	?debugFmt("control ssl: ~p~n", [Socket]),
 	ssl:controlling_process(Socket, NewOwner).
 
 close(Socket) when is_port(Socket) ->
@@ -187,14 +189,14 @@ connect_test_() ->
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
 						?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
-						accept(ListenSocket),
+						{ok, ServerSocket} = accept(ListenSocket),
+						controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
 			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT,  []),
 			receive
 				{sslsocket,_,_} = ListenSocket -> ok
 			end,
-			io:format("ClientSocket: ~p~n", [ClientSocket]),
 			?assertMatch([sslsocket|_], tuple_to_list(ClientSocket)),
 			close(ListenSocket)
 		end
@@ -216,6 +218,8 @@ accept_test_() ->
 		},
 		{"Accept via ssl",
 		fun() ->
+			application:start(crypto),
+			application:start(ssl),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
 			spawn(fun()->connect(ssl, "localhost", ?TEST_PORT, ssl_connect_options([])) end),
@@ -236,10 +240,80 @@ type_test_() ->
 		},
 		{"an ssl socket returns 'ssl'",
 		fun() ->
+			application:start(crypto),
+			application:start(ssl),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
 			?assertMatch(ssl, type(ListenSocket)),
 			close(ListenSocket)
 		end
 		}
 	].
+
+option_test_() ->
+	[
+		{"tcp_listen_options has defaults",
+		fun() ->
+			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([]))
+		end
+		},
+		{"tcp_connect_options has defaults",
+		fun() ->
+			?assertEqual([list|?TCP_CONNECT_OPTIONS], tcp_connect_options([]))
+		end
+		},
+		{"ssl_listen_options has defaults",
+		fun() ->
+			?assertEqual([list|?SSL_LISTEN_OPTIONS], ssl_listen_options([]))
+		end
+		},
+		{"ssl_connect_options has defaults",
+		fun() ->
+			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([]))
+		end
+		},
+		{"tcp_listen_options merges provided proplist",
+		fun() ->
+			?assertMatch([list,{active, true},
+			                   {backlog, 30},
+			                   {keepalive, true},
+			                   {packet, 2},
+			                   {reuseaddr, true}],
+			             tcp_listen_options([{active, true},{packet,2}]))
+		end
+		},
+		{"tcp_connect_options merges provided proplist",
+		fun() ->
+			?assertMatch([list,{active, true},
+			                   {packet, 2}],
+			             tcp_connect_options([{active, true},{packet,2}]))
+		end
+		},
+		{"ssl_listen_options merges provided proplist",
+		fun() ->
+			?assertMatch([list,{active, true},
+			                   {backlog, 30},
+			                   {certfile, "server.crt"},
+			                   {depth, 0},
+			                   {keepalive, true},
+			                   {keyfile, "server.key"},
+			                   {packet, 2},
+			                   {reuse_sessions, false},
+			                   {reuseaddr, true},
+			                   {ssl_imp, new}],
+			             ssl_listen_options([{active, true},{packet,2}]))
+		end
+		},
+		{"ssl_connect_options merges provided proplist",
+		fun() ->
+			?assertMatch([list,{active, true},
+			                   {certfile, "server.crt"},
+			                   {depth, 0},
+			                   {keyfile, "server.key"},
+			                   {packet, 2},
+			                   {ssl_imp, new}],
+			             ssl_connect_options([{active, true},{packet,2}]))
+		end
+		}
+	].
+
 -endif.
