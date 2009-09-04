@@ -46,14 +46,13 @@ send(Email, Options) ->
 		lists:sort(?DEFAULT_OPTIONS)),
 	case check_options(NewOptions) of
 		ok ->
-			Ref = make_ref(),
-			Pid = spawn_link(?MODULE, send_it, [Email, NewOptions, self(), Ref]),
-			{ok, Pid, Ref};
+			Pid = spawn_link(?MODULE, send_it, [Email, NewOptions, self()]),
+			{ok, Pid};
 		{error, Reason} ->
 			{error, Reason}
 	end.
 
-send_it(Email, Options, Parent, Ref) ->
+send_it(Email, Options, Parent) ->
 	RelayDomain = proplists:get_value(relay, Options),
 	MXRecords = mxlookup(RelayDomain),
 	%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
@@ -65,19 +64,19 @@ send_it(Email, Options, Parent, Ref) ->
 	end,
 	case connect(Hosts, Options) of
 		failed ->
-			Parent ! {failed, no_connection, Ref};
+			erlang:error(no_connection);
 		{ok, Socket, Host, Banner} ->
 			io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
 			{ok, Extensions} = try_EHLO(Socket, Options),
 			io:format("Extensions are ~p~n", [Extensions]),
 			{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
-				Extensions, Parent, Ref),
+				Extensions),
 			io:format("Extensions are ~p~n", [Extensions2]),
 			Authed = try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
 			io:format("Authentication status is ~p~n", [Authed]),
 			try_sending_it(Email, Socket2, Extensions2),
 			io:format("Mail sending successful~n"),
-			ok
+			Parent ! {success, self()}
 	end,
 	ok.
 
@@ -280,7 +279,7 @@ try_EHLO(Socket, Options) ->
 		end.
 
 % check if we should try to do TLS
-try_STARTTLS(Socket, Options, Extensions, Parent, Ref) ->
+try_STARTTLS(Socket, Options, Extensions) ->
 		case {proplists:get_value(tls, Options),
 				proplists:get_value("STARTTLS", Extensions)} of
 			{Atom, true} when Atom =:= always; Atom =:= if_available ->
@@ -288,7 +287,6 @@ try_STARTTLS(Socket, Options, Extensions, Parent, Ref) ->
 			case {do_STARTTLS(Socket, Options), Atom} of
 				{false, always} ->
 					io:format("TLS failed~n"),
-					Parent ! {failed, no_tls, Ref},
 					erlang:exit(no_tls);
 				{false, if_available} ->
 					io:format("TLS failed~n"),
@@ -298,7 +296,6 @@ try_STARTTLS(Socket, Options, Extensions, Parent, Ref) ->
 					{S, E}
 			end;
 		{always, _} ->
-			Parent ! {failed, no_tls, Ref},
 			erlang:exit(no_tls);
 		_ ->
 			{Socket, Extensions}
