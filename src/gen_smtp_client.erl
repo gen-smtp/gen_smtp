@@ -31,8 +31,14 @@
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
 		{tls, if_available}, % always, never, if_available
-		{auth, never},
+		{auth, if_available},
 		{hostname, guess_FQDN()}
+	]).
+
+-define(AUTH_PREFERENCE, [
+		"CRAM-MD5",
+		"LOGIN",
+		"PLAIN"
 	]).
 
 send(Email, Options) ->
@@ -67,12 +73,70 @@ send_it(Email, Options, Parent, Ref) ->
 			{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
 				Extensions, Parent, Ref),
 			io:format("Extensions are ~p~n", [Extensions2]),
+			try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
 			ok
 	end,
 	ok.
 
+try_AUTH(Socket, Options, []) ->
+	false;
+try_AUTH(Socket, Options, undefined) ->
+	false;
 try_AUTH(Socket, Options, AuthTypes) ->
-	ok.
+	case proplists:is_defined(username, Options) and
+		proplists:is_defined(password, Options) of
+		false ->
+			false;
+		true ->
+			Username = proplists:get_value(username, Options),
+			Password = proplists:get_value(password, Options),
+			io:format("Auth types: ~p~n", [AuthTypes]),
+			Types = re:split(AuthTypes, " ", [{return, list}, trim]),
+			do_AUTH(Socket, Username, Password, Types)
+	end.
+
+do_AUTH(Socket, Username, Password, Types) ->
+	FixedTypes = lists:map(fun(X) -> string:to_upper(X) end, Types),
+	io:format("Fixed types: ~p~n", [FixedTypes]),
+	AllowedTypes = lists:filter(fun(X) -> lists:member(X, FixedTypes) end,
+		?AUTH_PREFERENCE),
+	io:format("available authentication types, in order of preference: ~p~n",
+		[AllowedTypes]),
+	do_AUTH_each(Socket, Username, Password, AllowedTypes).
+
+do_AUTH_each(Socket, Username, Password, []) ->
+	false;
+do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
+	socket:send(Socket, "AUTH LOGIN\r\n"),
+	case socket:recv(Socket, 0) of
+		{ok, "334 VXNlcm5hbWU6\r\n"} ->
+			io:format("username prompt~n"),
+			U = binary_to_list(base64:encode(Username)),
+			socket:send(Socket, U++"\r\n"),
+			case socket:recv(Socket, 0) of
+				{ok, "334 UGFzc3dvcmQ6\r\n"} ->
+					io:format("password prompt~n"),
+					P = binary_to_list(base64:encode(Password)),
+					socket:send(Socket, P++"\r\n"),
+					case socket:recv(Socket, 0) of
+						{ok, "235 "++_} ->
+							io:format("authentication accepted~n"),
+							true;
+						{ok, Msg} ->
+							io:format("password rejected: ~p", [Msg]),
+							false
+					end;
+				{ok, Msg2} ->
+					io:format("username rejected: ~p", [Msg2]),
+					false
+			end;
+		{ok, Something} ->
+			io:format("got ~p~n", [Something]),
+			false
+	end;
+do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
+	false.
+
 
 try_EHLO(Socket, Options) ->
 	case socket:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n") of
@@ -91,6 +155,7 @@ try_EHLO(Socket, Options) ->
 									0 ->
 										{string:to_upper(Body), true};
 									_ ->
+										io:format("discarding option ~p~n", [Body]),
 										[]
 								end
 						end
@@ -208,7 +273,7 @@ check_options(Options) ->
 			{error, no_relay};
 		_ ->
 			case proplists:get_value(auth, Options) of
-				Atom when Atom =:= always; Atom =:= if_available ->
+				Atom when Atom =:= always ->
 					case proplists:is_defined(username, Options) and
 						proplists:is_defined(password, Options) of
 						false ->
@@ -216,7 +281,7 @@ check_options(Options) ->
 						true ->
 							ok
 					end;
-				never ->
+				_ ->
 					ok
 			end
 	end.
