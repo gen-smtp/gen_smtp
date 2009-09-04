@@ -31,7 +31,7 @@
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
 		{tls, if_available}, % always, never, if_available
-		{auth, if_available},
+		{auth, never},
 		{hostname, guess_FQDN()}
 	]).
 
@@ -64,38 +64,14 @@ send_it(Email, Options, Parent, Ref) ->
 			io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
 			{ok, Extensions} = try_EHLO(Socket, Options),
 			io:format("Extensions are ~p~n", [Extensions]),
-			{Extensions2, Socket2} = case {proplists:get_value(tls, Options),
-					proplists:get_value("STARTTLS", Extensions)} of
-				{Atom, true} when Atom =:= always ->
-					io:format("Starting TLS~n"),
-					case try_STARTTLS(Socket, Options) of
-						false ->
-							io:format("TLS failed~n"),
-							Parent ! {failed, no_ssl, Ref},
-							erlang:exit(no_ssl);
-						{E, S} ->
-							io:format("TLS started~n"),
-							{E, S}
-					end;
-				{Atom, true} when Atom =:= if_available ->
-					io:format("Starting TLS~n"),
-					case try_STARTTLS(Socket, Options) of
-						false ->
-							io:format("TLS failed~n"),
-							{Extensions, Socket};
-						{E, S} ->
-							io:format("TLS started~n"),
-							{E, S}
-					end;
-				{always, _} ->
-					Parent ! {failed, no_ssl, Ref},
-					erlang:exit(no_ssl);
-				_ ->
-					{Extensions, Socket}
-			end,
-			io:format("Extensions are ~p~n", [Extensions]),
+			{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
+				Extensions, Parent, Ref),
+			io:format("Extensions are ~p~n", [Extensions2]),
 			ok
 	end,
+	ok.
+
+try_AUTH(Socket, Options, AuthTypes) ->
 	ok.
 
 try_EHLO(Socket, Options) ->
@@ -122,8 +98,33 @@ try_EHLO(Socket, Options) ->
 			{ok, Extensions}
 		end.
 
+% check if we should try to do TLS
+try_STARTTLS(Socket, Options, Extensions, Parent, Ref) ->
+		case {proplists:get_value(tls, Options),
+				proplists:get_value("STARTTLS", Extensions)} of
+			{Atom, true} when Atom =:= always; Atom =:= if_available ->
+			io:format("Starting TLS~n"),
+			case {do_STARTTLS(Socket, Options), Atom} of
+				{false, always} ->
+					io:format("TLS failed~n"),
+					Parent ! {failed, no_tls, Ref},
+					erlang:exit(no_tls);
+				{false, if_available} ->
+					io:format("TLS failed~n"),
+					{Socket, Extensions};
+				{{S, E}, _} ->
+					io:format("TLS started~n"),
+					{S, E}
+			end;
+		{always, _} ->
+			Parent ! {failed, no_tls, Ref},
+			erlang:exit(no_tls);
+		_ ->
+			{Socket, Extensions}
+	end.
+
 %% attempt to upgrade socket to TLS
-try_STARTTLS(Socket, Options) ->
+do_STARTTLS(Socket, Options) ->
 	socket:send(Socket, "STARTTLS\r\n"),
 	case socket:recv(Socket, 0) of
 		{ok, "220 "++_} ->
@@ -206,7 +207,18 @@ check_options(Options) ->
 		undefined ->
 			{error, no_relay};
 		_ ->
-			ok
+			case proplists:get_value(auth, Options) of
+				Atom when Atom =:= always; Atom =:= if_available ->
+					case proplists:is_defined(username, Options) and
+						proplists:is_defined(password, Options) of
+						false ->
+							{error, no_credentials};
+						true ->
+							ok
+					end;
+				never ->
+					ok
+			end
 	end.
 
 % returns a sorted list of mx servers, lowest distance first
