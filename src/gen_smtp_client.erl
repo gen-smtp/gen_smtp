@@ -106,42 +106,76 @@ do_AUTH(Socket, Username, Password, Types) ->
 
 do_AUTH_each(Socket, Username, Password, []) ->
 	false;
+do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
+	socket:send(Socket, "AUTH CRAM-MD5\r\n"),
+	case read_possible_multiline_reply(Socket) of
+		{ok, "334 "++Rest} ->
+			Seed64 = string:strip(string:strip(Rest, right, $\n), right, $\r),
+			Seed = base64:decode_to_string(Seed64),
+			Digest = gen_smtp_server_session:compute_cram_digest(Password, Seed),
+			String = binary_to_list(base64:encode(Username++" "++Digest)),
+			socket:send(Socket, String++"\r\n"),
+			case read_possible_multiline_reply(Socket) of
+				{ok, "235"++_} ->
+					io:format("authentication accepted~n"),
+					true;
+				{ok, Msg} ->
+					io:format("authentication rejected: ~s~n", [Msg]),
+					do_AUTH_each(Socket, Username, Password, Tail)
+			end;
+		{ok, Something} ->
+			io:format("got ~s~n", [Something]),
+			do_AUTH_each(Socket, Username, Password, Tail)
+	end;
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 	socket:send(Socket, "AUTH LOGIN\r\n"),
-	case socket:recv(Socket, 0) of
+	case read_possible_multiline_reply(Socket) of
 		{ok, "334 VXNlcm5hbWU6\r\n"} ->
 			io:format("username prompt~n"),
 			U = binary_to_list(base64:encode(Username)),
 			socket:send(Socket, U++"\r\n"),
-			case socket:recv(Socket, 0) of
+			case read_possible_multiline_reply(Socket) of
 				{ok, "334 UGFzc3dvcmQ6\r\n"} ->
 					io:format("password prompt~n"),
 					P = binary_to_list(base64:encode(Password)),
 					socket:send(Socket, P++"\r\n"),
-					case socket:recv(Socket, 0) of
+					case read_possible_multiline_reply(Socket) of
 						{ok, "235 "++_} ->
 							io:format("authentication accepted~n"),
 							true;
 						{ok, Msg} ->
-							io:format("password rejected: ~p", [Msg]),
-							false
+							io:format("password rejected: ~s", [Msg]),
+							do_AUTH_each(Socket, Username, Password, Tail)
 					end;
 				{ok, Msg2} ->
-					io:format("username rejected: ~p", [Msg2]),
-					false
+					io:format("username rejected: ~s", [Msg2]),
+					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
 		{ok, Something} ->
-			io:format("got ~p~n", [Something]),
-			false
+			io:format("got ~s~n", [Something]),
+			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
-	false.
-
+	AuthString = binary_to_list(base64:encode("\0"++Username++"\0"++Password)),
+	socket:send(Socket, "AUTH PLAIN "++AuthString++"\r\n"),
+	case read_possible_multiline_reply(Socket) of
+		{ok, "235"++_} ->
+			io:format("authentication accepted~n"),
+			true;
+		Else ->
+			% TODO do we need to bother trying the multi-step PLAIN?
+			io:format("authentication rejected~n"),
+			io:format("~p~n", [Else]),
+			do_AUTH_each(Socket, Username, Password, Tail)
+	end;
+do_AUTH_each(Socket, Username, Password, [Type | Tail]) ->
+	io:format("unsupported AUTH type ~s~n", [Type]),
+	do_AUTH_each(Socket, Username, Password, Tail).
 
 try_EHLO(Socket, Options) ->
 	case socket:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n") of
 		ok ->
-			Reply = read_multiline_reply(Socket, "250", []),
+			{ok, Reply} = read_possible_multiline_reply(Socket),
 			[_ | Reply2] = re:split(Reply, "\r\n", [{return, list}, trim]),
 			%io:format("~p~n", [Reply2]),
 			Extensions = lists:map(fun(Entry) ->
@@ -233,12 +267,12 @@ connect([{_, Host} | Tail], Options) ->
 	end,
 	case socket:connect(Proto, Host, Port, SockOpts, 5000) of
 		{ok, Socket} ->
-			case socket:recv(Socket, 0) of
-				{ok, "220-"++_ = Banner} ->
-					Banner2 = read_multiline_reply(Socket, "220", [Banner]),
-					{ok, Socket, Host, Banner2};
-				{ok, "220 "++_ = Banner} ->
+			case read_possible_multiline_reply(Socket) of
+				{ok, "220"++_ = Banner} ->
+					%Banner2 = read_multiline_reply(Socket, "220", [Banner]),
 					{ok, Socket, Host, Banner};
+				%{ok, "220 "++_ = Banner} ->
+					%{ok, Socket, Host, Banner};
 				Other ->
 					io:format("got ~p~n", [Other]),
 					socket:close(Socket),
@@ -249,6 +283,20 @@ connect([{_, Host} | Tail], Options) ->
 	end.
 
 %% read a multiline reply (eg. EHLO reply)
+read_possible_multiline_reply(Socket) ->
+	case socket:recv(Socket, 0) of
+		{ok, Packet} ->
+			case string:substr(Packet, 4, 1) of
+				"-" ->
+					Code = string:substr(Packet, 1, 3),
+					read_multiline_reply(Socket, Code, [Packet]);
+				" " ->
+					{ok, Packet}
+			end;
+		Error ->
+			Error
+	end.
+
 read_multiline_reply(Socket, Code, Acc) ->
 	End = Code++" ",
 	Cont = Code++"-",
@@ -256,7 +304,7 @@ read_multiline_reply(Socket, Code, Acc) ->
 		{ok, Packet} ->
 			case {string:substr(Packet, 1, 3), string:substr(Packet, 4, 1)} of
 				{Code, " "} ->
-					string:join(lists:reverse([Packet | Acc]), "");
+					{ok, string:join(lists:reverse([Packet | Acc]), "")};
 				{Code, "-"} ->
 					read_multiline_reply(Socket, Code, [Packet | Acc]);
 				_ ->
