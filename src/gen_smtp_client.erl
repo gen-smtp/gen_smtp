@@ -73,26 +73,108 @@ send_it(Email, Options, Parent, Ref) ->
 			{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
 				Extensions, Parent, Ref),
 			io:format("Extensions are ~p~n", [Extensions2]),
-			try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
+			Authed = try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
+			io:format("Authentication status is ~p~n", [Authed]),
+			try_sending_it(Email, Socket2, Extensions2),
+			io:format("Mail sending successful~n"),
 			ok
 	end,
 	ok.
 
+try_sending_it({From, To, Body}, Socket, Extensions) ->
+	try_MAIL_FROM(From, Socket, Extensions),
+	try_RCPT_TO(To, Socket, Extensions),
+	try_DATA(Body, Socket, Extensions).
+
+try_MAIL_FROM([$< | _] = From, Socket, Extensions) ->
+	% TODO do we need to bother with SIZE?
+	socket:send(Socket, "MAIL FROM: "++From++"\r\n"),
+	case read_possible_multiline_reply(Socket) of
+		{ok, "250"++_} ->
+			true;
+		Else ->
+			io:format("Mail FROM rejected: ~p~n", [Else]),
+			erlang:error(from_rejected)
+	end;
+try_MAIL_FROM(From, Socket, Extensions) ->
+	% someone was bad and didn't put in the angle brackets
+	try_MAIL_FROM("<"++From++">", Socket, Extensions).
+
+try_RCPT_TO([], _Socket, _Extensions) ->
+	true;
+try_RCPT_TO([[$< | _] = To | Tail], Socket, Extensions) ->
+	socket:send(Socket, "RCPT TO: "++To++"\r\n"),
+	case read_possible_multiline_reply(Socket) of
+		{ok, "250"++_} ->
+			try_RCPT_TO(Tail, Socket, Extensions);
+		{ok, "251"++_} ->
+			try_RCPT_TO(Tail, Socket, Extensions);
+		Else ->
+			io:format("RCPT TO rejected: ~p~n", [Else]),
+			erlang:error(to_rejected)
+	end;
+try_RCPT_TO([To | Tail], Socket, Extensions) ->
+	% someone was bad and didn't put in the angle brackets
+	try_RCPT_TO(["<"++To++">" | Tail], Socket, Extensions).
+
+try_DATA(Body, Socket, Extensions) ->
+	socket:send(Socket, "DATA\r\n"),
+	case read_possible_multiline_reply(Socket) of
+		{ok, "354"++_} ->
+			socket:send(Socket, Body++"\r\n.\r\n"),
+			case read_possible_multiline_reply(Socket) of
+				{ok, "250"++_} ->
+					true;
+				Else ->
+					io:format("Mail rejected: ~p~n", [Else]),
+					erlang:error(data_rejected)
+			end;
+		Else ->
+			io:format("DATA command rejected: ~p~n", [Else]),
+			erlang:error(data_rejected)
+	end.
+
 try_AUTH(Socket, Options, []) ->
-	false;
+	case proplists:get_value(auth, Options) of
+		always ->
+			erlang:error(no_auth);
+		_ ->
+			false
+	end;
 try_AUTH(Socket, Options, undefined) ->
-	false;
+	case proplists:get_value(auth, Options) of
+		always ->
+			erlang:error(no_auth);
+		_ ->
+			false
+	end;
 try_AUTH(Socket, Options, AuthTypes) ->
 	case proplists:is_defined(username, Options) and
-		proplists:is_defined(password, Options) of
+		proplists:is_defined(password, Options) and
+		(proplists:get_value(auth, Options) =/= never) of
 		false ->
-			false;
+			case proplists:get_value(auth, Options) of
+				always ->
+					erlang:error(no_auth);
+				_ ->
+					false
+			end;
 		true ->
 			Username = proplists:get_value(username, Options),
 			Password = proplists:get_value(password, Options),
 			io:format("Auth types: ~p~n", [AuthTypes]),
 			Types = re:split(AuthTypes, " ", [{return, list}, trim]),
-			do_AUTH(Socket, Username, Password, Types)
+			case do_AUTH(Socket, Username, Password, Types) of
+				false ->
+					case proplists:get_value(auth, Options) of
+						always ->
+							erlang:error(auth_failed);
+						_ ->
+							false
+					end;
+				true ->
+					true
+			end
 	end.
 
 do_AUTH(Socket, Username, Password, Types) ->
