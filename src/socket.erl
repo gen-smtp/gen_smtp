@@ -339,6 +339,32 @@ evented_connections_test_() ->
 			close(ListenSocket),
 			close(NewServerSocket)
 		end
+		},
+		%% TODO: figure out if the following passes because
+		%% of an incomplete test case or if this really is
+		%% a magical feature where a single listener
+		%% can respond to either ssl or tcp connections.
+		{"current TCP listener receives SSL connection",
+		fun() ->
+			application:start(crypto),
+			application:start(ssl),
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			begin_inet_async(ListenSocket),
+			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			receive
+				{inet_async, ListenPort, _, {ok,ServerSocket}} -> ok
+			end,
+			{ok, ServerSocket} = handle_inet_async(ListenSocket, ServerSocket),
+			?assert(is_port(ListenSocket)),
+			?assert(is_port(ServerSocket)),
+			{ok, NewServerSocket} = to_ssl_server(ServerSocket),
+			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
+			% Stop the async
+			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			receive _Ignored -> ok end,
+			close(ListenSocket),
+			close(NewServerSocket)
+		end
 		}
 	].
 
