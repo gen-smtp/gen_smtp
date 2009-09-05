@@ -59,7 +59,8 @@
 -export([peername/1]).
 -export([close/1, shutdown/2]).
 -export([active_once/1]).
--export([send_connections_to_current_process/1]).
+-export([begin_inet_async/1]).
+-export([handle_inet_async/2, handle_inet_async/2]).
 -export([to_ssl_server/1,to_ssl_server/2,to_ssl_server/3]).
 -export([to_ssl_client/1,to_ssl_client/2,to_ssl_client/3]).
 -export([type/1]).
@@ -140,11 +141,11 @@ active_once(Socket) ->
 	ssl:setopts(Socket, [{active, once}]).
 
 %% @doc messages will be sent to current process when a client connects
-send_connections_to_current_process(Socket) when is_port(Socket) ->
+begin_inet_async(Socket) when is_port(Socket) ->
 	prim_inet:async_accept(Socket, -1);
-send_connections_to_current_process(Socket) ->
-	{sslsocket,_,{Port,_}} = Socket,
-	send_connections_to_current_process(Port).
+begin_inet_async(Socket) ->
+	Port = extract_port_from_socket(Socket),
+	begin_inet_async(Port).
 
 %% @doc Upgrade a TCP connection to SSL
 to_ssl_server(Socket) ->
@@ -235,11 +236,13 @@ set_sockopt(ListenObject, ClientSocket) ->
 		Error -> socket:close(ClientSocket), Error
 	end.
 
-accept_inet_sync(ListenObject, ClientSocket) ->
+handle_inet_async({inet_async, ListenSocket, _, {ok,ClientSocket}}) ->
+	handle_inet_async(ListenSocket, ClientSocket).
+handle_inet_async(ListenObject, ClientSocket) ->
 	ListenSocket = extract_port_from_socket(ListenObject),
 	set_sockopt(ListenSocket, ClientSocket),
 	%% Signal the network driver that we are ready to accept another connection
-	prim_inet:async_accept(ListenSocket, -1),
+	begin_inet_async(ListenSocket),
 	%% If the listening socket is SSL then negotiate the client socket
 	case is_port(ListenObject) of
 		true ->
@@ -296,12 +299,12 @@ evented_connections_test_() ->
 		{"current process receives connection to TCP listen sockets",
 		fun() ->
 			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
-			send_connections_to_current_process(ListenSocket),
+			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(tcp, "localhost", ?TEST_PORT) end),
 			receive
 				{inet_async, ListenSocket, _, {ok,ServerSocket}} -> ok
 			end,
-			{ok, NewServerSocket} = accept_inet_sync(ListenSocket, ServerSocket),
+			{ok, NewServerSocket} = handle_inet_async(ListenSocket, ServerSocket),
 			?assert(is_port(ServerSocket)),
 			?assertEqual(ServerSocket, NewServerSocket), %% only true for TCP
 			?assert(is_port(ListenSocket)),
@@ -317,12 +320,12 @@ evented_connections_test_() ->
 			application:start(crypto),
 			application:start(ssl),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
-			send_connections_to_current_process(ListenSocket),
+			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
 			receive
 				{inet_async, ListenPort, _, {ok,ServerSocket}} -> ok
 			end,
-			{ok, NewServerSocket} = accept_inet_sync(ListenSocket, ServerSocket),
+			{ok, NewServerSocket} = handle_inet_async(ListenSocket, ServerSocket),
 			?assert(is_port(ServerSocket)),
 			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
