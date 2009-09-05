@@ -140,12 +140,32 @@ active_once(Socket) when is_port(Socket) ->
 active_once(Socket) ->
 	ssl:setopts(Socket, [{active, once}]).
 
-%% @doc messages will be sent to current process when a client connects
+%% @doc {inet_async,...} will be sent to current process when a client connects
 begin_inet_async(Socket) when is_port(Socket) ->
 	prim_inet:async_accept(Socket, -1);
 begin_inet_async(Socket) ->
 	Port = extract_port_from_socket(Socket),
 	begin_inet_async(Port).
+
+%% @doc handle the {inet_async,...} message
+handle_inet_async({inet_async, ListenSocket, _, {ok,ClientSocket}}) ->
+	handle_inet_async(ListenSocket, ClientSocket).
+handle_inet_async(ListenObject, ClientSocket) ->
+	ListenSocket = extract_port_from_socket(ListenObject),
+	case set_sockopt(ListenSocket, ClientSocket) of
+		ok -> ok;
+		Error -> erlang:error(set_sockopt, Error)
+	end,
+	%% Signal the network driver that we are ready to accept another connection
+	begin_inet_async(ListenSocket),
+	%% If the listening socket is SSL then negotiate the client socket
+	case is_port(ListenObject) of
+		true ->
+			{ok, ClientSocket};
+		false ->
+			{ok, UpgradedClientSocket} = to_ssl_server(ClientSocket),
+			{ok, UpgradedClientSocket}
+	end.
 
 %% @doc Upgrade a TCP connection to SSL
 to_ssl_server(Socket) ->
@@ -224,6 +244,7 @@ extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
 extract_port_from_socket(Socket) ->
 	Socket.
 
+-spec(set_sockopt/2 :: (ListSock :: port(), CliSocket :: port()) -> 'ok' | any()).
 set_sockopt(ListenObject, ClientSocket) ->
 	ListenSocket = extract_port_from_socket(ListenObject),
 	true = inet_db:register_socket(ClientSocket, inet_tcp),
@@ -235,23 +256,6 @@ set_sockopt(ListenObject, ClientSocket) ->
 			end;
 		Error -> socket:close(ClientSocket), Error
 	end.
-
-handle_inet_async({inet_async, ListenSocket, _, {ok,ClientSocket}}) ->
-	handle_inet_async(ListenSocket, ClientSocket).
-handle_inet_async(ListenObject, ClientSocket) ->
-	ListenSocket = extract_port_from_socket(ListenObject),
-	set_sockopt(ListenSocket, ClientSocket),
-	%% Signal the network driver that we are ready to accept another connection
-	begin_inet_async(ListenSocket),
-	%% If the listening socket is SSL then negotiate the client socket
-	case is_port(ListenObject) of
-		true ->
-			{ok, ClientSocket};
-		false ->
-			{ok, UpgradedClientSocket} = to_ssl_server(ClientSocket),
-			{ok, UpgradedClientSocket}
-	end.
-
 
 -ifdef(EUNIT).
 -define(TEST_PORT, 7586).
