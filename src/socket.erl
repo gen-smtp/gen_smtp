@@ -301,13 +301,14 @@ evented_connections_test_() ->
 			receive
 				{inet_async, ListenSocket, _, {ok,ServerSocket}} -> ok
 			end,
-			accept_inet_sync(ListenSocket, ServerSocket),
+			{ok, NewServerSocket} = accept_inet_sync(ListenSocket, ServerSocket),
 			?assert(is_port(ServerSocket)),
+			?assertEqual(ServerSocket, NewServerSocket), %% only true for TCP
 			?assert(is_port(ListenSocket)),
 			% Stop the async
 			spawn(fun()-> connect(tcp, "localhost", ?TEST_PORT) end),
 			receive _Ignored -> ok end,
-			close(ServerSocket),
+			close(NewServerSocket),
 			close(ListenSocket)
 		end
 		},
@@ -321,14 +322,15 @@ evented_connections_test_() ->
 			receive
 				{inet_async, ListenPort, _, {ok,ServerSocket}} -> ok
 			end,
-			{ok, NewSocket} = accept_inet_sync(ListenSocket, ServerSocket),
-			?assertMatch([sslsocket|_], tuple_to_list(NewSocket)),
+			{ok, NewServerSocket} = accept_inet_sync(ListenSocket, ServerSocket),
 			?assert(is_port(ServerSocket)),
+			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
 			% Stop the async
 			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
 			receive _Ignored -> ok end,
-			close(ListenSocket)
+			close(ListenSocket),
+			close(NewServerSocket)
 		end
 		}
 	].
