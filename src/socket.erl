@@ -550,7 +550,6 @@ ssl_upgrade_test_() ->
 			{ok, NewClientSocket} = to_ssl_client(ClientSocket),
 			?assertMatch([sslsocket|_], tuple_to_list(NewClientSocket)),
 			receive NewServerSocket -> ok end,
-			?debugFmt("NewServerSocket: ~p",[NewServerSocket]),
 			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
 			close(NewServerSocket),
 			close(NewClientSocket)
