@@ -36,13 +36,8 @@
 		code_change/3]).
 
 
--ifdef(R13B).
--type(ref() :: reference()).
--endif.
-
 -record(state, {
 		listener :: port(),       % Listening socket
-		acceptor :: ref(),       % Asynchronous acceptor's internal reference
 		module :: atom(),
 		hostname :: string(),
 		sessions = [] :: [pid()]
@@ -85,8 +80,8 @@ init([Module, Options]) ->
 	case socket:listen(proplists:get_value(protocol, NewOptions), proplists:get_value(port, NewOptions), [{ip, proplists:get_value(address, NewOptions)}]) of
 		{ok, Listen_socket} ->
 			%%Create first accepting process
-			{ok, Ref} = prim_inet:async_accept(Listen_socket, -1),
-			{ok, #state{listener = Listen_socket, acceptor = Ref, module = Module, hostname = proplists:get_value(domain, NewOptions)}};
+			socket:begin_inet_async(Listen_socket),
+			{ok, #state{listener = Listen_socket, module = Module, hostname = proplists:get_value(domain, NewOptions)}};
 		{error, Reason} ->
 			io:format("Could not listen on socket because:  ~p~n", [Reason]),
 			{stop, Reason}
@@ -104,35 +99,21 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 %% @hidden
-handle_info({inet_async, ListSock, Ref, {ok, CliSocket}}, #state{listener=ListSock, acceptor=Ref} = State) ->
+handle_info({inet_async, ListenSocket,_, {ok, ClientAcceptSocket}}, #state{listener=ListenSocket} = State) ->
 	try
-		case set_sockopt(ListSock, CliSocket) of
-			ok  ->
-				ok;
-			{error, Reason} ->
-				exit({set_sockopt, Reason})
-		end,
-
+		{ok, ClientSocket} = socket:handle_inet_async(ListenSocket, ClientAcceptSocket),
 		%% New client connected
 		% io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(CliSocket, State#state.module, State#state.hostname, length(State#state.sessions) + 1) of
+		Sessions = case gen_smtp_server_session:start(ClientSocket, State#state.module, State#state.hostname, length(State#state.sessions) + 1) of
 			{ok, Pid} ->
 				link(Pid),
-				gen_tcp:controlling_process(CliSocket, Pid),
+				socket:controlling_process(ClientSocket, Pid),
 				lists:append(State#state.sessions, [Pid]);
 			_Other ->
 				State#state.sessions
 		end,
-		%% Signal the network driver that we are ready to accept another connection
-		case prim_inet:async_accept(ListSock, -1) of
-			{ok, NewRef} ->
-				ok;
-			{error, NewRef} ->
-				exit({async_accept, inet:format_error(NewRef)})
-		end,
-
-		{noreply, State#state{acceptor=NewRef, sessions = Sessions}}
-	catch exit:Why ->
+		{noreply, State#state{sessions = Sessions}}
+	catch _:Why ->
 		error_logger:error_msg("Error in async accept: ~p.\n", [Why]),
 		{stop, Why, State}
 end;
@@ -146,7 +127,7 @@ handle_info({'EXIT', From, Reason}, State) ->
 			{noreply, State}
 	end;
 	
-handle_info({inet_async, ListSock, Ref, Error}, #state{listener=ListSock, acceptor=Ref} = State) ->
+handle_info({inet_async, ListenSocket,_, Error}, #state{listener=ListenSocket} = State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),
 	{stop, Error, State};
 
@@ -156,27 +137,12 @@ handle_info(_Info, State) ->
 %% @hidden
 terminate(Reason, State) ->
 	io:format("Terminating due to ~p", [Reason]),
-	gen_tcp:close(State#state.listener),
+	socket:close(State#state.listener),
 	ok.
 
 %% @hidden
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
-
--spec(set_sockopt/2 :: (ListSock :: port(), CliSocket :: port()) -> 'ok' | any()).
-set_sockopt(ListSock, CliSocket) ->
-	true = inet_db:register_socket(CliSocket, inet_tcp),
-	case prim_inet:getopts(ListSock, [active, nodelay, keepalive, delay_send, priority, tos]) of
-		{ok, Opts} ->
-			case prim_inet:setopts(CliSocket, Opts) of
-				ok -> ok;
-				Error -> gen_tcp:close(CliSocket),
-					Error % return error
-			end;
-		Error ->
-			gen_tcp:close(CliSocket),
-			Error % return error
-	end.
 
 guess_FQDN() ->
 	{ok, Hostname} = inet:gethostname(),
