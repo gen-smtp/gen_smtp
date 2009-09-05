@@ -36,13 +36,18 @@
 		code_change/3]).
 
 
+-record(listener, {
+		hostname :: list(),
+		port :: port(),
+		socket :: port() | any()
+		}).
+-type(listener() :: #listener{}).
+
 -record(state, {
-		listener :: port(),       % Listening socket
+		listeners :: [listener()],  % Listening sockets (tcp or ssl)
 		module :: atom(),
-		hostname :: string(),
 		sessions = [] :: [pid()]
 		}).
-
 -type(state() :: #state{}).
 
 %% @doc Start the listener with callback module `Module' on with options `Options' linked to the calling process.
@@ -70,22 +75,53 @@ start_link(Module) ->
 stop(Pid) -> 
 	gen_server:call(Pid, stop).
 
-%% @hidden
-init([Module, Options]) ->
-	DefaultOptions = [{domain, guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}],
-	NewOptions = lists:ukeymerge(1, lists:sort(Options), lists:sort(DefaultOptions)),
-	io:format("Options: ~p~n", [NewOptions]),
-	io:format("~p starting at ~p~n", [?MODULE, node()]),
-	process_flag(trap_exit, true),
-	case socket:listen(proplists:get_value(protocol, NewOptions), proplists:get_value(port, NewOptions), [{ip, proplists:get_value(address, NewOptions)}]) of
-		{ok, Listen_socket} ->
-			%%Create first accepting process
-			socket:begin_inet_async(Listen_socket),
-			{ok, #state{listener = Listen_socket, module = Module, hostname = proplists:get_value(domain, NewOptions)}};
-		{error, Reason} ->
-			io:format("Could not listen on socket because:  ~p~n", [Reason]),
-			{stop, Reason}
-	end.
+%% @doc
+%% The gen_smtp_server is given a list of tcp listener configurations.
+%% You'll typically only want to listen on one port so your options
+%% will be a single-item list containing a proplist. e.g.:
+%%   [ [{port,25},{protocol,tcp},{domain,"myserver.com"},{address,,{0,0,0,0}}]
+%%   ]
+%% by providing additional configurations the server will listen on multiple
+%% ports over either tcp or ssl on any given port. e.g.:
+%%   [ [{port,25},{protocol,tcp},{domain,"myserver.com"},{address,{0,0,0,0}}],
+%%     [{port,465},{protocol,ssl},{domain,"secure.myserver.com"},{address,{0.0.0.0}}]
+%%   ]
+-spec(init/1 :: (Args :: list()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+init([Module, Configurations]) ->
+	DefaultConfig = [{domain, guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}],
+	try
+		case Configurations of
+			[FirstConfig|_] when is_list(FirstConfig) -> ok;
+			_ -> exit({init,"Please start gen_smtp_server with an options argument formatted as a list of proplists"})
+		end,
+		Listeners = lists:map(
+			fun(Config) ->
+				NewConfig = lists:ukeymerge(1, lists:sort(Config), lists:sort(DefaultConfig)),
+				Port     = proplists:get_value(port,     NewConfig),
+				IP       = proplists:get_value(address,  NewConfig),
+				Hostname = proplists:get_value(domain,   NewConfig),
+				Protocol = proplists:get_value(protocol, NewConfig),
+				io:format("~p starting at ~p~n", [?MODULE, node()]),
+				io:format("listening on ~p:~p via ~p~n", [IP, Port, Protocol]),
+				process_flag(trap_exit, true),
+				case socket:listen(Protocol, Port, [{ip, IP}]) of
+					{ok, ListenSocket} ->
+						io:format("ListenSocket: ~p (~p)~n", [ListenSocket, Protocol]),
+						%%Create first accepting process
+						socket:begin_inet_async(ListenSocket),
+						#listener{port = socket:extract_port_from_socket(ListenSocket),
+						          hostname = Hostname,
+						          socket = ListenSocket};
+					{error, Reason} ->
+						exit({init, Reason})
+				end
+			end,
+			Configurations
+		),
+		{ok, #state{listeners = Listeners, module = Module}}
+	catch exit:Why ->
+		{stop, Why}
+  end.
 
 %% @hidden
 handle_call(stop, _From, State) ->
@@ -99,12 +135,20 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 %% @hidden
-handle_info({inet_async, ListenSocket,_, {ok, ClientAcceptSocket}}, #state{listener=ListenSocket} = State) ->
+handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}}, #state{module = Module} = State) ->
 	try
-		{ok, ClientSocket} = socket:handle_inet_async(ListenSocket, ClientAcceptSocket),
+		% find this ListenPort in our listeners.
+		[Listener] = lists:flatten(lists:map(
+			fun(L)-> case L#listener.port of
+			           ListenPort -> L;
+			           _ -> []
+			end end,
+			State#state.listeners
+		)),
+		{ok, ClientSocket} = socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket),
 		%% New client connected
 		% io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(ClientSocket, State#state.module, State#state.hostname, length(State#state.sessions) + 1) of
+		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, Listener#listener.hostname, length(State#state.sessions) + 1) of
 			{ok, Pid} ->
 				link(Pid),
 				socket:controlling_process(ClientSocket, Pid),
@@ -113,10 +157,10 @@ handle_info({inet_async, ListenSocket,_, {ok, ClientAcceptSocket}}, #state{liste
 				State#state.sessions
 		end,
 		{noreply, State#state{sessions = Sessions}}
-	catch _:Why ->
-		error_logger:error_msg("Error in async accept: ~p.\n", [Why]),
-		{stop, Why, State}
-end;
+	catch _:Error ->
+		error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),
+		{noreply, State}
+	end;
 
 handle_info({'EXIT', From, Reason}, State) ->
 	case lists:member(From, State#state.sessions) of
@@ -127,7 +171,7 @@ handle_info({'EXIT', From, Reason}, State) ->
 			{noreply, State}
 	end;
 	
-handle_info({inet_async, ListenSocket,_, Error}, #state{listener=ListenSocket} = State) ->
+handle_info({inet_async, ListenSocket,_, Error}, State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),
 	{stop, Error, State};
 
@@ -137,7 +181,7 @@ handle_info(_Info, State) ->
 %% @hidden
 terminate(Reason, State) ->
 	io:format("Terminating due to ~p", [Reason]),
-	socket:close(State#state.listener),
+	lists:foreach(fun({S,_})->socket:close(S)end, State#state.listeners),
 	ok.
 
 %% @hidden
