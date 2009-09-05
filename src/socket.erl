@@ -59,6 +59,7 @@
 -export([peername/1]).
 -export([close/1, shutdown/2]).
 -export([active_once/1]).
+-export([send_connections_to_current_process/1]).
 -export([to_ssl_server/1,to_ssl_server/2,to_ssl_server/3]).
 -export([to_ssl_client/1,to_ssl_client/2,to_ssl_client/3]).
 -export([type/1]).
@@ -90,7 +91,8 @@ accept(Socket, Timeout) when is_port(Socket) ->
 			{ok, Opts} = inet:getopts(Socket, [active,keepalive,packet,reuseaddr]),
 			inet:setopts(NewSocket, Opts),
 			{ok, NewSocket};
-		Error -> Error
+		Error ->
+			Error
 	end;
 accept(Socket, Timeout) ->
 	case ssl:transport_accept(Socket, Timeout) of
@@ -136,6 +138,13 @@ active_once(Socket) when is_port(Socket) ->
 	inet:setopts(Socket, [{active, once}]);
 active_once(Socket) ->
 	ssl:setopts(Socket, [{active, once}]).
+
+%% @doc messages will be sent to current process when a client connects
+send_connections_to_current_process(Socket) when is_port(Socket) ->
+	prim_inet:async_accept(Socket, -1);
+send_connections_to_current_process(Socket) ->
+	{sslsocket,_,{Port,_}} = Socket,
+	send_connections_to_current_process(Port).
 
 %% @doc Upgrade a TCP connection to SSL
 to_ssl_server(Socket) ->
@@ -209,25 +218,55 @@ proplist_merge(PrimaryList, DefaultList) ->
 		Merged
 	).
 
+extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
+	SSLPort;
+extract_port_from_socket(Socket) ->
+	Socket.
+
+set_sockopt(ListenObject, ClientSocket) ->
+	ListenSocket = extract_port_from_socket(ListenObject),
+	true = inet_db:register_socket(ClientSocket, inet_tcp),
+	case prim_inet:getopts(ListenSocket, [active, nodelay, keepalive, delay_send, priority, tos]) of
+		{ok, Opts} ->
+			case prim_inet:setopts(ClientSocket, Opts) of
+				ok -> ok;
+				Error -> socket:close(ClientSocket), Error
+			end;
+		Error -> socket:close(ClientSocket), Error
+	end.
+
+accept_inet_sync(ListenObject, ClientSocket) ->
+	ListenSocket = extract_port_from_socket(ListenObject),
+	set_sockopt(ListenSocket, ClientSocket),
+	%% Signal the network driver that we are ready to accept another connection
+	prim_inet:async_accept(ListenSocket, -1),
+	%% If the listening socket is SSL then negotiate the client socket
+	case is_port(ListenObject) of
+		true ->
+			{ok, ClientSocket};
+		false ->
+			{ok, UpgradedClientSocket} = to_ssl_server(ClientSocket),
+			{ok, UpgradedClientSocket}
+	end.
+
 
 -ifdef(EUNIT).
 -define(TEST_PORT, 7586).
+
 connect_test_() ->
 	[
 		{"listen and connect via tcp",
 		fun() ->
 			Self = self(),
 			spawn(fun() ->
-						{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+						{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 						?assert(is_port(ListenSocket)),
 						{ok, ServerSocket} = accept(ListenSocket),
 						controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
-			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT,  tcp_connect_options([])),
-			receive
-				ListenSocket when is_port(ListenSocket) -> ok
-			end,
+			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
+			receive ListenSocket when is_port(ListenSocket) -> ok end,
 			?assert(is_port(ClientSocket)),
 			close(ListenSocket)
 		end
@@ -238,17 +277,57 @@ connect_test_() ->
 			application:start(crypto),
 			application:start(ssl),
 			spawn(fun() ->
-						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([])),
+						{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
 						?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
 						{ok, ServerSocket} = accept(ListenSocket),
 						controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
 			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT,  []),
-			receive
-				{sslsocket,_,_} = ListenSocket -> ok
-			end,
+			receive {sslsocket,_,_} = ListenSocket -> ok end,
 			?assertMatch([sslsocket|_], tuple_to_list(ClientSocket)),
+			close(ListenSocket)
+		end
+		}
+	].
+
+evented_connections_test_() ->
+	[
+		{"current process receives connection to TCP listen sockets",
+		fun() ->
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			send_connections_to_current_process(ListenSocket),
+			spawn(fun()-> connect(tcp, "localhost", ?TEST_PORT) end),
+			receive
+				{inet_async, ListenSocket, _, {ok,ServerSocket}} -> ok
+			end,
+			accept_inet_sync(ListenSocket, ServerSocket),
+			?assert(is_port(ServerSocket)),
+			?assert(is_port(ListenSocket)),
+			% Stop the async
+			spawn(fun()-> connect(tcp, "localhost", ?TEST_PORT) end),
+			receive _Ignored -> ok end,
+			close(ServerSocket),
+			close(ListenSocket)
+		end
+		},
+		{"current process receives connection to SSL listen sockets",
+		fun() ->
+			application:start(crypto),
+			application:start(ssl),
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT),
+			send_connections_to_current_process(ListenSocket),
+			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			receive
+				{inet_async, ListenPort, _, {ok,ServerSocket}} -> ok
+			end,
+			{ok, NewSocket} = accept_inet_sync(ListenSocket, ServerSocket),
+			?assertMatch([sslsocket|_], tuple_to_list(NewSocket)),
+			?assert(is_port(ServerSocket)),
+			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
+			% Stop the async
+			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			receive _Ignored -> ok end,
 			close(ListenSocket)
 		end
 		}
@@ -428,17 +507,15 @@ ssl_upgrade_test_() ->
 			spawn(fun() ->
 			      	{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			      	{ok, ServerSocket} = accept(ListenSocket),
-			      	Self ! ServerSocket,
 			      	{ok, NewServerSocket} = socket:to_ssl_server(ServerSocket),
 			      	Self ! NewServerSocket
 			      end),
 			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
 			?assert(is_port(ClientSocket)),
-			receive ServerSocket -> ok end,
-			?assert(is_port(ServerSocket)),
 			{ok, NewClientSocket} = to_ssl_client(ClientSocket),
 			?assertMatch([sslsocket|_], tuple_to_list(NewClientSocket)),
 			receive NewServerSocket -> ok end,
+			?debugFmt("NewServerSocket: ~p",[NewServerSocket]),
 			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
 			close(NewServerSocket),
 			close(NewClientSocket)
