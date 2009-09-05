@@ -61,6 +61,7 @@
 -export([active_once/1]).
 -export([begin_inet_async/1]).
 -export([handle_inet_async/2, handle_inet_async/2]).
+-export([extract_port_from_socket/1]).
 -export([to_ssl_server/1,to_ssl_server/2,to_ssl_server/3]).
 -export([to_ssl_client/1,to_ssl_client/2,to_ssl_client/3]).
 -export([type/1]).
