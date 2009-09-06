@@ -41,9 +41,7 @@
                               {reuseaddr, true},
                               {ssl_imp, new}]).
 -define(SSL_CONNECT_OPTIONS,[ {active, false},
-                              {certfile, "server.crt"},
                               {depth, 0},
-                              {keyfile, "server.key"},
                               {packet, line},
                               {ssl_imp, new}]).
 
@@ -177,6 +175,7 @@ to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
 to_ssl_server(Socket, Options, Timeout) ->
 	erlang:error(ssl_connected, "Socket is already using SSL").
+
 to_ssl_client(Socket) ->
 	to_ssl_client(Socket, []).
 to_ssl_client(Socket, Options) ->
