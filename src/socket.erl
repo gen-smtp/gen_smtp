@@ -522,9 +522,7 @@ option_test_() ->
 		{"ssl_connect_options merges provided proplist",
 		fun() ->
 			?assertMatch([list,{active, true},
-			                   {certfile, "server.crt"},
 			                   {depth, 0},
-			                   {keyfile, "server.key"},
 			                   {packet, 2},
 			                   {ssl_imp, new}],
 			             ssl_connect_options([{active, true},{packet,2}]))
