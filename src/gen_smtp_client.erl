@@ -27,7 +27,6 @@
 
 -import(smtp_util, [guess_FQDN/0, compute_cram_digest/2, mxlookup/1]).
 
--export([send/2]).
 
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
@@ -44,6 +43,13 @@
 	]).
 
 -define(TIMEOUT, 1200).
+
+-ifdef(EUNIT).
+-include_lib("eunit/include/eunit.hrl").
+-compile(export_all).
+-else.
+-export([send/2, send_it/3]).
+-endif.
 
 send(Email, Options) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
@@ -79,13 +85,18 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 			{error, no_more_hosts, {permanant_failure, Host, Message}};
 		throw:{FailureType, Message} ->
 			case proplists:get_value(Host, RetryList) of
-				{Host, RetryCount} when RetryCount >= Retries ->
+				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
 					% out of chances
+					io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
 					NewHosts = lists:keydelete(Host, 2, Hosts),
 					NewRetryList = lists:keydelete(Host, 1, RetryList);
+				RetryCount when is_integer(RetryCount) ->
+					io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
+					NewHosts = lists:append(lists:keydelete(Host, 2, Hosts), [{Distance, Host}]),
+					NewRetryList = lists:append(lists:keydelete(Host, 1, RetryList), [{Host, RetryCount + 1}]);
 				_ ->
 					% otherwise...
-					io:format("scheduling ~s for retry~n", [Host]),
+					io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
 					NewHosts = lists:append(lists:keydelete(Host, 2, Hosts), [{Distance, Host}]),
 					NewRetryList = lists:append(lists:keydelete(Host, 1, RetryList), [{Host, 1}])
 			end,
@@ -413,8 +424,6 @@ read_possible_multiline_reply(Socket) ->
 	end.
 
 read_multiline_reply(Socket, Code, Acc) ->
-	End = Code++" ",
-	Cont = Code++"-",
 	case socket:recv(Socket, 0, ?TIMEOUT) of
 		{ok, Packet} ->
 			case {string:substr(Packet, 1, 3), string:substr(Packet, 4, 1)} of
@@ -455,4 +464,82 @@ check_options(Options) ->
 			end
 	end.
 
+-ifdef(EUNIT).
 
+session_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				{ok, ListenSock} = socket:listen(tcp, 9876),
+				{ListenSock}
+		end,
+		fun({ListenSock}) ->
+				socket:close(ListenSock)
+		end,
+		[fun({ListenSock}) ->
+					{"simple session initiation",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"} | ?DEFAULT_OPTIONS],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"retry on crashed EHLO",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"} | ?DEFAULT_OPTIONS],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:close(X),
+								{ok, Y} = socket:accept(ListenSock, 1000),
+								socket:send(Y, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
+								socket:close(Y),
+								{ok, Z} = socket:accept(ListenSock, 1000),
+								socket:send(Z, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Z, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"retry on crashed EHLO only 1 time if requested",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {retries, 1} | ?DEFAULT_OPTIONS],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:close(X),
+								{ok, Y} = socket:accept(ListenSock, 1000),
+								socket:send(Y, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
+								socket:close(Y),
+								?assertEqual({error, timeout}, socket:accept(ListenSock, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"abort on 554 greeting",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {retries, 1} | ?DEFAULT_OPTIONS],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "554 get lost, kid\r\n"),
+								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end
+		]
+	}.
+
+
+-endif.
