@@ -111,8 +111,8 @@ recv(Socket, Length) ->
 	recv(Socket, Length, infinity).
 recv(Socket, Length, Timeout) when is_port(Socket) ->
 	gen_tcp:recv(Socket, Length, Timeout);
-recv(Socket, Data, Timeout) ->
-	ssl:recv(Socket, Data, Timeout).
+recv(Socket, Length, Timeout) ->
+	ssl:recv(Socket, Length, Timeout).
 
 controlling_process(Socket, NewOwner) when is_port(Socket) ->
 	gen_tcp:controlling_process(Socket, NewOwner);

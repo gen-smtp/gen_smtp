@@ -57,7 +57,7 @@ handle_VRFY(_Address, State) ->
 handle_AUTH(Type, "username", "PaSSw0rd", State) when Type =:= login; Type =:= plain ->
 	{ok, State};
 handle_AUTH('cram-md5', "username", {Digest, Seed}, State) ->
-	case gen_smtp_server_session:compute_cram_digest(<<"PaSSw0rd">>, Seed) of
+	case smtp_util:compute_cram_digest(<<"PaSSw0rd">>, Seed) of
 		Digest ->
 			{ok, State};
 		_ ->

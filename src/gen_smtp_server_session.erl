@@ -25,7 +25,10 @@
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
 
+-import(smtp_util, [trim_crlf/1]).
+
 -ifdef(EUNIT).
+-import(smtp_util, [compute_cram_digest/2]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -33,7 +36,7 @@
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/4, start/4, compute_cram_digest/2]).
+-export([start_link/4, start/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -663,9 +666,6 @@ has_extension(Exts, Ext) ->
 			{true, Value}
 	end.
 
--spec(trim_crlf/1 :: (String :: string()) -> string()).
-trim_crlf(String) ->
-	string:strip(string:strip(String, right, $\n), right, $\r).
 
 -spec(try_auth/4 :: (AuthType :: 'login' | 'plain' | 'cram-md5', Username :: string(), Credential :: string() | {string(), string()}, State :: #state{}) -> {'ok', #state{}}).
 try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope} = State) ->
@@ -695,11 +695,6 @@ get_cram_string(Hostname) ->
 	%A = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
 	%B = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
 	%binary_to_list(base64:encode(lists:flatten(A ++ B))).
-
--spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> string()).
-compute_cram_digest(Key, Data) ->
-	Bin = crypto:md5_mac(Key, Data),
-	lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->

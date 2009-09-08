@@ -24,9 +24,10 @@
 %% smarthost.
 
 -module(gen_smtp_client).
--compile(export_all).
 
--include_lib("kernel/src/inet_dns.hrl").
+-import(smtp_util, [guess_FQDN/0, compute_cram_digest/2, mxlookup/1]).
+
+-export([send/2]).
 
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
@@ -41,6 +42,8 @@
 		"LOGIN",
 		"PLAIN"
 	]).
+
+-define(TIMEOUT, 1200).
 
 send(Email, Options) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
@@ -228,7 +231,7 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 		{ok, "334 "++Rest} ->
 			Seed64 = string:strip(string:strip(Rest, right, $\n), right, $\r),
 			Seed = base64:decode_to_string(Seed64),
-			Digest = gen_smtp_server_session:compute_cram_digest(Password, Seed),
+			Digest = compute_cram_digest(Password, Seed),
 			String = binary_to_list(base64:encode(Username++" "++Digest)),
 			socket:send(Socket, String++"\r\n"),
 			case read_possible_multiline_reply(Socket) of
@@ -378,7 +381,6 @@ connect(Host, Options) ->
 		OPort when is_integer(OPort) ->
 			OPort
 	end,
-	%io:format("doing socket connect ~p, ~p, ~p, 5000~n", [Proto, Host, Port, SockOpts]),
 	case socket:connect(Proto, Host, Port, SockOpts, 5000) of
 		{ok, Socket} ->
 			case read_possible_multiline_reply(Socket) of
@@ -397,7 +399,7 @@ connect(Host, Options) ->
 
 %% read a multiline reply (eg. EHLO reply)
 read_possible_multiline_reply(Socket) ->
-	case socket:recv(Socket, 0) of
+	case socket:recv(Socket, 0, ?TIMEOUT) of
 		{ok, Packet} ->
 			case string:substr(Packet, 4, 1) of
 				"-" ->
@@ -413,7 +415,7 @@ read_possible_multiline_reply(Socket) ->
 read_multiline_reply(Socket, Code, Acc) ->
 	End = Code++" ",
 	Cont = Code++"-",
-	case socket:recv(Socket, 0) of
+	case socket:recv(Socket, 0, ?TIMEOUT) of
 		{ok, Packet} ->
 			case {string:substr(Packet, 1, 3), string:substr(Packet, 4, 1)} of
 				{Code, " "} ->
@@ -453,32 +455,4 @@ check_options(Options) ->
 			end
 	end.
 
-% returns a sorted list of mx servers, lowest distance first
-mxlookup(Domain) ->
-	case whereis(inet_db) of
-		P when is_pid(P) ->
-			ok;
-		_ -> 
-			inet_db:start(),
-			inet_db:init()
-	end,
-	case lists:keyfind(nameserver, 1, inet_db:get_rc()) of
-		false ->
-			% we got no nameservers configured, suck in resolv.conf
-			inet_config:do_load_resolv(os:type(), longnames);
-		_ ->
-			ok
-	end,
-	case inet_res:lookup(Domain, in, ?S_MX) of
-		{error, Reply} ->
-			Reply;
-		Result ->
-			lists:sort(fun({Pref, _Name}, {Pref2, _Name2}) -> Pref =< Pref2 end, Result)
-	end.
-
-guess_FQDN() ->
-	{ok, Hostname} = inet:gethostname(),
-	{ok, Hostent} = inet:gethostbyname(Hostname),
-	{hostent, FQDN, _Aliases, inet, _, _Addresses} = Hostent,
-	FQDN.
 
