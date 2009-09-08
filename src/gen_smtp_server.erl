@@ -106,7 +106,6 @@ init([Module, Configurations]) ->
 				process_flag(trap_exit, true),
 				case socket:listen(Protocol, Port, [{ip, IP}]) of
 					{ok, ListenSocket} ->
-						io:format("ListenSocket: ~p (~p)~n", [ListenSocket, Protocol]),
 						%%Create first accepting process
 						socket:begin_inet_async(ListenSocket),
 						#listener{port = socket:extract_port_from_socket(ListenSocket),
