@@ -26,6 +26,8 @@
 -module(gen_smtp_server).
 -behaviour(gen_server).
 
+-import(smtp_util, [guess_FQDN/0]).
+
 -define(PORT, 2525).
 
 %% External API
@@ -186,10 +188,3 @@ terminate(Reason, State) ->
 %% @hidden
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
-
-guess_FQDN() ->
-	{ok, Hostname} = inet:gethostname(),
-	{ok, Hostent} = inet:gethostbyname(Hostname),
-	{hostent, FQDN, _Aliases, inet, _, _Addresses} = Hostent,
-	FQDN.
-
