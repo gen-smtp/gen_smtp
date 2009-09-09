@@ -98,7 +98,7 @@ start(Socket, Module, Hostname, SessionCount) ->
 init([Socket, Module, Hostname, SessionCount]) ->
 	{A1, A2, A3} = now(),
 	random:seed(A1, A2, A3),
-	{ok, {PeerName, _Port}} = inet:peername(Socket),
+	{ok, {PeerName, _Port}} = socket:peername(Socket),
 	case Module:init(Hostname, SessionCount, PeerName) of
 		{ok, Banner, CallbackState} ->
 			socket:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
