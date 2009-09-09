@@ -65,12 +65,12 @@ start(Module, Options) when is_list(Options) ->
 %% @doc Start the listener with callback module `Module' with default options linked to no process.
 -spec(start/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start(Module) ->
-	start(Module, []).
+	start(Module, [[]]).
 
 %% @doc Start the listener with callback module `Module' with default options linked to the calling process.
 -spec(start_link/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start_link(Module) ->
-	start_link(Module, []).
+	start_link(Module, [[]]).
 
 %% @doc Stop the listener pid() `Pid' with reason `normal'.
 -spec(stop/1 :: (Pid :: pid()) -> 'ok').
