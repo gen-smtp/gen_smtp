@@ -330,7 +330,8 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 
 	case has_extension(Extensions, "AUTH") of
 		false ->
-			socket:send(Socket, "502 Error: AUTH not implemented\r\n");
+			socket:send(Socket, "502 Error: AUTH not implemented\r\n"),
+			{ok, State};
 		{true, AvailableTypes} ->
 			case lists:member(string:to_upper(AuthType), string:tokens(AvailableTypes, " ")) of
 				false ->

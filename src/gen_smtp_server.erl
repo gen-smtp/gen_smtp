@@ -172,6 +172,10 @@ handle_info({'EXIT', From, Reason}, State) ->
 			{noreply, State}
 	end;
 	
+handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
+	io:format("Client terminated connection with econnaborted~n"),
+	{noreply, State};
+
 handle_info({inet_async, ListenSocket,_, Error}, State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),
 	{stop, Error, State};
@@ -182,7 +186,7 @@ handle_info(_Info, State) ->
 %% @hidden
 terminate(Reason, State) ->
 	io:format("Terminating due to ~p", [Reason]),
-	lists:foreach(fun({S,_})->socket:close(S)end, State#state.listeners),
+	lists:foreach(fun({S,_}) -> catch socket:close(S) end, State#state.listeners),
 	ok.
 
 %% @hidden
