@@ -127,12 +127,13 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
+handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Env, module = Module} = State) ->
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
+	Envelope = Env#envelope{data = list_to_binary(lists:reverse(Env#envelope.data))},
 	Valid = case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
-			case length(Envelope#envelope.data) > list_to_integer(Value) of
+			case size(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
 					socket:send(Socket, "552 Message too large\r\n"),
 					false;
@@ -796,7 +797,7 @@ smtp_session_test_() ->
 		fun() ->
 				Self = self(),
 				spawn(fun() ->
-							{ok, ListenSock} = socket:listen(tcp, 9876),
+							{ok, ListenSock} = socket:listen(tcp, 9876, [binary]),
 							{ok, X} = socket:accept(ListenSock),
 							socket:controlling_process(X, Self),
 							Self ! X
@@ -965,7 +966,7 @@ smtp_session_auth_test_() ->
 		fun() ->
 				Self = self(),
 				spawn(fun() ->
-							{ok, ListenSock} = socket:listen(tcp, 9876),
+							{ok, ListenSock} = socket:listen(tcp, 9876, [binary]),
 							{ok, X} = socket:accept(ListenSock),
 							socket:controlling_process(X, Self),
 							Self ! X
@@ -1473,7 +1474,7 @@ smtp_session_tls_test_() ->
 				fun() ->
 						Self = self(),
 						spawn(fun() ->
-									{ok, ListenSock} = socket:listen(tcp, 9876),
+									{ok, ListenSock} = socket:listen(tcp, 9876, [binary]),
 									{ok, X} = socket:accept(ListenSock),
 									socket:controlling_process(X, Self),
 									Self ! X
