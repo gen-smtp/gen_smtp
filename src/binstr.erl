@@ -60,7 +60,7 @@ strrchr(Bin, C, I) ->
 	case Bin of
 		<<_X:I/binary, C, _Rest/binary>> ->
 			I+1;
-		_ when I =:= 1 ->
+		_ when I =< 1 ->
 			0;
 		_ ->
 			strrchr(Bin, C, I-1)
@@ -88,7 +88,7 @@ strrpos(Bin, C, I, S) ->
 	case Bin of
 		<<_X:I/binary, C:S/binary, _Rest/binary>> ->
 			I+1;
-		_ when I =:= 1 ->
+		_ when I =< 1 ->
 			0;
 		_ ->
 			strrpos(Bin, C, I-1, S)
@@ -170,6 +170,8 @@ strip(Bin) ->
 strip(Bin, Dir) ->
 	strip(Bin, Dir, $\s).
 
+strip(<<>>, _, _) ->
+	<<>>;
 strip(Bin, both, C) ->
 	strip(strip(Bin, left, C), right, C);
 strip(<<C, _Rest/binary>> = Bin, left, C) ->
