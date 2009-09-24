@@ -127,7 +127,7 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-handle_info({_Proto, Socket, ".\r\n"}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
+handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Envelope, module = Module} = State) ->
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
 	Valid = case has_extension(State#state.extensions, "SIZE") of
@@ -155,48 +155,48 @@ handle_info({_Proto, Socket, ".\r\n"}, #state{readmessage = true, envelope = Env
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
 			end
 	end;
-handle_info({_Proto, Socket, "\r\n"}, #state{readheaders = true, envelope = Envelope} = State) ->
+handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = Envelope} = State) ->
 	%io:format("Header terminator~n", []),
 	socket:active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
 	case Packet of
-		"." ++ String ->
-			String;
-		String ->
-			String
+		<<$., Bin/binary>> ->
+			Bin;
+		Bin ->
+			Bin
 	end,
-	%io:format("Header candidate: ~p~n", [String]),
-	NewState = case String of % first, check for a leading space or tab
-		[H | _T] when H =:= $\s; H =:= $\t ->
+	%io:format("Header candidate: ~p~n", [Bin]),
+	NewState = case Bin of % first, check for a leading space or tab
+		<<H:1/binary, _Rest/binary>> when H =:= <<"\s">>; H =:= <<"\t">> ->
 			% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
 			case Envelope#envelope.headers of
 				[] ->
 					% if the header list is empty, this means that this line can't be a continuation of a previous header
 					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}};
+						envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}};
 				_ ->
 					[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
-					State#state{envelope = Envelope#envelope{headers = [{FieldName, string:concat(FieldValue, trim_crlf(String))} | T]}}
+					State#state{envelope = Envelope#envelope{headers = [{FieldName, list_to_binary([FieldValue, binstr:chomp(Bin)])} | T]}}
 			end;
 		_ -> % okay, now see if it's a header
-			case string:str(String, ":") of
+			case binstr:strchr(Bin, $:) of
 				0 -> % not a line starting a field
 					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String), headers = lists:reverse(Envelope#envelope.headers)}};
+						envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
 				1 -> % WTF, colon as first character on line
 					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String), headers = lists:reverse(Envelope#envelope.headers)}};
+						envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
 				Index ->
-					FieldName = string:substr(String, 1, Index - 1),
+					FieldName = binstr:substr(Bin, 1, Index - 1),
 					F = fun(X) -> X > 32 andalso X < 127 end,
-					case lists:all(F, FieldName) of
+					case lists:all(F, binary_to_list(FieldName)) of
 						true ->
-							FieldValue = string:strip(trim_crlf(string:substr(String, Index+1))),
+							FieldValue = binstr:strip(binstr:chomp(binstr:substr(Bin, Index+1))),
 							State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
 						false ->
 							State#state{readmessage = true, readheaders = false,
-								envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String), headers = lists:reverse(Envelope#envelope.headers)}}
+								envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}}
 					end
 			end
 	end,
@@ -206,15 +206,15 @@ handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Enve
 	%io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
 	case Packet of
-		"." ++ String ->
-			String;
-		String ->
-			String
+		<<$., Bin/binary>> ->
+			Bin;
+		Bin ->
+			Bin
 	end,
 	socket:active_once(Socket),
-	{noreply, State#state{envelope = Envelope#envelope{data = string:concat(Envelope#envelope.data, String)}}, ?TIMEOUT};
+	{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, State) ->
-	case handle_request(parse_request(Packet), State) of
+	case handle_request(parse_request(binary_to_list(Packet)), State) of
 		{ok, NewState} ->
 			socket:active_once(NewState#state.socket),
 			{noreply, NewState, ?TIMEOUT};

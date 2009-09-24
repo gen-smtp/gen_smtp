@@ -106,7 +106,7 @@ init([Module, Configurations]) ->
 				io:format("~p starting at ~p~n", [?MODULE, node()]),
 				io:format("listening on ~p:~p via ~p~n", [IP, Port, Protocol]),
 				process_flag(trap_exit, true),
-				case socket:listen(Protocol, Port, [{ip, IP}]) of
+				case socket:listen(Protocol, Port, [binary, {ip, IP}]) of
 					{ok, ListenSocket} ->
 						%%Create first accepting process
 						socket:begin_inet_async(ListenSocket),
