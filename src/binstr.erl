@@ -36,7 +36,9 @@
 		chomp/1,
 		strip/1,
 		strip/2,
-		strip/3
+		strip/3,
+		to_lower/1,
+		to_upper/1
 ]).
 
 strchr(Bin, C) ->
@@ -67,7 +69,9 @@ strrchr(Bin, C, I) ->
 	end.
 
 
-strpos(Bin, C) ->
+strpos(Bin, C) when is_binary(Bin), is_list(C) ->
+	strpos(Bin, list_to_binary(C));
+strpos(Bin, C) when is_binary(Bin) ->
 	strpos(Bin, C, 0, size(C)).
 
 strpos(Bin, C, I, S) ->
@@ -95,11 +99,15 @@ strrpos(Bin, C, I, S) ->
 	end.
 
 
+substr(<<>>, _) ->
+	<<>>;
 substr(Bin, Start) when Start > 0 ->
 	{_, B2} = split_binary(Bin, Start-1),
 	B2.
 
 
+substr(<<>>, _, _) ->
+	<<>>;
 substr(Bin, Start, Length) when Start > 0 ->
 	{_, B2} = split_binary(Bin, Start-1),
 	{B3, _} = split_binary(B2, Length),
@@ -186,4 +194,12 @@ strip(Bin, right, C) ->
 		_ ->
 			Bin
 	end.
+
+%% XXX yuck!
+to_lower(Bin) ->
+	list_to_binary(string:to_lower(binary_to_list(Bin))).
+
+to_upper(Bin) ->
+	list_to_binary(string:to_upper(binary_to_list(Bin))).
+
 
