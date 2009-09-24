@@ -38,7 +38,8 @@
 		strip/2,
 		strip/3,
 		to_lower/1,
-		to_upper/1
+		to_upper/1,
+		all/2
 ]).
 
 strchr(Bin, C) ->
@@ -46,7 +47,7 @@ strchr(Bin, C) ->
 
 strchr(Bin, C, I) ->
 	case Bin of
-		<<_X:I/binary, Rest/binary>> when Rest =:= <<>> ->
+		<<_X:I/binary>> ->
 			0;
 		<<_X:I/binary, C, _Rest/binary>> ->
 			I+1;
@@ -76,7 +77,7 @@ strpos(Bin, C) when is_binary(Bin) ->
 
 strpos(Bin, C, I, S) ->
 	case Bin of
-		<<_X:I/binary, Rest/binary>> when Rest =:= <<>> ->
+		<<_X:I/binary>> ->
 			0;
 		<<_X:I/binary, C:S/binary, _Rest/binary>> ->
 			I+1;
@@ -201,5 +202,17 @@ to_lower(Bin) ->
 
 to_upper(Bin) ->
 	list_to_binary(string:to_upper(binary_to_list(Bin))).
+
+
+all(_Fun, <<>>) ->
+	true;
+all(Fun, <<H, Tail/binary>>) ->
+	case Fun(H) of
+		true ->
+			all(Fun, Tail);
+		_ ->
+			false
+	end.
+
 
 
