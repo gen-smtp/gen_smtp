@@ -31,7 +31,7 @@
 -define(PORT, 2525).
 
 %% External API
--export([start_link/2, start/2, start/1, start_link/1, stop/1]).
+-export([start_link/2, start/2, start/1, start_link/1, stop/1, sessions/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -76,6 +76,9 @@ start_link(Module) ->
 -spec(stop/1 :: (Pid :: pid()) -> 'ok').
 stop(Pid) -> 
 	gen_server:call(Pid, stop).
+
+sessions(Pid) ->
+	gen_server:call(Pid, sessions).
 
 %% @doc
 %% The gen_smtp_server is given a list of tcp listener configurations.
@@ -127,6 +130,9 @@ init([Module, Configurations]) ->
 %% @hidden
 handle_call(stop, _From, State) ->
 	{stop, normal, ok, State};
+
+handle_call(sessions, _From, State) ->
+	{reply, State#state.sessions, State};
 
 handle_call(Request, _From, State) ->
 	{reply, {unknown_call, Request}, State}.
