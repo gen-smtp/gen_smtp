@@ -57,6 +57,8 @@
 -export([peername/1]).
 -export([close/1, shutdown/2]).
 -export([active_once/1]).
+-export([setopts/2]).
+-export([get_proto/1]).
 -export([begin_inet_async/1]).
 -export([handle_inet_async/2, handle_inet_async/2]).
 -export([extract_port_from_socket/1]).
@@ -138,6 +140,16 @@ active_once(Socket) when is_port(Socket) ->
 	inet:setopts(Socket, [{active, once}]);
 active_once(Socket) ->
 	ssl:setopts(Socket, [{active, once}]).
+
+setopts(Socket, Options) when is_port(Socket) ->
+	inet:setopts(Socket, Options);
+setopts(Socket, Options) ->
+	ssl:setopts(Socket, Options).
+
+get_proto(Socket) when is_port(Socket) ->
+	tcp;
+get_proto(Socket) ->
+	ssl.
 
 %% @doc {inet_async,...} will be sent to current process when a client connects
 begin_inet_async(Socket) when is_port(Socket) ->
