@@ -33,7 +33,10 @@
 		substr/3,
 		split/3,
 		split/2,
-		chomp/1
+		chomp/1,
+		strip/1,
+		strip/2,
+		strip/3
 ]).
 
 strchr(Bin, C) ->
@@ -159,3 +162,26 @@ chomp(Bin) ->
 					end
 			end
 	end.
+
+
+strip(Bin) ->
+	strip(Bin, both, $\s).
+
+strip(Bin, Dir) ->
+	strip(Bin, Dir, $\s).
+
+strip(Bin, both, C) ->
+	strip(strip(Bin, left, C), right, C);
+strip(<<C, _Rest/binary>> = Bin, left, C) ->
+	strip(substr(Bin, 2), left, C);
+strip(Bin, left, _C) ->
+	Bin;
+strip(Bin, right, C) ->
+	L = size(Bin),
+	case strrchr(Bin, C) of
+		L ->
+			strip(substr(Bin, 1, L - 1), right, C);
+		_ ->
+			Bin
+	end.
+
