@@ -123,33 +123,25 @@ parse_with_comments(<<>>, Acc, Depth, Quotes) when Depth > 0 ->
 	{error, comments};
 parse_with_comments(<<>>, Acc, Depth, _Quotes) ->
 	binstr:strip(list_to_binary(lists:reverse(Acc)));
+parse_with_comments(<<$\\, H, Tail/binary>>, Acc, Depth, Quotes) when Depth > 0, H > 32, H < 127 ->
+	parse_with_comments(Tail, Acc, Depth, Quotes);
 parse_with_comments(<<$\\, Tail/binary>>, Acc, Depth, Quotes) when Depth > 0 ->
-	<<H:1/binary, T2/binary>> = Tail,
-	case H of
-		_ when H > <<32>>, H < <<127>> ->
-			parse_with_comments(T2, Acc, Depth, Quotes);
-		_ ->
-			parse_with_comments(Tail, Acc, Depth, Quotes)
-	end;
+	parse_with_comments(Tail, Acc, Depth, Quotes);
+parse_with_comments(<<$\\, H, Tail/binary>>, Acc, Depth, Quotes) when H > 32, H < 127 ->
+	parse_with_comments(Tail, [H | Acc], Depth, Quotes);
 parse_with_comments(<<$\\, Tail/binary>>, Acc, Depth, Quotes) ->
-	<<H:1/binary, T2/binary>> = Tail,
-	case H of
-		_ when H > <<32>>, H < <<127>> ->
-			parse_with_comments(T2, [H | Acc], Depth, Quotes);
-		_ ->
-			parse_with_comments(Tail, [$\\ | Acc], Depth, Quotes)
-	end;
+	parse_with_comments(Tail, [$\\ | Acc], Depth, Quotes);
 parse_with_comments(<<$(, Tail/binary>>, Acc, Depth, Quotes) when not Quotes ->
 	parse_with_comments(Tail, Acc, Depth + 1, Quotes);
 parse_with_comments(<<$), Tail/binary>>, Acc, Depth, Quotes) when Depth > 0, not Quotes ->
 	parse_with_comments(Tail, Acc, Depth - 1, Quotes);
-parse_with_comments(<<_H:1/binary, Tail/binary>>, Acc, Depth, Quotes) when Depth > 0 ->
+parse_with_comments(<<_, Tail/binary>>, Acc, Depth, Quotes) when Depth > 0 ->
 	parse_with_comments(Tail, Acc, Depth, Quotes);
 parse_with_comments(<<$", T/binary>>, Acc, Depth, true) -> %"
 	parse_with_comments(T, Acc, Depth, false);
 parse_with_comments(<<$", T/binary>>, Acc, Depth, false) -> %"
 	parse_with_comments(T, Acc, Depth, true);
-parse_with_comments(<<H:1/binary, Tail/binary>>, Acc, Depth, Quotes) ->
+parse_with_comments(<<H, Tail/binary>>, Acc, Depth, Quotes) ->
 	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
 -spec(parse_content_type/1 :: (Value :: 'undefined') -> 'undefined';
@@ -202,8 +194,8 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			NewBody = binstr:substr(Body, Start + size(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), []),
-			Res = lists:filter(fun({Headers, Body}) -> size(Body) =/= 0 end, Parts),
-			lists:map(fun({Headers, Body}) -> decode_component(Headers, Body, MimeVsn) end, Res)
+			Res = lists:filter(fun({Headers, Body2}) -> size(Body2) =/= 0 end, Parts),
+			lists:map(fun({Headers, Body2}) -> decode_component(Headers, Body2, MimeVsn) end, Res)
 	end.
 
 split_body_by_boundary_([], _Boundary, Acc) ->
@@ -231,10 +223,10 @@ parse_headers(Body) ->
 	end.
 
 
-parse_headers(Body, <<H:1/binary, _Rest/binary>> = Line, []) when H =:= <<"\s">>; H =:= <<"\t">> ->
+parse_headers(Body, <<H, Tail/binary>>, []) when H =:= $\s; H =:= $\t ->
 	% folded headers
-	{[], list_to_binary([Line, "\r\n", Body])};
-parse_headers(Body, <<H:1/binary, T/binary>> = Line, Headers) when H =:= <<"\s">>; H =:= <<"\t">> ->
+	{[], list_to_binary([H, Tail, "\r\n", Body])};
+parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
 	% folded headers
 	[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
 	FieldValue = list_to_binary([OldFieldValue, T]),
@@ -255,7 +247,7 @@ parse_headers(Body, Line, Headers) ->
 		Index ->
 			FieldName = binstr:substr(Line, 1, Index - 1),
 			F = fun(X) -> X > 32 andalso X < 127 end,
-			case lists:all(F, binary_to_list(FieldName)) of
+			case binstr:all(F, FieldName) of
 				true ->
 					FieldValue = binstr:strip(binstr:substr(Line, Index+1)),
 					case binstr:strpos(Body, "\r\n") of
@@ -285,7 +277,7 @@ decode_body(Type, Body) ->
 	end.
 
 decode_base64(Body) ->
-	base64:mime_decode_to_string(Body).
+	base64:mime_decode(Body).
 
 decode_quoted_printable(Body) ->
 	case binstr:strpos(Body, "\r\n") of
@@ -310,21 +302,21 @@ decode_quoted_printable(Line, Rest, Acc) ->
 	end.
 
 decode_quoted_printable_line(<<>>, Acc) ->
-	list_to_binary(lists:reverse(Acc));
+	lists:reverse(Acc);
 decode_quoted_printable_line(<<$\r, $\n>>, Acc) ->
-	list_to_binary(lists:reverse(["\r\n" | Acc]));
-decode_quoted_printable_line(<<$=, C:1/binary, T/binary>>, Acc) when C =:= <<"\s">> orelse C =:= <<"\t">> ->
-	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, binary_to_list(T)) of
+	lists:reverse(["\r\n" | Acc]);
+decode_quoted_printable_line(<<$=, C, T/binary>>, Acc) when C =:= $\s; C =:= $\t ->
+	case binstr:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
 		true ->
-			list_to_binary(lists:reverse(Acc));
+			lists:reverse(Acc);
 		false ->
 			throw(badchar)
 	end;
 decode_quoted_printable_line(<<$=, $\r, $\n>>, Acc) ->
-	list_to_binary(lists:reverse(Acc));
+	lists:reverse(Acc);
 decode_quoted_printable_line(<<$=, A:2/binary, T/binary>>, Acc) ->
-	<<X:1/binary, Y:1/binary>> = A,
-	case lists:all(fun(C) -> (C >= <<"0">> andalso C =< <<"9">>) orelse (C >= <<"A">> andalso C =< <<"F">>) end, [X, Y]) of
+	%<<X:1/binary, Y:1/binary>> = A,
+	case binstr:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) end, A) of
 		true ->
 			{ok, [C | []], []} = io_lib:fread("~16u", binary_to_list(A)),
 			decode_quoted_printable_line(T, [C | Acc]);
@@ -333,16 +325,16 @@ decode_quoted_printable_line(<<$=, A:2/binary, T/binary>>, Acc) ->
 	end;
 decode_quoted_printable_line(<<$=>>, Acc) ->
 	% soft newline
-	list_to_binary(lists:reverse(Acc));
-decode_quoted_printable_line(<<H:1/binary, T/binary>>, Acc) when H >= <<$!>> andalso H =< <<$<>> ->
+	lists:reverse(Acc);
+decode_quoted_printable_line(<<H, T/binary>>, Acc) when H >= $!, H =< $< ->
 	decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line(<<H:1/binary, T/binary>>, Acc) when H >= <<$>>> andalso H =< <<$~>> ->
+decode_quoted_printable_line(<<H, T/binary>>, Acc) when H >= $>, H =< $~ ->
 	decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line(<<H:1/binary, T/binary>>, Acc) when H =:= <<$\s>>; H =:= <<$\t>> ->
+decode_quoted_printable_line(<<H, T/binary>>, Acc) when H =:= $\s; H =:= $\t ->
 	% if the rest of the line is whitespace, truncate it
-	case lists:all(fun(X) -> X =:= $\s orelse X =:= $\t end, binary_to_list(T)) of
+	case binstr:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
 		true ->
-			list_to_binary(lists:reverse(Acc));
+			lists:reverse(Acc);
 		false ->
 			decode_quoted_printable_line(T, [H | Acc])
 	end.
@@ -900,48 +892,48 @@ decode_quoted_printable_test_() ->
 	[
 		{"bleh",
 			fun() ->
-					?assertEqual(<<"!">>, decode_quoted_printable_line(<<"=21">>, "")),
-					?assertEqual(<<"!!">>, decode_quoted_printable_line(<<"=21=21">>, "")),
-					?assertEqual(<<"=:=">>, decode_quoted_printable_line(<<"=3D:=3D">>, "")),
-					?assertEqual(<<"Thequickbrownfoxjumpedoverthelazydog.">>, decode_quoted_printable_line(<<"Thequickbrownfoxjumpedoverthelazydog.">>, ""))
+					?assertEqual("!", decode_quoted_printable_line(<<"=21">>, "")),
+					?assertEqual("!!", decode_quoted_printable_line(<<"=21=21">>, "")),
+					?assertEqual("=:=", decode_quoted_printable_line(<<"=3D:=3D">>, "")),
+					?assertEqual("Thequickbrownfoxjumpedoverthelazydog.", decode_quoted_printable_line(<<"Thequickbrownfoxjumpedoverthelazydog.">>, ""))
 			end
 		},
 		{"input with spaces",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.">>, ""))
+					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.">>, ""))
 			end
 		},
 		{"input with tabs",
 			fun() ->
-					?assertEqual(<<"The\tquick brown fox jumped over\tthe lazy dog.">>, decode_quoted_printable_line(<<"The\tquick brown fox jumped over\tthe lazy dog.">>, ""))
+					?assertEqual("The\tquick brown fox jumped over\tthe lazy dog.", decode_quoted_printable_line(<<"The\tquick brown fox jumped over\tthe lazy dog.">>, ""))
 			end
 		},
 		{"input with trailing spaces",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       ">>, ""))
+					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       ">>, ""))
 			end
 		},
 		{"input with non-strippable trailing whitespace",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.        ">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =20">>, "")),
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.       \t">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =09">>, "")),
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.\t \t \t \t ">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20">>, "")),
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.\t \t \t \t ">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20\t                  \t">>, ""))
+					?assertEqual("The quick brown fox jumped over the lazy dog.        ", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =20">>, "")),
+					?assertEqual("The quick brown fox jumped over the lazy dog.       \t", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =09">>, "")),
+					?assertEqual("The quick brown fox jumped over the lazy dog.\t \t \t \t ", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20">>, "")),
+					?assertEqual("The quick brown fox jumped over the lazy dog.\t \t \t \t ", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20\t                  \t">>, ""))
 			end
 		},
 		{"input with trailing tabs",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t\t\t\t\t">>, ""))
+					?assertEqual("The quick brown fox jumped over the lazy dog.", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t\t\t\t\t">>, ""))
 			end
 		},
 		{"soft new line",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.       ">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =">>, ""))
+					?assertEqual("The quick brown fox jumped over the lazy dog.       ", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =">>, ""))
 			end
 		},
 		{"soft new line with trailing whitespace",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.       ">>, decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =  	">>, ""))
+					?assertEqual("The quick brown fox jumped over the lazy dog.       ", decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =  	">>, ""))
 			end
 		},
 		{"multiline stuff",

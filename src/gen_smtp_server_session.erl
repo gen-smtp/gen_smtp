@@ -161,15 +161,15 @@ handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = 
 	socket:active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
-	case Packet of
-		<<$., Bin/binary>> ->
-			Bin;
-		Bin ->
-			Bin
+	Bin = case Packet of
+		<<$., _/binary>> ->
+			binstr:substr(Packet, 2);
+		_ ->
+			Packet
 	end,
 	%io:format("Header candidate: ~p~n", [Bin]),
 	NewState = case Bin of % first, check for a leading space or tab
-		<<H:1/binary, _Rest/binary>> when H =:= <<"\s">>; H =:= <<"\t">> ->
+		<<H:1/binary, _/binary>> when H =:= <<"\s">>; H =:= <<"\t">> ->
 			% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
 			case Envelope#envelope.headers of
 				[] ->
@@ -191,7 +191,7 @@ handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope =
 				Index ->
 					FieldName = binstr:substr(Bin, 1, Index - 1),
 					F = fun(X) -> X > 32 andalso X < 127 end,
-					case lists:all(F, binary_to_list(FieldName)) of
+					case binstr:all(F, FieldName) of
 						true ->
 							FieldValue = binstr:strip(binstr:chomp(binstr:substr(Bin, Index+1))),
 							State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
@@ -206,11 +206,11 @@ handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope =
 handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
 	%io:format("got message chunk \"~p\"~n", [Packet]),
 	% if there's a leading dot, trim it off
-	case Packet of
-		<<$., Bin/binary>> ->
-			Bin;
-		Bin ->
-			Bin
+	Bin = case Packet of
+		<<$., _/binary>> ->
+			binstr:substr(Packet, 2);
+		_ ->
+			Packet
 	end,
 	socket:active_once(Socket),
 	{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
