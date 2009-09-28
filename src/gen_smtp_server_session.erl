@@ -32,7 +32,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(BUILTIN_EXTENSIONS, [{"SIZE", "10240000"}, {"8BITMIME", true}, {"PIPELINING", true}]).
+-define(MAXIMUMSIZE, 10485760). %10mb
+-define(BUILTIN_EXTENSIONS, [{"SIZE", "10485670"}, {"8BITMIME", true}, {"PIPELINING", true}]).
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
@@ -50,7 +51,7 @@
 		to = [] :: [string()],
 		data = "" :: string(),
 		headers = [] :: [{string(), string()}], %proplist
-		expectedsize :: pos_integer(),
+		expectedsize = 0 :: pos_integer(),
 		auth = {[], []} :: {string(), string()} % {"username", "password"}
 	}
 ).
@@ -127,15 +128,28 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Env, module = Module} = State) ->
+
+handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
+	socket:send(Socket, "552 Message too large\r\n"),
+	socket:active_once(Socket),
+	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
+	% send the remainder of the data...
+	self() ! {socket:get_proto(Socket), Socket, Rest},
+	socket:setopts(Socket, [{packet, line}]),
+	Envelope = Env#envelope{data = Body},% size = length(Body)},
+	io:format("received body from child process, remainder was ~p (~p)~n", [Rest, self()]),
+
+%handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Env, module = Module} = State) ->
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
-	Envelope = Env#envelope{data = list_to_binary(lists:reverse(Env#envelope.data))},
+	%Envelope = Env#envelope{data = list_to_binary(lists:reverse(Env#envelope.data))},
 	Valid = case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
 			case size(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
 					socket:send(Socket, "552 Message too large\r\n"),
+					socket:active_once(Socket),
 					false;
 				false ->
 					true
@@ -154,7 +168,10 @@ handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope =
 					socket:send(Socket, Message++"\r\n"),
 					socket:active_once(Socket),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
-			end
+			end;
+		false ->
+			% might not even be able to get here anymore...
+			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
 handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = Envelope} = State) ->
 	%io:format("Header terminator~n", []),
@@ -212,7 +229,30 @@ handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Enve
 		_ ->
 			Packet
 	end,
-	socket:active_once(Socket),
+	%socket:active_once(Socket),
+	%{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
+
+	Self = self(),
+	% receive in a child process
+	ExistingData = [Bin | Envelope#envelope.data],
+	ExistingSize = lists:foldl(fun(E, A) -> A + size(E) end, 0, ExistingData),
+
+	HeaderSize = lists:foldl(fun({K, V}, A) -> size(K) + size(V) + A end, 0, Envelope#envelope.headers),
+
+	Size = HeaderSize + ExistingSize,
+
+	MaxSize = case has_extension(State#state.extensions, "SIZE") of
+		{true, Value} ->
+			list_to_integer(Value);
+		false ->
+			?MAXIMUMSIZE
+	end,
+
+	socket:setopts(Socket, [{packet, raw}]),
+	spawn_opt(fun() -> receive_data(ExistingData,
+		Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Self) end,
+		[link, {fullsweep_after, 0}]),
+
 	{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, State) ->
 	case handle_request(parse_request(binary_to_list(Packet)), State) of
@@ -697,6 +737,81 @@ get_cram_string(Hostname) ->
 	%A = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
 	%B = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
 	%binary_to_list(base64:encode(lists:flatten(A ++ B))).
+
+
+%% @doc a tight loop to receive the message body
+receive_data(Acc, Socket, _, Size, MaxSize, Session) when Size > MaxSize ->
+	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
+	Session ! {receive_data, {error, size_exceeded}};
+receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
+	{Count, RecvSize} = case Size of
+		Size when OldCount > 2, OldRecvSize =:= 262144 ->
+			%io:format("increasing receive size to ~B~n", [1048576]),
+			{0, 1048576};% 1m
+		Size when OldCount > 5, OldRecvSize =:= 65536 ->
+			%io:format("increasing receive size to ~B~n", [262144]),
+			{0, 262144};% 256k
+		Size when OldCount > 5, OldRecvSize =:= 8192 ->
+			%io:format("increasing receive size to ~B~n", [65536]),
+			{0, 65536};% 64k
+		Size when OldCount > 2, Size > 8192, OldRecvSize =:= 0 ->
+			%io:format("increasing receive size to ~B~n", [8192]),
+			{0, 8192}; % 8k
+		_ ->
+			{OldCount + 1, OldRecvSize} % don't change anything
+	end,
+	%socket:setopts(Socket, [{packet, raw}]),
+	case socket:recv(Socket, RecvSize, 1000) of
+		{ok, Packet} ->
+			case binstr:strpos(Packet, "\r\n.\r\n") of
+				0 ->
+					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+					receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + size(Packet), MaxSize, Session);
+				Index ->
+					String = binstr:substr(Packet, 1, Index - 1),
+					Rest = binstr:substr(Packet, Index+5),
+					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Result = list_to_binary(lists:reverse([String | Acc])),
+					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Session ! {receive_data, Result, Rest}
+			end;
+		{error, timeout} when RecvSize =:= 0, length(Acc) > 1 ->
+			% check that we didn't accidentally receive a \r\n.\r\n split across 2 receives
+			[A, B | Acc2] = Acc,
+			Packet = list_to_binary([B, A]),
+			case binstr:strpos(Packet, "\r\n.\r\n") of
+				0 ->
+					% uh-oh
+					io:format("no data on socket, and no DATA terminator!~n"),
+					exit(self(), kill);
+				Index ->
+					String = binstr:substr(Packet, 1, Index - 1),
+					Rest = binstr:substr(Packet, Index+5),
+					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Result = list_to_binary(lists:reverse([String | Acc2])),
+					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Session ! {receive_data, Result, Rest}
+			end;
+		{error, timeout} ->
+			NewRecvSize = adjust_receive_size_down(Size, RecvSize),
+			%io:format("timeout when trying to read ~B bytes, lowering receive size to ~B~n", [RecvSize, NewRecvSize]),
+			receive_data(Acc, Socket, {-5, NewRecvSize}, Size, MaxSize, Session);
+		{error, Reason} ->
+			io:format("receive error: ~p~n", [Reason]),
+			exit(self(), kill)
+	end.
+
+
+adjust_receive_size_down(Size, RecvSize) when RecvSize > 262144 ->
+	262144;
+adjust_receive_size_down(Size, RecvSize) when RecvSize > 65536 ->
+	65536;
+adjust_receive_size_down(Size, RecvSize) when RecvSize > 8192 ->
+	8192;
+adjust_receive_size_down(Size, RecvSize) ->
+	0.
+
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->

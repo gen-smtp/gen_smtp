@@ -39,7 +39,9 @@
 		strip/3,
 		to_lower/1,
 		to_upper/1,
-		all/2
+		all/2,
+		reverse/1,
+		reverse_str_to_bin/1
 ]).
 
 strchr(Bin, C) ->
@@ -215,4 +217,15 @@ all(Fun, <<H, Tail/binary>>) ->
 	end.
 
 
+%% this is a cool hack to very quickly reverse a binary
+reverse(Bin) ->
+	Size = size(Bin)*8,
+	<<T:Size/integer-little>> = Bin,
+	<<T:Size/integer-big>>.
 
+%% reverse a string into a binary - can be faster than lists:reverse on large
+%% lists, even if you run binary_to_string on the result. For smaller strings
+%% it's probably slower (but still not that bad).
+reverse_str_to_bin(String) ->
+	reverse(list_to_binary(String)).
+	
