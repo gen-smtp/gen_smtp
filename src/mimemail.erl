@@ -191,10 +191,10 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 		[Start, End] when Start =:= 0; End =:= 0 ->
 			erlang:error(bad_boundary);
 		[Start, End] ->
-			NewBody = binstr:substr(Body, Start + size(Boundary), End - Start),
+			NewBody = binstr:substr(Body, Start + byte_size(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), []),
-			Res = lists:filter(fun({Headers, Body2}) -> size(Body2) =/= 0 end, Parts),
+			Res = lists:filter(fun({Headers, Body2}) -> byte_size(Body2) =/= 0 end, Parts),
 			lists:map(fun({Headers, Body2}) -> decode_component(Headers, Body2, MimeVsn) end, Res)
 	end.
 
@@ -207,7 +207,7 @@ split_body_by_boundary_(Body, Boundary, Acc) ->
 		0 ->
 			lists:reverse([{[], TrimmedBody} | Acc]);
 		Index ->
-			split_body_by_boundary_(binstr:substr(TrimmedBody, Index + size(Boundary)), Boundary,
+			split_body_by_boundary_(binstr:substr(TrimmedBody, Index + byte_size(Boundary)), Boundary,
 				[parse_headers(binstr:substr(TrimmedBody, 1, Index - 1)) | Acc])
 	end.
 
