@@ -783,8 +783,9 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
 			case binstr:strpos(Packet, "\r\n.\r\n") of
 				0 ->
 					% uh-oh
-					io:format("no data on socket, and no DATA terminator!~n"),
-					exit(self(), kill);
+					io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
+					% eventually we'll either get data or a different error, just keep retrying
+					receive_data(Acc, Socket, {Count - 1, RecvSize}, Size, MaxSize, Session);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
