@@ -146,7 +146,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	%Envelope = Env#envelope{data = list_to_binary(lists:reverse(Env#envelope.data))},
 	Valid = case has_extension(State#state.extensions, "SIZE") of
 		{true, Value} ->
-			case size(Envelope#envelope.data) > list_to_integer(Value) of
+			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
 					socket:send(Socket, "552 Message too large\r\n"),
 					socket:active_once(Socket),
@@ -235,9 +235,9 @@ handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Enve
 	Self = self(),
 	% receive in a child process
 	ExistingData = [Bin | Envelope#envelope.data],
-	ExistingSize = lists:foldl(fun(E, A) -> A + size(E) end, 0, ExistingData),
+	ExistingSize = lists:foldl(fun(E, A) -> A + byte_size(E) end, 0, ExistingData),
 
-	HeaderSize = lists:foldl(fun({K, V}, A) -> size(K) + size(V) + A end, 0, Envelope#envelope.headers),
+	HeaderSize = lists:foldl(fun({K, V}, A) -> byte_size(K) + byte_size(V) + A end, 0, Envelope#envelope.headers),
 
 	Size = HeaderSize + ExistingSize,
 
@@ -767,7 +767,7 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
 				0 ->
 					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-					receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + size(Packet), MaxSize, Session);
+					receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
