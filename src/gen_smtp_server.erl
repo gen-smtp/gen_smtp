@@ -180,6 +180,7 @@ handle_info({'EXIT', From, Reason}, State) ->
 	
 handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 	io:format("Client terminated connection with econnaborted~n"),
+	socket:begin_inet_async(ListenSocket),
 	{noreply, State};
 
 handle_info({inet_async, ListenSocket,_, Error}, State) ->
