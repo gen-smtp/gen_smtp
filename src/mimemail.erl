@@ -62,7 +62,7 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= <<"1.0">> ->
 		{Disposition, DispositionParams} ->
 			ok;
 		_ -> % defaults
-			Disposition = "inline",
+			Disposition = <<"inline">>,
 			DispositionParams = []
 	end,
 
