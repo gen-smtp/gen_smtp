@@ -31,7 +31,7 @@
 -define(PORT, 2525).
 
 %% External API
--export([start_link/2, start/2, start/1, start_link/1, stop/1]).
+-export([start_link/2, start/2, start/1, start_link/1, stop/1, sessions/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -77,6 +77,9 @@ start_link(Module) ->
 stop(Pid) -> 
 	gen_server:call(Pid, stop).
 
+sessions(Pid) ->
+	gen_server:call(Pid, sessions).
+
 %% @doc
 %% The gen_smtp_server is given a list of tcp listener configurations.
 %% You'll typically only want to listen on one port so your options
@@ -106,7 +109,7 @@ init([Module, Configurations]) ->
 				io:format("~p starting at ~p~n", [?MODULE, node()]),
 				io:format("listening on ~p:~p via ~p~n", [IP, Port, Protocol]),
 				process_flag(trap_exit, true),
-				case socket:listen(Protocol, Port, [{ip, IP}]) of
+				case socket:listen(Protocol, Port, [binary, {ip, IP}]) of
 					{ok, ListenSocket} ->
 						%%Create first accepting process
 						socket:begin_inet_async(ListenSocket),
@@ -127,6 +130,9 @@ init([Module, Configurations]) ->
 %% @hidden
 handle_call(stop, _From, State) ->
 	{stop, normal, ok, State};
+
+handle_call(sessions, _From, State) ->
+	{reply, State#state.sessions, State};
 
 handle_call(Request, _From, State) ->
 	{reply, {unknown_call, Request}, State}.
@@ -174,6 +180,7 @@ handle_info({'EXIT', From, Reason}, State) ->
 	
 handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 	io:format("Client terminated connection with econnaborted~n"),
+	socket:begin_inet_async(ListenSocket),
 	{noreply, State};
 
 handle_info({inet_async, ListenSocket,_, Error}, State) ->
