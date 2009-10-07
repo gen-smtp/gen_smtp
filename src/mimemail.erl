@@ -31,13 +31,35 @@
 
 -compile(export_all).
 
+-define(DEFAULT_OPTIONS, [
+		{encoding, get_default_encoding()}, % default encoding is utf-8 if we can find the iconv module
+		{decode_attachments, true} % should we decode any base64/quoted printable attachments?
+	]).
+
 -spec(decode/1 :: (Email :: string()) -> {string(), string(), [{string(), string()}], [{string(), string()}], list()}).
 decode(All) ->
 	{Headers, Body} = parse_headers(All),
-	decode(Headers, Body).
+	decode(Headers, Body, ?DEFAULT_OPTIONS).
 
 -spec(decode/2 :: (Headers :: [{string(), string()}], Body :: string()) -> {string(), string(), [{string(), string()}], [{string(), string()}], list()}).
-decode(Headers, Body) -> 
+decode(All, Options) when is_binary(All), is_list(Options) ->
+	{Headers, Body} = parse_headers(All),
+	decode(Headers, Body, Options);
+decode(Headers, Body) when is_list(Headers), is_binary(Body) ->
+	decode(Headers, Body, ?DEFAULT_OPTIONS).
+
+decode(Headers, Body, Options) ->
+	case proplists:get_value(encoding, Options, none) of
+		none ->
+			ok;
+		SomeEncoding ->
+			case whereis(iconv) of
+				undefined ->
+					{ok, _Pid} = iconv:start();
+				_ ->
+					ok
+			end
+	end,
 	%FixedHeaders = fix_headers(Headers),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
 		undefined ->
@@ -56,6 +78,36 @@ encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
 encode(_) ->
 	io:format("Not a mime-decoded DATA~n"),
 	erlang:error(non_mime).
+
+
+decode_headers([], Acc, Charset) ->
+	lists:reverse(Acc);
+decode_headers([{Key, Value} | Headers], Acc, Charset) ->
+	decode_headers(Headers, [{Key, decode_header(Value, Charset)} | Acc], Charset).
+
+decode_header(Value, Charset) ->
+	case re:run(Value, "=\\?([-A-Za-z0-9_]+)\\?([qbQB])\\?(.+)\\?=", [ungreedy]) of
+		nomatch ->
+			Value;
+		{match,[{AllStart, AllEnd},{EncodingStart, EncodingEnd},{TypeStart, _},{DataStart, DataEnd}]} ->
+			Encoding = binstr:substr(Value, EncodingStart+1, EncodingEnd),
+			Type = binstr:to_lower(binstr:substr(Value, TypeStart+1, 1)),
+			Data = binstr:substr(Value, DataStart+1, DataEnd),
+
+			io:format("data: ~p~n", [Data]),
+
+			DecodedData = case Type of
+				<<"q">> ->
+					decode_quoted_printable(Data);
+				<<"b">> ->
+					decode_base64(Data)
+			end,
+
+			io:format("Encoding is ~p, Data is ~p~n", [Encoding, DecodedData]),
+			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, binstr:substr(Value, AllStart+1 + AllEnd)]),
+			decode_header(NewValue, Charset)
+	end.
+
 
 decode_component(Headers, Body, MimeVsn) when MimeVsn =:= <<"1.0">> ->
 	case parse_content_disposition(get_header_value(<<"Content-Disposition">>, Headers)) of
@@ -491,6 +543,14 @@ encode_quoted_printable([H | T], Acc, L) when H =:= $\s; H =< $\t ->
 encode_quoted_printable([H | T], Acc, L) ->
 	[[A, B]]= io_lib:format("=~2.16.0B", [H]),
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
+
+get_default_encoding() ->
+	case code:ensure_loaded(iconv) of
+		{error, _} ->
+			none;
+		{module, iconv} ->
+			<<"utf-8">>
+	end.
 
 -ifdef(EUNIT).
 
