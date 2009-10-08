@@ -48,22 +48,33 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
 decode(Headers, Body) when is_list(Headers), is_binary(Body) ->
 	decode(Headers, Body, ?DEFAULT_OPTIONS).
 
-decode(Headers, Body, Options) ->
-	case proplists:get_value(encoding, Options, none) of
+decode(OrigHeaders, Body, Options) ->
+	%io:format("headers: ~p~n", [Headers]),
+	Encoding = case proplists:get_value(encoding, Options, none) of
 		none ->
-			ok;
+			none;
 		SomeEncoding ->
 			case whereis(iconv) of
 				undefined ->
-					{ok, _Pid} = iconv:start();
+					{ok, _Pid} = iconv:start(),
+					SomeEncoding;
 				_ ->
-					ok
+					SomeEncoding
 			end
 	end,
 	%FixedHeaders = fix_headers(Headers),
+	Headers = decode_headers(OrigHeaders, [], Encoding),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
 		undefined ->
-			erlang:error(non_mime);
+			case parse_content_type(get_header_value(<<"Content-Type">>, Headers)) of
+				{<<"multipart">>, SubType, Parameters} ->
+					erlang:error(non_mime_multipart);
+				{Type, SubType, Parameters} ->
+					{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)};
+				undefined ->
+					Parameters = [{<<"content-type-params">>, {<<"charset">>, <<"us-ascii">>}}, {<<"disposition">>, <<"inline">>}, {<<"disposition-params">>, []}],
+					{<<"text">>, <<"plain">>, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
+			end;
 		Other ->
 			decode_component(Headers, Body, Other)
 	end.
@@ -80,6 +91,8 @@ encode(_) ->
 	erlang:error(non_mime).
 
 
+decode_headers(Headers, _, "none") ->
+	Headers;
 decode_headers([], Acc, Charset) ->
 	lists:reverse(Acc);
 decode_headers([{Key, Value} | Headers], Acc, Charset) ->
@@ -96,12 +109,18 @@ decode_header(Value, Charset) ->
 
 			io:format("data: ~p~n", [Data]),
 
+			{ok, CD} = iconv:open(Charset, Encoding),
+
 			DecodedData = case Type of
 				<<"q">> ->
-					decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]));
+					{ok, S} = iconv:conv(CD, decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]))),
+					S;
 				<<"b">> ->
-					decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
+					{ok, S} = iconv:conv(CD, decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))),
+					S
 			end,
+
+			iconv:close(CD),
 
 			io:format("~p~n", [binstr:substr(Value, AllStart + 1 + AllEnd)]),
 
@@ -149,10 +168,10 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= <<"1.0">> ->
 			Type = <<"text">>,
 			SubType = <<"plain">>,
 			Parameters = [{<<"content-type-params">>, {<<"charset">>, <<"us-ascii">>}}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
-			{Type, SubType, Headers, Parameters, Body}
+			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 	end;
 decode_component(Headers, Body, Other) ->
-	% io:format("Unknown mime version ~s~n", [Other]),
+	 io:format("Unknown mime version ~s~n", [Other]),
 	{error, mime_version}.
 
 -spec(get_header_value/2 :: (Needle :: string(), Headers :: [{string(), string()}]) -> string() | 'undefined').
@@ -1062,9 +1081,9 @@ rfc2047_test_() ->
 		{"Simple tests",
 			fun() ->
 					?assertEqual(<<"Keith Moore <moore@cs.utk.edu>">>, decode_header(<<"=?US-ASCII?Q?Keith_Moore?= <moore@cs.utk.edu>">>, "utf-8")),
-					?assertEqual(<<"Keld J", 248, "rn Simonsen <keld@dkuug.dk>">>, decode_header(<<"=?ISO-8859-1?Q?Keld_J=F8rn_Simonsen?= <keld@dkuug.dk>">>, "utf-8")),
-					?assertEqual(<<"Olle J", 228, "rnefors <ojarnef@admin.kth.se>">>, decode_header(<<"=?ISO-8859-1?Q?Olle_J=E4rnefors?= <ojarnef@admin.kth.se>">>, "utf-8")),
-					?assertEqual(<<"Andr", 233, " Pirard <PIRARD@vm1.ulg.ac.be>">>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
+					?assertEqual(<<"Keld Jørn Simonsen <keld@dkuug.dk>">>, decode_header(<<"=?ISO-8859-1?Q?Keld_J=F8rn_Simonsen?= <keld@dkuug.dk>">>, "utf-8")),
+					?assertEqual(<<"Olle Järnefors <ojarnef@admin.kth.se>">>, decode_header(<<"=?ISO-8859-1?Q?Olle_J=E4rnefors?= <ojarnef@admin.kth.se>">>, "utf-8")),
+					?assertEqual(<<"André Pirard <PIRARD@vm1.ulg.ac.be>">>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
 			end
 		},
 		{"encoded words seperated by whitespace should have whitespace removed",
