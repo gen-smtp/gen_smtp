@@ -98,9 +98,9 @@ decode_header(Value, Charset) ->
 
 			DecodedData = case Type of
 				<<"q">> ->
-					decode_quoted_printable(Data);
+					decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]));
 				<<"b">> ->
-					decode_base64(Data)
+					decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
 			end,
 
 			io:format("Encoding is ~p, Data is ~p~n", [Encoding, DecodedData]),
@@ -1044,6 +1044,23 @@ encode_quoted_printable_test_() ->
 					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=\r\n=3Dver_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=ver_the_lazy_dog.", "", 0)),
 					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=\r\n=3Dover_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.", "", 0)),
 					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.", "", 0))
+			end
+		}
+	].
+
+rfc2047_test_() ->
+	[
+		{"Simple tests",
+			fun() ->
+					?assertEqual(<<"Keith Moore <moore@cs.utk.edu>">>, decode_header(<<"=?US-ASCII?Q?Keith_Moore?= <moore@cs.utk.edu>">>, "utf-8")),
+					?assertEqual(<<"Keld J", 248, "rn Simonsen <keld@dkuug.dk>">>, decode_header(<<"=?ISO-8859-1?Q?Keld_J=F8rn_Simonsen?= <keld@dkuug.dk>">>, "utf-8")),
+					?assertEqual(<<"Olle J", 228, "rnefors <ojarnef@admin.kth.se>">>, decode_header(<<"=?ISO-8859-1?Q?Olle_J=E4rnefors?= <ojarnef@admin.kth.se>">>, "utf-8")),
+					?assertEqual(<<"Andr", 233, " Pirard <PIRARD@vm1.ulg.ac.be>">>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
+			end
+		},
+		{"encoded words seperated by whitespace",
+			fun() ->
+					?assertEqual(<<"If you can read this you understand the example">>, decode_header(<<"=?ISO-8859-1?B?SWYgeW91IGNhbiByZWFkIHRoaXMgeW8=?= =?ISO-8859-2?B?dSB1bmRlcnN0YW5kIHRoZSBleGFtcGxlLg==?=">>, "utf-8"))
 			end
 		}
 	].
