@@ -52,7 +52,7 @@ decode(OrigHeaders, Body, Options) ->
 	%io:format("headers: ~p~n", [Headers]),
 	Encoding = proplists:get_value(encoding, Options, none),
 	case whereis(iconv) of
-		undefined ->
+		undefined when Encoding =/= none ->
 			{ok, _Pid} = iconv:start();
 		_ ->
 			ok
@@ -89,7 +89,7 @@ encode(_) ->
 	erlang:error(non_mime).
 
 
-decode_headers(Headers, _, "none") ->
+decode_headers(Headers, _, none) ->
 	Headers;
 decode_headers([], Acc, Charset) ->
 	lists:reverse(Acc);
