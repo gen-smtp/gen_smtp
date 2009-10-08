@@ -50,18 +50,14 @@ decode(Headers, Body) when is_list(Headers), is_binary(Body) ->
 
 decode(OrigHeaders, Body, Options) ->
 	%io:format("headers: ~p~n", [Headers]),
-	Encoding = case proplists:get_value(encoding, Options, none) of
-		none ->
-			none;
-		SomeEncoding ->
-			case whereis(iconv) of
-				undefined ->
-					{ok, _Pid} = iconv:start(),
-					SomeEncoding;
-				_ ->
-					SomeEncoding
-			end
+	Encoding = proplists:get_value(encoding, Options, none),
+	case whereis(iconv) of
+		undefined ->
+			{ok, _Pid} = iconv:start();
+		_ ->
+			ok
 	end,
+
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
@@ -70,13 +66,15 @@ decode(OrigHeaders, Body, Options) ->
 				{<<"multipart">>, SubType, Parameters} ->
 					erlang:error(non_mime_multipart);
 				{Type, SubType, Parameters} ->
-					{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)};
+					NewBody = decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
+						Body, proplists:get_value(<<"charset">>, Parameters), Encoding),
+					{Type, SubType, Headers, Parameters, NewBody};
 				undefined ->
-					Parameters = [{<<"content-type-params">>, {<<"charset">>, <<"us-ascii">>}}, {<<"disposition">>, <<"inline">>}, {<<"disposition-params">>, []}],
+					Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, <<"inline">>}, {<<"disposition-params">>, []}],
 					{<<"text">>, <<"plain">>, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 			end;
 		Other ->
-			decode_component(Headers, Body, Other)
+			decode_component(Headers, Body, Other, Options)
 	end.
 
 -spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
@@ -137,7 +135,7 @@ decode_header(Value, Charset) ->
 	end.
 
 
-decode_component(Headers, Body, MimeVsn) when MimeVsn =:= <<"1.0">> ->
+decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 	case parse_content_disposition(get_header_value(<<"Content-Disposition">>, Headers)) of
 		{Disposition, DispositionParams} ->
 			ok;
@@ -154,23 +152,23 @@ decode_component(Headers, Body, MimeVsn) when MimeVsn =:= <<"1.0">> ->
 				Boundary ->
 					% io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
-					{<<"multipart">>, SubType, Headers, Parameters2, split_body_by_boundary(Body, list_to_binary(["--", Boundary]), MimeVsn)}
+					{<<"multipart">>, SubType, Headers, Parameters2, split_body_by_boundary(Body, list_to_binary(["--", Boundary]), MimeVsn, Options)}
 			end;
 		{<<"message">>, <<"rfc822">>, Parameters} ->
 			{NewHeaders, NewBody} = parse_headers(Body),
 			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
-			{<<"message">>, <<"rfc822">>, Headers, Parameters2, decode(NewHeaders, NewBody)};
+			{<<"message">>, <<"rfc822">>, Headers, Parameters2, decode(NewHeaders, NewBody, Options)};
 		{Type, SubType, Parameters} ->
 			%io:format("body is ~s/~s~n", [Type, SubType]),
 			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
-			{Type, SubType, Headers, Parameters2, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)};
+			{Type, SubType, Headers, Parameters2, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body, proplists:get_value(<<"charset">>, Parameters), proplists:get_value(encoding, Options, none))};
 		undefined -> % defaults
 			Type = <<"text">>,
 			SubType = <<"plain">>,
-			Parameters = [{<<"content-type-params">>, {<<"charset">>, <<"us-ascii">>}}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
+			Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
 			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 	end;
-decode_component(Headers, Body, Other) ->
+decode_component(Headers, Body, Other, Options) ->
 	 io:format("Unknown mime version ~s~n", [Other]),
 	{error, mime_version}.
 
@@ -265,7 +263,7 @@ parse_content_disposition(String) ->
 	Params = lists:map(F, Parameters),
 	{binstr:to_lower(Disposition), Params}.
 
-split_body_by_boundary(Body, Boundary, MimeVsn) ->
+split_body_by_boundary(Body, Boundary, MimeVsn, Options) ->
 	% find the indices of the first and last boundary
 	case [binstr:strpos(Body, Boundary), binstr:strpos(Body, list_to_binary([Boundary, "--"]))] of
 		[Start, End] when Start =:= 0; End =:= 0 ->
@@ -275,7 +273,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn) ->
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), []),
 			Res = lists:filter(fun({Headers, Body2}) -> byte_size(Body2) =/= 0 end, Parts),
-			lists:map(fun({Headers, Body2}) -> decode_component(Headers, Body2, MimeVsn) end, Res)
+			lists:map(fun({Headers, Body2}) -> decode_component(Headers, Body2, MimeVsn, Options) end, Res)
 	end.
 
 split_body_by_boundary_([], _Boundary, Acc) ->
@@ -342,6 +340,17 @@ parse_headers(Body, Line, Headers) ->
 					{lists:reverse(Headers), list_to_binary([Line, "\r\n", Body])}
 			end
 	end.
+
+decode_body(Type, Body, _InEncoding, none) ->
+	decode_body(Type, Body);
+decode_body(Type, Body, undefined, _OutEncoding) ->
+	decode_body(Type, Body);
+decode_body(Type, Body, InEncoding, OutEncoding) ->
+	NewBody = decode_body(Type, Body),
+	{ok, CD} = iconv:open(OutEncoding, InEncoding),
+	{ok, Result} = iconv:conv_chunked(CD, NewBody),
+	iconv:close(CD),
+	Result.
 
 -spec(decode_body/2 :: (Type :: string() | 'undefined', Body :: string()) -> string()).
 decode_body(undefined, Body) ->
