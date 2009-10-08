@@ -86,7 +86,7 @@ decode_headers([{Key, Value} | Headers], Acc, Charset) ->
 	decode_headers(Headers, [{Key, decode_header(Value, Charset)} | Acc], Charset).
 
 decode_header(Value, Charset) ->
-	case re:run(Value, "=\\?([-A-Za-z0-9_]+)\\?([qbQB])\\?(.+)\\?=", [ungreedy]) of
+	case re:run(Value, "=\\?([-A-Za-z0-9_]+)\\?([^/s])\\?([^\s]+)\\?=", [ungreedy]) of
 		nomatch ->
 			Value;
 		{match,[{AllStart, AllEnd},{EncodingStart, EncodingEnd},{TypeStart, _},{DataStart, DataEnd}]} ->
@@ -103,8 +103,17 @@ decode_header(Value, Charset) ->
 					decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
 			end,
 
+			io:format("~p~n", [binstr:substr(Value, AllStart + 1 + AllEnd)]),
+
+			Tail = case binstr:strpos(binstr:substr(Value, AllStart + 1 + AllEnd), "=?") of
+				0 ->
+					binstr:substr(Value, AllStart + 1 + AllEnd);
+				Index ->
+					binstr:substr(Value, AllStart + AllEnd + Index)
+			end,
+
 			io:format("Encoding is ~p, Data is ~p~n", [Encoding, DecodedData]),
-			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, binstr:substr(Value, AllStart+1 + AllEnd)]),
+			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, Tail]),
 			decode_header(NewValue, Charset)
 	end.
 
@@ -1058,9 +1067,25 @@ rfc2047_test_() ->
 					?assertEqual(<<"Andr", 233, " Pirard <PIRARD@vm1.ulg.ac.be>">>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
 			end
 		},
-		{"encoded words seperated by whitespace",
+		{"encoded words seperated by whitespace should have whitespace removed",
 			fun() ->
-					?assertEqual(<<"If you can read this you understand the example">>, decode_header(<<"=?ISO-8859-1?B?SWYgeW91IGNhbiByZWFkIHRoaXMgeW8=?= =?ISO-8859-2?B?dSB1bmRlcnN0YW5kIHRoZSBleGFtcGxlLg==?=">>, "utf-8"))
+					?assertEqual(<<"If you can read this you understand the example.">>, decode_header(<<"=?ISO-8859-1?B?SWYgeW91IGNhbiByZWFkIHRoaXMgeW8=?= =?ISO-8859-2?B?dSB1bmRlcnN0YW5kIHRoZSBleGFtcGxlLg==?=">>, "utf-8")),
+					?assertEqual(<<"ab">>, decode_header(<<"=?ISO-8859-1?Q?a?= =?ISO-8859-1?Q?b?=">>, "utf-8")),
+					?assertEqual(<<"ab">>, decode_header(<<"=?ISO-8859-1?Q?a?=  =?ISO-8859-1?Q?b?=">>, "utf-8")),
+					?assertEqual(<<"ab">>, decode_header(<<"=?ISO-8859-1?Q?a?=
+		=?ISO-8859-1?Q?b?=">>, "utf-8"))
+			end
+		},
+		{"underscores expand to spaces",
+			fun() ->
+					?assertEqual(<<"a b">>, decode_header(<<"=?ISO-8859-1?Q?a_b?=">>, "utf-8")),
+					?assertEqual(<<"a b">>, decode_header(<<"=?ISO-8859-1?Q?a?= =?ISO-8859-2?Q?_b?=">>, "utf-8"))
+			end
+		},
+		{"edgecases",
+			fun() ->
+					?assertEqual(<<"this is some text">>, decode_header(<<"=?iso-8859-1?q?this=20is=20some=20text?=">>, "utf-8")),
+					?assertEqual(<<"=?iso-8859-1?q?this is some text?=">>, decode_header(<<"=?iso-8859-1?q?this is some text?=">>, "utf-8"))
 			end
 		}
 	].
