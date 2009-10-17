@@ -198,13 +198,28 @@ strip(Bin, right, C) ->
 			Bin
 	end.
 
-%% XXX yuck!
 to_lower(Bin) ->
-	list_to_binary(string:to_lower(binary_to_list(Bin))).
+	to_lower(Bin, <<>>).
+
+to_lower(<<>>, Acc) ->
+	Acc;
+to_lower(<<H, T/binary>>, Acc) when H >= $A, H =< $Z ->
+	H2 = H + 32,
+	to_lower(T, <<Acc/binary, H2>>);
+to_lower(<<H, T/binary>>, Acc) ->
+	to_lower(T, <<Acc/binary, H>>).
+
 
 to_upper(Bin) ->
-	list_to_binary(string:to_upper(binary_to_list(Bin))).
+	to_upper(Bin, <<>>).
 
+to_upper(<<>>, Acc) ->
+	Acc;
+to_upper(<<H, T/binary>>, Acc) when H >= $a, H =< $z ->
+	H2 = H - 32,
+	to_upper(T, <<Acc/binary, H2>>);
+to_upper(<<H, T/binary>>, Acc) ->
+	to_upper(T, <<Acc/binary, H>>).
 
 all(_Fun, <<>>) ->
 	true;
