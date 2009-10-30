@@ -59,7 +59,7 @@ strchr(Bin, C, I) ->
 
 
 strrchr(Bin, C) ->
-	strrchr(Bin, C, size(Bin)).
+	strrchr(Bin, C, byte_size(Bin)).
 
 strrchr(Bin, C, I) ->
 	case Bin of
@@ -75,7 +75,7 @@ strrchr(Bin, C, I) ->
 strpos(Bin, C) when is_binary(Bin), is_list(C) ->
 	strpos(Bin, list_to_binary(C));
 strpos(Bin, C) when is_binary(Bin) ->
-	strpos(Bin, C, 0, size(C)).
+	strpos(Bin, C, 0, byte_size(C)).
 
 strpos(Bin, C, I, S) ->
 	case Bin of
@@ -89,7 +89,7 @@ strpos(Bin, C, I, S) ->
 
 
 strrpos(Bin, C) ->
-	strrpos(Bin, C, size(Bin), size(C)).
+	strrpos(Bin, C, byte_size(Bin), byte_size(C)).
 
 strrpos(Bin, C, I, S) ->
 	case Bin of
@@ -106,6 +106,10 @@ substr(<<>>, _) ->
 	<<>>;
 substr(Bin, Start) when Start > 0 ->
 	{_, B2} = split_binary(Bin, Start-1),
+	B2;
+substr(Bin, Start) when Start < 0 ->
+	Size = byte_size(Bin),
+	{_, B2} = split_binary(Bin, Size+Start),
 	B2.
 
 
@@ -114,7 +118,13 @@ substr(<<>>, _, _) ->
 substr(Bin, Start, Length) when Start > 0 ->
 	{_, B2} = split_binary(Bin, Start-1),
 	{B3, _} = split_binary(B2, Length),
+	B3;
+substr(Bin, Start, Length) when Start < 0 ->
+	Size = byte_size(Bin),
+	{_, B2} = split_binary(Bin, Size+Start),
+	{B3, _} = split_binary(B2, Length),
 	B3.
+
 
 split(Bin, Separator, SplitCount) ->
 	split_(Bin, Separator, SplitCount, []).
@@ -133,7 +143,7 @@ split_(Bin, Separator, SplitCount, Acc) ->
 			lists:reverse([Bin | Acc]);
 		Index ->
 			Head = substr(Bin, 1, Index - 1),
-			Tailpresplit = substr(Bin, Index + size(Separator)),
+			Tailpresplit = substr(Bin, Index + byte_size(Separator)),
 			split_(Tailpresplit, Separator, SplitCount - 1, [Head | Acc])
 	end.
 
@@ -150,12 +160,12 @@ split_(Bin, Separator, Acc) ->
 		0 ->
 			lists:reverse([Bin | Acc]);
 		Index ->
-			split_(substr(Bin, Index + size(Separator)), Separator, [substr(Bin, 1, Index - 1) | Acc])
+			split_(substr(Bin, Index + byte_size(Separator)), Separator, [substr(Bin, 1, Index - 1) | Acc])
 	end.
 
 
 chomp(Bin) ->
-	L = size(Bin),
+	L = byte_size(Bin),
 	L2 = L - 1,
 	case strrpos(Bin, <<"\r\n">>) of
 		L2 ->
@@ -190,7 +200,7 @@ strip(<<C, _Rest/binary>> = Bin, left, C) ->
 strip(Bin, left, _C) ->
 	Bin;
 strip(Bin, right, C) ->
-	L = size(Bin),
+	L = byte_size(Bin),
 	case strrchr(Bin, C) of
 		L ->
 			strip(substr(Bin, 1, L - 1), right, C);
@@ -234,7 +244,7 @@ all(Fun, <<H, Tail/binary>>) ->
 
 %% this is a cool hack to very quickly reverse a binary
 reverse(Bin) ->
-	Size = size(Bin)*8,
+	Size = byte_size(Bin)*8,
 	<<T:Size/integer-little>> = Bin,
 	<<T:Size/integer-big>>.
 
