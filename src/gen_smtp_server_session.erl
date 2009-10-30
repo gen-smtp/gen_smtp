@@ -133,6 +133,11 @@ handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, read
 	socket:send(Socket, "552 Message too large\r\n"),
 	socket:active_once(Socket),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
+	socket:send(Socket, "451 Bare newline detected\r\n"),
+	io:format("bare newline detected: ~p~n", self()),
+	socket:active_once(Socket),
+	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
 	% send the remainder of the data...
 	self() ! {socket:get_proto(Socket), Socket, Rest},
@@ -178,82 +183,96 @@ handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = 
 	socket:active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
-	Bin = case Packet of
-		<<$., _/binary>> ->
-			binstr:substr(Packet, 2);
-		_ ->
-			Packet
-	end,
-	%io:format("Header candidate: ~p~n", [Bin]),
-	NewState = case Bin of % first, check for a leading space or tab
-		<<H:1/binary, _/binary>> when H =:= <<"\s">>; H =:= <<"\t">> ->
-			% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
-			case Envelope#envelope.headers of
-				[] ->
-					% if the header list is empty, this means that this line can't be a continuation of a previous header
-					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}};
-				_ ->
-					[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
-					State#state{envelope = Envelope#envelope{headers = [{FieldName, list_to_binary([FieldValue, binstr:chomp(Bin)])} | T]}}
-			end;
-		_ -> % okay, now see if it's a header
-			case binstr:strchr(Bin, $:) of
-				0 -> % not a line starting a field
-					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
-				1 -> % WTF, colon as first character on line
-					State#state{readmessage = true, readheaders = false,
-						envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
-				Index ->
-					FieldName = binstr:substr(Bin, 1, Index - 1),
-					F = fun(X) -> X > 32 andalso X < 127 end,
-					case binstr:all(F, FieldName) of
-						true ->
-							FieldValue = binstr:strip(binstr:chomp(binstr:substr(Bin, Index+1))),
-							State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
-						false ->
-							State#state{readmessage = true, readheaders = false,
-								envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}}
-					end
-			end
-	end,
-	socket:active_once(Socket),
-	{noreply, NewState, ?TIMEOUT};
-handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
-	%io:format("got message chunk \"~p\"~n", [Packet]),
-	% if there's a leading dot, trim it off
-	Bin = case Packet of
-		<<$., _/binary>> ->
-			binstr:substr(Packet, 2);
-		_ ->
-			Packet
-	end,
-	%socket:active_once(Socket),
-	%{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
-
-	Self = self(),
-	% receive in a child process
-	ExistingData = [Bin | Envelope#envelope.data],
-	ExistingSize = lists:foldl(fun(E, A) -> A + byte_size(E) end, 0, ExistingData),
-
-	HeaderSize = lists:foldl(fun({K, V}, A) -> byte_size(K) + byte_size(V) + A end, 0, Envelope#envelope.headers),
-
-	Size = HeaderSize + ExistingSize,
-
-	MaxSize = case has_extension(State#state.extensions, "SIZE") of
-		{true, Value} ->
-			list_to_integer(Value);
+	case check_for_bare_newline(Packet) of
+		true ->
+			socket:send(Socket, "451 Bare newline detected\r\n"),
+			socket:active_once(Socket),
+			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 		false ->
-			?MAXIMUMSIZE
-	end,
+			Bin = case Packet of
+				<<$., _/binary>> ->
+					binstr:substr(Packet, 2);
+				_ ->
+					Packet
+			end,
+			%io:format("Header candidate: ~p~n", [Bin]),
+			NewState = case Bin of % first, check for a leading space or tab
+				<<H:1/binary, _/binary>> when H =:= <<"\s">>; H =:= <<"\t">> ->
+				% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
+				case Envelope#envelope.headers of
+					[] ->
+						% if the header list is empty, this means that this line can't be a continuation of a previous header
+						State#state{readmessage = true, readheaders = false,
+							envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}};
+					_ ->
+						[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
+						State#state{envelope = Envelope#envelope{headers = [{FieldName, list_to_binary([FieldValue, binstr:chomp(Bin)])} | T]}}
+				end;
+			_ -> % okay, now see if it's a header
+				case binstr:strchr(Bin, $:) of
+					0 -> % not a line starting a field
+						State#state{readmessage = true, readheaders = false,
+							envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
+					1 -> % WTF, colon as first character on line
+						State#state{readmessage = true, readheaders = false,
+							envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
+					Index ->
+						FieldName = binstr:substr(Bin, 1, Index - 1),
+						F = fun(X) -> X > 32 andalso X < 127 end,
+						case binstr:all(F, FieldName) of
+							true ->
+								FieldValue = binstr:strip(binstr:chomp(binstr:substr(Bin, Index+1))),
+								State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
+							false ->
+								State#state{readmessage = true, readheaders = false,
+									envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}}
+						end
+				end
+		end,
+		socket:active_once(Socket),
+		{noreply, NewState, ?TIMEOUT}
+	end;
+handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
+	case check_for_bare_newline(Packet) of
+		true ->
+			socket:send(Socket, "451 Bare newline detected\r\n"),
+			socket:active_once(Socket),
+			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+		false ->
+			%io:format("got message chunk \"~p\"~n", [Packet]),
+			% if there's a leading dot, trim it off
+			Bin = case Packet of
+				<<$., _/binary>> ->
+					binstr:substr(Packet, 2);
+				_ ->
+					Packet
+			end,
+			%socket:active_once(Socket),
+			%{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
 
-	socket:setopts(Socket, [{packet, raw}]),
-	spawn_opt(fun() -> receive_data(ExistingData,
-		Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Self) end,
-		[link, {fullsweep_after, 0}]),
+			Self = self(),
+			% receive in a child process
+			ExistingData = [Bin | Envelope#envelope.data],
+			ExistingSize = lists:foldl(fun(E, A) -> A + byte_size(E) end, 0, ExistingData),
 
-	{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
+			HeaderSize = lists:foldl(fun({K, V}, A) -> byte_size(K) + byte_size(V) + A end, 0, Envelope#envelope.headers),
+
+			Size = HeaderSize + ExistingSize,
+
+			MaxSize = case has_extension(State#state.extensions, "SIZE") of
+				{true, Value} ->
+					list_to_integer(Value);
+				false ->
+					?MAXIMUMSIZE
+			end,
+
+			socket:setopts(Socket, [{packet, raw}]),
+			spawn_opt(fun() -> receive_data(ExistingData,
+							Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Self) end,
+				[link, {fullsweep_after, 0}]),
+
+			{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT}
+	end;
 handle_info({_SocketType, Socket, Packet}, State) ->
 	case handle_request(parse_request(binary_to_list(Packet)), State) of
 		{ok, NewState} ->
@@ -763,18 +782,25 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
 	%socket:setopts(Socket, [{packet, raw}]),
 	case socket:recv(Socket, RecvSize, 1000) of
 		{ok, Packet} ->
-			case binstr:strpos(Packet, "\r\n.\r\n") of
-				0 ->
-					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
-					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-					receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session);
-				Index ->
-					String = binstr:substr(Packet, 1, Index - 1),
-					Rest = binstr:substr(Packet, Index+5),
-					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
-					Result = list_to_binary(lists:reverse([String | Acc])),
-					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
-					Session ! {receive_data, Result, Rest}
+			[Last | _] = Acc,
+			Lastchar = binstr:substr(Last, -1),
+			case check_for_bare_newline(Packet) of
+				true when Lastchar =/= <<"\r">> -> % last packet didn't have the corresponding CR
+					Session ! {receive_data, {error, bare_newline}};
+				_ ->
+					case binstr:strpos(Packet, "\r\n.\r\n") of
+						0 ->
+							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+							receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session);
+						Index ->
+							String = binstr:substr(Packet, 1, Index - 1),
+							Rest = binstr:substr(Packet, Index+5),
+							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							Result = list_to_binary(lists:reverse([String | Acc])),
+							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							Session ! {receive_data, Result, Rest}
+					end
 			end;
 		{error, timeout} when RecvSize =:= 0, length(Acc) > 1 ->
 			% check that we didn't accidentally receive a \r\n.\r\n split across 2 receives
@@ -813,6 +839,14 @@ adjust_receive_size_down(Size, RecvSize) when RecvSize > 8192 ->
 adjust_receive_size_down(Size, RecvSize) ->
 	0.
 
+check_for_bare_newline(Bin) ->
+	check_for_bare_newline(Bin, 0).
+
+check_for_bare_newline(Bin, Offset) ->
+	case re:run(Bin, "(?<!\r)\n", [{capture, none}, {offset, Offset}]) of
+		match -> true;
+		nomatch -> false
+	end.
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->
@@ -1072,7 +1106,113 @@ smtp_session_test_() ->
 								?debugFmt("Message send, received: ~p~n", [Packet6])
 						end
 					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with a bare newline",
+						fun() ->
+								socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								socket:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> socket:active_once(CSock) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								socket:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet3),
+								socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet4),
+								socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
+								?assertMatch("354 "++_, Packet5),
+								socket:send(CSock, "Subject: tls message\r\n"),
+								socket:send(CSock, "To: <user@otherhost>\r\n"),
+								socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								socket:send(CSock, "\r\n"),
+								socket:send(CSock, "this\r\n"),
+								socket:send(CSock, "body\r\n"),
+								socket:send(CSock, "has\r\n"),
+								socket:send(CSock, "a\r\n"),
+								socket:send(CSock, "bare\n"),
+								socket:send(CSock, "newline\r\n"),
+								socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> socket:active_once(CSock) end,
+								?assertMatch("451 "++_, Packet6),
+								?debugFmt("Message send, received: ~p~n", [Packet6])
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with a bare newline in the headers",
+						fun() ->
+								socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								socket:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> socket:active_once(CSock) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								socket:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet3),
+								socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet4),
+								socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
+								?assertMatch("354 "++_, Packet5),
+								socket:send(CSock, "Subject: tls message\r\n"),
+								socket:send(CSock, "To: <user@otherhost>\n"),
+								socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								socket:send(CSock, "\r\n"),
+								socket:send(CSock, "this\r\n"),
+								socket:send(CSock, "body\r\n"),
+								socket:send(CSock, "has\r\n"),
+								socket:send(CSock, "no\r\n"),
+								socket:send(CSock, "bare\r\n"),
+								socket:send(CSock, "newlines\r\n"),
+								socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> socket:active_once(CSock) end,
+								?assertMatch("451 "++_, Packet6),
+								?debugFmt("Message send, received: ~p~n", [Packet6])
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with bare newline on first line of body",
+						fun() ->
+								socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								socket:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> socket:active_once(CSock) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								socket:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet3),
+								socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet4),
+								socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
+								?assertMatch("354 "++_, Packet5),
+								socket:send(CSock, "Subject: tls message\r\n"),
+								socket:send(CSock, "To: <user@otherhost>\n"),
+								socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								socket:send(CSock, "\r\n"),
+								socket:send(CSock, "this\n"),
+								socket:send(CSock, "body\r\n"),
+								socket:send(CSock, "has\r\n"),
+								socket:send(CSock, "no\r\n"),
+								socket:send(CSock, "bare\r\n"),
+								socket:send(CSock, "newlines\r\n"),
+								socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> socket:active_once(CSock) end,
+								?assertMatch("451 "++_, Packet6),
+								?debugFmt("Message send, received: ~p~n", [Packet6])
+						end
+					}
 			end
+
 		]
 	}.
 
