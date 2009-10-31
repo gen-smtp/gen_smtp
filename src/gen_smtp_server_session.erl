@@ -135,7 +135,7 @@ handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, read
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
 	socket:send(Socket, "451 Bare newline detected\r\n"),
-	io:format("bare newline detected: ~p~n", self()),
+	io:format("bare newline detected: ~p~n", [self()]),
 	socket:active_once(Socket),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
