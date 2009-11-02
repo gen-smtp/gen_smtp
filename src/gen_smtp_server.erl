@@ -155,7 +155,7 @@ handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}}, #state{module 
 		{ok, ClientSocket} = socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket),
 		%% New client connected
 		% io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, Listener#listener.hostname, length(State#state.sessions) + 1) of
+		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, [{hostname, Listener#listener.hostname}, {sessioncount, length(State#state.sessions) + 1}]) of
 			{ok, Pid} ->
 				link(Pid),
 				socket:controlling_process(ClientSocket, Pid),

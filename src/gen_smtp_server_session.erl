@@ -37,7 +37,7 @@
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/4, start/4]).
+-export([start_link/3, start/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -60,7 +60,6 @@
 	{
 		socket = erlang:error({undefined, socket}) :: port() | {'ssl', any()},
 		module = erlang:error({undefined, module}) :: atom(),
-		hostname = erlang:error({undefined, hostname}) :: string(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [string()],
 		waitingauth = false :: bool() | string(),
@@ -68,7 +67,8 @@
 		readmessage = false :: bool(),
 		readheaders = false :: bool(),
 		tls = false :: bool(),
-		callbackstate :: any()
+		callbackstate :: any(),
+		options = [] :: [tuple()]
 	}
 ).
 
@@ -89,25 +89,22 @@ behaviour_info(callbacks) ->
 behaviour_info(_Other) ->
 	undefined.
 
-% TODO - there should be an Options parameter instead of SessionCount (and possibly Hostname)
--spec(start_link/4 :: (Socket :: port(), Module :: atom(), Hostname :: string(), SessionCount :: pos_integer()) -> {'ok', pid()}).
-start_link(Socket, Module, Hostname, SessionCount) ->
-	gen_server:start_link(?MODULE, [Socket, Module, Hostname, SessionCount], []).
+-spec(start_link/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()}).
+start_link(Socket, Module, Options) ->
+	gen_server:start_link(?MODULE, [Socket, Module, Options], []).
 
--spec(start/4 :: (Socket :: port(), Module :: atom(), Hostname :: string(), SessionCount :: pos_integer()) -> {'ok', pid()}).
-start(Socket, Module, Hostname, SessionCount) ->
-	gen_server:start(?MODULE, [Socket, Module, Hostname, SessionCount], []).
+-spec(start/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()}).
+start(Socket, Module, Options) ->
+	gen_server:start(?MODULE, [Socket, Module, Options], []).
 
 -spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()} | 'ignore').
-init([Socket, Module, Hostname, SessionCount]) ->
-	{A1, A2, A3} = now(),
-	random:seed(A1, A2, A3),
+init([Socket, Module, Options]) ->
 	{ok, {PeerName, _Port}} = socket:peername(Socket),
-	case Module:init(Hostname, SessionCount, PeerName) of
+	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName) of
 		{ok, Banner, CallbackState} ->
 			socket:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
 			socket:active_once(Socket),
-			{ok, #state{socket = Socket, module = Module, hostname = Hostname, callbackstate = CallbackState}, ?TIMEOUT};
+			{ok, #state{socket = Socket, module = Module, options = Options, callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
 			socket:send(Socket, Message ++ "\r\n"),
 			socket:close(Socket),
@@ -182,13 +179,13 @@ handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = 
 	%io:format("Header terminator~n", []),
 	socket:active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
-handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope} = State) ->
-	case check_for_bare_newline(Packet) of
-		true ->
+handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope, options = Options} = State) ->
+	case {check_for_bare_newline(Packet), proplists:get_value(ignore_bare_newlines, Options, false)} of
+		{true, false} ->
 			socket:send(Socket, "451 Bare newline detected\r\n"),
 			socket:active_once(Socket),
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		false ->
+		_ ->
 			Bin = case Packet of
 				<<$., _/binary>> ->
 					binstr:substr(Packet, 2);
@@ -232,13 +229,13 @@ handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope =
 		socket:active_once(Socket),
 		{noreply, NewState, ?TIMEOUT}
 	end;
-handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope} = State) ->
-	case check_for_bare_newline(Packet) of
-		true ->
+handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope, options = Options} = State) ->
+	case {check_for_bare_newline(Packet), proplists:get_value(ignore_bare_newlines, Options, false)} of
+		{true, false} ->
 			socket:send(Socket, "451 Bare newline detected\r\n"),
 			socket:active_once(Socket),
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		false ->
+		_ ->
 			%io:format("got message chunk \"~p\"~n", [Packet]),
 			% if there's a leading dot, trim it off
 			Bin = case Packet of
@@ -268,7 +265,7 @@ handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Enve
 
 			socket:setopts(Socket, [{packet, raw}]),
 			spawn_opt(fun() -> receive_data(ExistingData,
-							Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Self) end,
+							Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Self, Options) end,
 				[link, {fullsweep_after, 0}]),
 
 			{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT}
@@ -330,10 +327,10 @@ handle_request({[], _Any}, #state{socket = Socket} = State) ->
 handle_request({"HELO", []}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax: HELO hostname\r\n"),
 	{ok, State};
-handle_request({"HELO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
+handle_request({"HELO", Hostname}, #state{socket = Socket, options = Options, module = Module} = State) ->
 	case Module:handle_HELO(Hostname, State#state.callbackstate) of
 		{ok, CallbackState} ->
-			socket:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
+			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
 			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
 			socket:send(Socket, Message ++ "\r\n"),
@@ -342,12 +339,12 @@ handle_request({"HELO", Hostname}, #state{socket = Socket, hostname = MyHostname
 handle_request({"EHLO", []}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname, module = Module} = State) ->
+handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, module = Module} = State) ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, State#state.callbackstate) of
 		{ok, Extensions, CallbackState} ->
 			case Extensions of
 				[] ->
-					socket:send(Socket, io_lib:format("250 ~s\r\n", [MyHostname])),
+					socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
 					State#state{extensions = Extensions, callbackstate = CallbackState};
 				_Else ->
 					F =
@@ -366,7 +363,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, hostname = MyHostname
 						false ->
 							Extensions
 					end,
-					{_, _, Response} = lists:foldl(F, {1, length(Extensions2), string:concat(string:concat("250-", MyHostname), "\r\n")}, Extensions2),
+					{_, _, Response} = lists:foldl(F, {1, length(Extensions2), string:concat(string:concat("250-", proplists:get_value(hostname, Options, smtp_util:guess_FQDN())), "\r\n")}, Extensions2),
 					socket:send(Socket, Response),
 					{ok, State#state{extensions = Extensions2, envelope = #envelope{}, callbackstate = CallbackState}}
 			end;
@@ -419,7 +416,7 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 							{ok, State#state{waitingauth = "PLAIN", envelope = Envelope#envelope{auth = {[], []}}}};
 						"CRAM-MD5" ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
-							String = get_cram_string(State#state.hostname),
+							String = get_cram_string(proplists:get_value(hostname, State#state.options, smtp_util:guess_FQDN())),
 							socket:send(Socket, "334 "++String++"\r\n"),
 							{ok, State#state{waitingauth = "CRAM-MD5", authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
@@ -759,10 +756,10 @@ get_cram_string(Hostname) ->
 
 
 %% @doc a tight loop to receive the message body
-receive_data(Acc, Socket, _, Size, MaxSize, Session) when Size > MaxSize ->
+receive_data(Acc, Socket, _, Size, MaxSize, Session, Options) when Size > MaxSize ->
 	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
-receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
+receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Options) ->
 	{Count, RecvSize} = case Size of
 		Size when OldCount > 2, OldRecvSize =:= 262144 ->
 			%io:format("increasing receive size to ~B~n", [1048576]),
@@ -784,15 +781,15 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
 		{ok, Packet} ->
 			[Last | _] = Acc,
 			Lastchar = binstr:substr(Last, -1),
-			case check_for_bare_newline(Packet) of
-				true when Lastchar =/= <<"\r">> -> % last packet didn't have the corresponding CR
+			case {check_for_bare_newline(Packet), proplists:get_value(ignore_bare_newlines, Options, false)} of
+				{true, false} when Lastchar =/= <<"\r">> -> % last packet didn't have the corresponding CR
 					Session ! {receive_data, {error, bare_newline}};
 				_ ->
 					case binstr:strpos(Packet, "\r\n.\r\n") of
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session);
+							receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(Packet, 1, Index - 1),
 							Rest = binstr:substr(Packet, Index+5),
@@ -811,7 +808,7 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
 					% uh-oh
 					io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
-					receive_data(Acc, Socket, {Count - 1, RecvSize}, Size, MaxSize, Session);
+					receive_data(Acc, Socket, {Count - 1, RecvSize}, Size, MaxSize, Session, Options);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
@@ -823,7 +820,7 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session) ->
 		{error, timeout} ->
 			NewRecvSize = adjust_receive_size_down(Size, RecvSize),
 			%io:format("timeout when trying to read ~B bytes, lowering receive size to ~B~n", [RecvSize, NewRecvSize]),
-			receive_data(Acc, Socket, {-5, NewRecvSize}, Size, MaxSize, Session);
+			receive_data(Acc, Socket, {-5, NewRecvSize}, Size, MaxSize, Session, Options);
 		{error, Reason} ->
 			io:format("receive error: ~p~n", [Reason]),
 			exit(self(), kill)
@@ -957,7 +954,7 @@ smtp_session_test_() ->
 					SSock when is_port(SSock) ->
 						?debugFmt("Got server side of the socket ~p, client is ~p~n", [SSock, CSock])
 				end,
-				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, "localhost", 1),
+				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, [{hostname, "localhost"}, {sessioncount, 1}]),
 				socket:controlling_process(SSock, Pid),
 				{CSock, Pid}
 		end,
@@ -1232,7 +1229,7 @@ smtp_session_auth_test_() ->
 					SSock when is_port(SSock) ->
 						?debugFmt("Got server side of the socket ~p, client is ~p~n", [SSock, CSock])
 				end,
-				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example_auth, "localhost", 1),
+				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example_auth, [{hostname, "localhost"}, {sessioncount, 1}]),
 				socket:controlling_process(SSock, Pid),
 				{CSock, Pid}
 		end,
@@ -1740,7 +1737,7 @@ smtp_session_tls_test_() ->
 							SSock when is_port(SSock) ->
 								?debugFmt("Got server side of the socket ~p, client is ~p~n", [SSock, CSock])
 						end,
-						{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example_auth, "localhost", 1),
+						{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example_auth, [{hostname, "localhost"}, {sessioncount, 1}]),
 						socket:controlling_process(SSock, Pid),
 						{CSock, Pid}
 				end,
