@@ -79,11 +79,9 @@ decode(OrigHeaders, Body, Options) ->
 
 -spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
 encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
-	string:join(encode_headers(Headers), "\r\n") ++ "\r\n\r\n" ++ 
-	string:join(
-		encode_component(ContentTypeParams, Parts),
-		"\r\n"
-	);
+	list_to_binary([binstr:join(encode_headers(Headers), "\r\n"), "\r\n\r\n",
+		binstr:join(encode_component(ContentTypeParams, Parts),
+			"\r\n")]);
 encode(_) ->
 	io:format("Not a mime-decoded DATA~n"),
 	erlang:error(non_mime).
@@ -433,21 +431,23 @@ encode_headers(Headers) ->
 encode_headers([], EncodedHeaders) ->
 	EncodedHeaders;
 encode_headers([{Key, Value}|T] = _Headers, EncodedHeaders) ->
-	encode_headers(T, encode_folded_header(Key++": "++Value, EncodedHeaders)).
+	encode_headers(T, encode_folded_header(list_to_binary([Key,": ",Value]),
+			EncodedHeaders)).
 
 encode_folded_header(Header, HeaderLines) ->
-  case string:str(Header, ";") of
+	case binstr:strchr(Header, ";") of
 		0 ->
 			HeaderLines ++ [Header];
 		Index ->
-			Remainder = string:substr(Header, Index+1),
+			Remainder = binstr:substr(Header, Index+1),
 			TabbedRemainder = case Remainder of
-				[$\t|_] -> Remainder;
-				_       -> "\t"++Remainder
+				<<$\t,_Rest/binary>> ->
+					Remainder;
+				_ ->
+					<<"\t", Remainder>>
 			end,
-			HeaderLines ++
-			[ string:substr(Header, 1, Index) ] ++
-			encode_folded_header(TabbedRemainder, [])
+			HeaderLines ++ [ string:substr(Header, 1, Index) ] ++
+				encode_folded_header(TabbedRemainder, [])
 	end.
 
 encode_component(Params, Parts) ->
@@ -730,7 +730,15 @@ parse_example_mails_test_() ->
 		},
 		{"parse a plain text email with no MIME header",
 			fun() ->
-				?assertError(non_mime, Getmail("Plain-text-only-no-MIME.eml"))
+				{Type, SubType, Headers, Properties, Body} =
+					Getmail("Plain-text-only-no-MIME.eml"),
+				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
+				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
+			end
+		},
+		{"parse a multipart email with no MIME header",
+			fun() ->
+					?assertError(non_mime_multipart, Getmail("rich-text-no-MIME.eml"))
 			end
 		},
 		{"rich text",
@@ -1114,6 +1122,24 @@ rfc2047_test_() ->
 			fun() ->
 					?assertEqual(<<"this is some text">>, decode_header(<<"=?iso-8859-1?q?this=20is=20some=20text?=">>, "utf-8")),
 					?assertEqual(<<"=?iso-8859-1?q?this is some text?=">>, decode_header(<<"=?iso-8859-1?q?this is some text?=">>, "utf-8"))
+			end
+		}
+	].
+
+encoding_test_() ->
+	[
+		{"Simple email",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"content-type-params">>,
+								[{<<"charset">>,<<"US-ASCII">>}],
+								{<<"disposition">>,<<"inline">>}}],
+						<<"This is a plain message">>},
+					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\n\r\nThis is a plain message">>,
+					?assertEqual(Result, encode(Email))
 			end
 		}
 	].
