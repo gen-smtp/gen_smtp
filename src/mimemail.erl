@@ -175,7 +175,7 @@ get_header_value(Needle, Headers) ->
 	%io:format("Headers: ~p~n", [Headers]),
 	F =
 	fun({Header, _Value}) ->
-			string:to_lower(binary_to_list(Header)) =:= string:to_lower(binary_to_list(Needle))
+			binstr:to_lower(Header) =:= binstr:to_lower(Needle)
 	end,
 	case lists:filter(F, Headers) of
 		% TODO if there's duplicate headers, should we use the first or the last?
@@ -452,21 +452,20 @@ encode_folded_header(Header, HeaderLines) ->
 
 encode_component(Params, Parts) ->
 	case Params of
-
 		% is this a multipart component?
-		[	{"content-type-params", [{"boundary", Boundary}]},
-			{"disposition", "inline"},
-			{"disposition-params", []}
+		[ {<<"content-type-params">>, [{<<"boundary">>, Boundary}]},
+			{<<"disposition">>, <<"inline">>},
+			{<<"disposition-params">>, []}
 		] ->
-			[""] ++  % blank line before start of component
+			[<<>>] ++  % blank line before start of component
 			lists:flatmap(
 				fun(Part) ->
-					["--"++Boundary] ++ % start with the boundary
-					encode_component_part(Part)
+						[list_to_binary([<<"--">>, Boundary])] ++ % start with the boundary
+						encode_component_part(Part)
 				end,
 				Parts
-			) ++ ["--"++Boundary++"--"] % final boundary (with /--$/)
-			  ++ [""]; % blank line at the end of the multipart component
+			) ++ [list_to_binary([<<"--">>, Boundary, <<"--">>])] % final boundary (with /--$/)
+			  ++ [<<>>]; % blank line at the end of the multipart component
 
 		% or an inline component?
 	  _ -> [Parts]
@@ -475,22 +474,18 @@ encode_component(Params, Parts) ->
 encode_component_part(Part) ->
 	case Part of
 		{<<"multipart">>, _, Headers, PartParams, Body} ->
-			encode_headers(Headers)
-			++ [""] ++
+			encode_headers(Headers) ++ [<<>>] ++
 			encode_component(PartParams, Body);
-
 		{_Type, _SubType, Headers, _PartParams, Body} ->
 			PartData = case Body of
 				{_,_,_,_,_} -> encode_component_part(Body);
 				String      -> [String]
 			end,
-			encode_headers(Headers)
-			++ [""] ++
+			encode_headers(Headers) ++ [<<>>] ++
 			encode_body(
-					get_header_value("Content-Transfer-Encoding", Headers),
+					get_header_value(<<"Content-Transfer-Encoding">>, Headers),
 					PartData
 			 );
-
 		_ ->
 			io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
 			[]
@@ -499,7 +494,7 @@ encode_component_part(Part) ->
 encode_body(undefined, Body) ->
 	Body;
 encode_body(Type, Body) ->
-	case string:to_lower(Type) of
+	case binstr:to_lower(Type) of
 		"quoted-printable" ->
 			[InnerBody] = Body,
 			encode_quoted_printable(InnerBody);
@@ -708,7 +703,6 @@ various_parsing_test_() ->
 		}
 	].
 
-%-define(IMAGE_MD5, <<5,253,79,13,122,119,92,33,133,121,18,149,188,241,56,81>>).
 -define(IMAGE_MD5, <<110,130,37,247,39,149,224,61,114,198,227,138,113,4,198,60>>).
 
 parse_example_mails_test_() ->
@@ -1141,7 +1135,41 @@ encoding_test_() ->
 					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
+		},
+		{"multipart/alternative email",
+			fun() ->
+					Email = {<<"multipart">>, <<"alternative">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"content-type-params">>,
+								[{<<"boundary">>, <<"wtf-123234234">>}]},
+							{<<"disposition">>,<<"inline">>},
+							{<<"disposition-params">>,[]}],
+						[{<<"text">>,<<"plain">>,
+								[{<<"Content-Type">>,
+										<<"text/plain;charset=US-ASCII;format=flowed">>},
+									{<<"Content-Transfer-Encoding">>,<<"7bit">>}],
+								[{<<"content-type-params">>,
+										[{<<"charset">>,<<"US-ASCII">>},
+											{<<"format">>,<<"flowed">>}]},
+									{<<"disposition">>,<<"inline">>},
+									{<<"disposition-params">>,[]}],
+								<<"This message contains rich text.">>},
+							{<<"text">>,<<"html">>,
+								[{<<"Content-Type">>,<<"text/html;charset=US-ASCII">>},
+									{<<"Content-Transfer-Encoding">>,<<"7bit">>}],
+								[{<<"content-type-params">>,
+										[{<<"charset">>,<<"US-ASCII">>}]},
+									{<<"disposition">>,<<"inline">>},
+									{<<"disposition-params">>,[]}],
+								<<"<html><body>This message also contains HTML</body></html>">>}]},
+
+					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\n\r\nThis is a plain message">>,
+					?assertEqual(Result, encode(Email))
+			end
 		}
+
 	].
 
 
