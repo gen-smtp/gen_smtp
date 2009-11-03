@@ -180,17 +180,17 @@ handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = 
 	socket:active_once(Socket),
 	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
 handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope, options = Options} = State) ->
-	case {check_for_bare_newline(Packet), proplists:get_value(ignore_bare_newlines, Options, false)} of
-		{true, false} ->
+	case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
+		error ->
 			socket:send(Socket, "451 Bare newline detected\r\n"),
 			socket:active_once(Socket),
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		_ ->
-			Bin = case Packet of
+		FixedPacket ->
+			Bin = case FixedPacket of
 				<<$., _/binary>> ->
-					binstr:substr(Packet, 2);
+					binstr:substr(FixedPacket, 2);
 				_ ->
-					Packet
+					FixedPacket
 			end,
 			%io:format("Header candidate: ~p~n", [Bin]),
 			NewState = case Bin of % first, check for a leading space or tab
@@ -230,19 +230,19 @@ handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope =
 		{noreply, NewState, ?TIMEOUT}
 	end;
 handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope, options = Options} = State) ->
-	case {check_for_bare_newline(Packet), proplists:get_value(ignore_bare_newlines, Options, false)} of
-		{true, false} ->
+	case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
+		error ->
 			socket:send(Socket, "451 Bare newline detected\r\n"),
 			socket:active_once(Socket),
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		_ ->
+		FixedPacket->
 			%io:format("got message chunk \"~p\"~n", [Packet]),
 			% if there's a leading dot, trim it off
-			Bin = case Packet of
+			Bin = case FixedPacket of
 				<<$., _/binary>> ->
-					binstr:substr(Packet, 2);
+					binstr:substr(FixedPacket, 2);
 				_ ->
-					Packet
+					FixedPacket
 			end,
 			%socket:active_once(Socket),
 			%{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
@@ -781,18 +781,19 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 		{ok, Packet} ->
 			[Last | _] = Acc,
 			Lastchar = binstr:substr(Last, -1),
-			case {check_for_bare_newline(Packet), proplists:get_value(ignore_bare_newlines, Options, false)} of
-				{true, false} when Lastchar =/= <<"\r">> -> % last packet didn't have the corresponding CR
+			<<Firstchar, _/binary>> = Packet,
+			case check_bare_crlf(Packet, Last, proplists:get_value(allow_bare_newlines, Options, false), 0) of
+				error ->
 					Session ! {receive_data, {error, bare_newline}};
-				_ ->
-					case binstr:strpos(Packet, "\r\n.\r\n") of
+				FixedPacket ->
+					case binstr:strpos(FixedPacket, "\r\n.\r\n") of
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session, Options);
+							receive_data([FixedPacket | Acc], Socket, {Count, RecvSize}, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
-							String = binstr:substr(Packet, 1, Index - 1),
-							Rest = binstr:substr(Packet, Index+5),
+							String = binstr:substr(FixedPacket, 1, Index - 1),
+							Rest = binstr:substr(FixedPacket, Index+5),
 							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
 							Result = list_to_binary(lists:reverse([String | Acc])),
 							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
@@ -823,7 +824,7 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 			receive_data(Acc, Socket, {-5, NewRecvSize}, Size, MaxSize, Session, Options);
 		{error, Reason} ->
 			io:format("receive error: ~p~n", [Reason]),
-			exit(self(), kill)
+			exit(receive_error)
 	end.
 
 
@@ -836,14 +837,73 @@ adjust_receive_size_down(Size, RecvSize) when RecvSize > 8192 ->
 adjust_receive_size_down(Size, RecvSize) ->
 	0.
 
-check_for_bare_newline(Bin) ->
-	check_for_bare_newline(Bin, 0).
+check_for_bare_crlf(Bin) ->
+	check_for_bare_crlf(Bin, 0).
 
-check_for_bare_newline(Bin, Offset) ->
-	case re:run(Bin, "(?<!\r)\n", [{capture, none}, {offset, Offset}]) of
-		match -> true;
-		nomatch -> false
+check_for_bare_crlf(Bin, Offset) ->
+	case {re:run(Bin, "(?<!\r)\n", [{capture, none}, {offset, Offset}]), re:run(Bin, "\r(?!\n)", [{capture, none}, {offset, Offset}])}  of
+		{match, _} -> true;
+		{_, match} -> true;
+		_ -> false
 	end.
+
+fix_bare_crlf(Bin, Offset) ->
+	Options = [{offset, Offset}, {return, binary}, global],
+	re:replace(re:replace(Bin, "(?<!\r)\n", "\r\n", Options), "\r(?!\n)", "\r\n", Options).
+
+strip_bare_crlf(Bin, Offset) ->
+	Options = [{offset, Offset}, {return, binary}, global],
+	re:replace(re:replace(Bin, "(?<!\r)\n", "", Options), "\r(?!\n)", "", Options).
+
+check_bare_crlf(Binary, _, ignore, _) ->
+	Binary;
+check_bare_crlf(<<$\n,Rest/binary>> = Bin, Prev, Op, Offset) when byte_size(Prev) > 0, Offset == 0 ->
+	% check if last character of previous was a CR
+	Lastchar = binstr:substr(Prev, -1),
+	case Lastchar of
+		<<"\r">> ->
+			% okay, check again for the rest
+			check_bare_crlf(Bin, <<>>, Op, 1);
+		_ when Op == false -> % not fixing or ignoring them
+			error;
+		_ ->
+			% no dice
+			check_bare_crlf(Bin, <<>>, Op, 0)
+	end;
+check_bare_crlf(Binary, _Prev, Op, Offset) ->
+	Last = binstr:substr(Binary, -1),
+	% is the last character a CR?
+	case Last of
+		<<"\r">> ->
+			% okay, the last character is a CR, we have to assume the next packet contains the corresponding LF
+			NewBin = binstr:substr(Binary, 1, byte_size(Binary) -1),
+			case check_for_bare_crlf(NewBin, Offset) of
+				true when Op == fix ->
+					list_to_binary([fix_bare_crlf(NewBin, Offset), "\r"]);
+				true when Op == strip ->
+					list_to_binary([strip_bare_crlf(NewBin, Offset), "\r"]);
+				true ->
+					error;
+				false ->
+					Binary
+			end;
+		_ ->
+			case check_for_bare_crlf(Binary, Offset) of
+				true when Op == fix ->
+					fix_bare_crlf(Binary, Offset);
+				true when Op == strip ->
+					strip_bare_crlf(Binary, Offset);
+				true ->
+					error;
+				false ->
+					Binary
+			end
+	end.
+
+
+		
+			
+
 
 -ifdef(EUNIT).
 parse_encoded_address_test_() ->
@@ -1139,6 +1199,42 @@ smtp_session_test_() ->
 						end
 					}
 			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with a bare CR",
+						fun() ->
+								socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								socket:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> socket:active_once(CSock) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								socket:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet3),
+								socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet4),
+								socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
+								?assertMatch("354 "++_, Packet5),
+								socket:send(CSock, "Subject: tls message\r\n"),
+								socket:send(CSock, "To: <user@otherhost>\r\n"),
+								socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								socket:send(CSock, "\r\n"),
+								socket:send(CSock, "this\r\n"),
+								socket:send(CSock, "\rbody\r\n"),
+								socket:send(CSock, "has\r\n"),
+								socket:send(CSock, "a\r\n"),
+								socket:send(CSock, "bare\r"),
+								socket:send(CSock, "CR\r\n"),
+								socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> socket:active_once(CSock) end,
+								?assertMatch("451 "++_, Packet6),
+								?debugFmt("Message send, received: ~p~n", [Packet6])
+						end
+					}
+			end,
+
 			fun({CSock, _Pid}) ->
 					{"Sending DATA with a bare newline in the headers",
 						fun() ->
@@ -2173,6 +2269,45 @@ smtp_session_tls_test_() ->
 				}
 			]
 	end.
+
+stray_newline_test_() ->
+	[
+		{"Error out by default",
+			fun() ->
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, false, 0)),
+					?assertEqual(error, check_bare_crlf(<<"foo\n">>, <<>>, false, 0)),
+					?assertEqual(error, check_bare_crlf(<<"fo\ro\n">>, <<>>, false, 0)),
+					?assertEqual(error, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, false, 0)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, false, 0)),
+					?assertEqual(<<"foo\r">>, check_bare_crlf(<<"foo\r">>, <<>>, false, 0))
+			end
+		},
+		{"Fixing them should work",
+			fun() ->
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, fix, 0)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\n">>, <<>>, fix, 0)),
+					?assertEqual(<<"fo\r\no\r\n">>, check_bare_crlf(<<"fo\ro\n">>, <<>>, fix, 0)),
+					?assertEqual(<<"fo\r\no\r\n\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, fix, 0)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, fix, 0))
+			end
+		},	
+		{"Stripping them should work",
+			fun() ->
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, strip, 0)),
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"fo\ro\n">>, <<>>, strip, 0)),
+					?assertEqual(<<"foo\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, strip, 0)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, strip, 0))
+			end
+		},
+		{"Ignoring them should work",
+			fun() ->
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, ignore, 0)),
+					?assertEqual(<<"fo\ro\n">>, check_bare_crlf(<<"fo\ro\n">>, <<>>, ignore, 0)),
+					?assertEqual(<<"fo\ro\n\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, ignore, 0)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, ignore, 0))
+			end
+		}
+	].
 
 
 -endif.

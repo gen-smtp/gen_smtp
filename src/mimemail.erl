@@ -1096,7 +1096,7 @@ encode_quoted_printable_test_() ->
 		}
 	].
 
-rfc2047_test_() ->
+rfc2047_decode_test_() ->
 	[
 		{"Simple tests",
 			fun() ->
