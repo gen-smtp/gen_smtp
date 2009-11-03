@@ -79,7 +79,7 @@ decode(OrigHeaders, Body, Options) ->
 
 -spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
 encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
-	list_to_binary([binstr:join(encode_headers(Headers), "\r\n"), "\r\n\r\n",
+	list_to_binary([binstr:join(encode_headers(check_headers(Headers)), "\r\n"), "\r\n\r\n",
 		binstr:join(encode_component(ContentTypeParams, Parts),
 			"\r\n")]);
 encode(_) ->
@@ -426,8 +426,49 @@ decode_quoted_printable_line(<<H, T/binary>>, Acc) when H =:= $\s; H =:= $\t ->
 			decode_quoted_printable_line(T, [H | Acc])
 	end.
 
+check_headers(Headers) ->
+	Checked = [<<"Date">>, <<"From">>, <<"Message-ID">>, <<"References">>, <<"Subject">>],
+	check_headers(Checked, Headers).
+
+check_headers([], Headers) ->
+	Headers;
+check_headers([Header | Tail], Headers) ->
+	case get_header_value(Header, Headers) of
+		undefined when Header == <<"Date">> ->
+			check_headers(Tail, [{<<"Date">>, list_to_binary(smtp_util:rfc5322_timestamp())} | Headers]);
+		undefined when Header == <<"From">> ->
+			?debugFmt("Headers: ~p~n", [Headers]),
+			erlang:error(missing_from);
+		undefined when Header == <<"Message-ID">> ->
+			check_headers(Tail, [{<<"Message-ID">>, list_to_binary(smtp_util:generate_message_id())} | Headers]);
+		undefined when Header == <<"References">> ->
+			case get_header_value(<<"In-Reply-To">>, Headers) of
+				undefined ->
+					check_headers(Tail, Headers); % ok, whatever
+				ReplyID ->
+					check_headers(Tail, [{<<"References">>, ReplyID} | Headers])
+			end;
+		References when Header == <<"References">> ->
+			% check if the in-reply-to header, if present, is in references
+			case get_header_value(<<"In-Reply-To">>, Headers) of
+				undefined ->
+					check_headers(Tail, Headers); % ok, whatever
+				ReplyID ->
+					case binstr:strpos(binstr:to_lower(References), binstr:to_lower(ReplyID)) of
+						0 ->
+							% okay, tack on the reply-to to the end of References
+							check_headers(Tail, [{<<"References">>, list_to_binary([References, " ", ReplyID])} | proplists:delete(<<"References">>, Headers)]);
+						Index ->
+							check_headers(Tail, Headers) % nothing to do
+					end
+				end;
+		_ ->
+			check_headers(Tail, Headers)
+	end.
+
 encode_headers(Headers) ->
 	encode_headers(Headers, []).
+
 encode_headers([], EncodedHeaders) ->
 	EncodedHeaders;
 encode_headers([{Key, Value}|T] = _Headers, EncodedHeaders) ->
@@ -1136,12 +1177,14 @@ encoding_test_() ->
 					Email = {<<"text">>, <<"plain">>, [
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
-							{<<"Subject">>, <<"This is a test">>}],
+							{<<"Subject">>, <<"This is a test">>},
+							{<<"Message-ID">>, <<"<abcd@example.com>">>},
+							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
 						[{<<"content-type-params">>,
 								[{<<"charset">>,<<"US-ASCII">>}],
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
-					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\n\r\nThis is a plain message">>,
+					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
 		},
@@ -1225,6 +1268,69 @@ encoding_test_() ->
 									"HTML and is base64",
 									"encoded\r\n\r\n</body></html>">>}]},
 						Result)
+			end
+		},
+		{"Missing headers should be added",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"content-type-params">>,
+								[{<<"charset">>,<<"US-ASCII">>}],
+								{<<"disposition">>,<<"inline">>}}],
+						<<"This is a plain message">>},
+					Result = decode(encode(Email)),
+					?assertNot(undefined == proplists:get_value(<<"Message-ID">>, element(3, Result))),
+					?assertNot(undefined == proplists:get_value(<<"Date">>, element(3, Result))),
+					?assertEqual(undefined, proplists:get_value(<<"References">>, element(3, Result)))
+			end
+		},
+		{"Reference header should be added in presence of In-Reply-To",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"In-Reply-To">>, <<"<abcd@example.com>">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"content-type-params">>,
+								[{<<"charset">>,<<"US-ASCII">>}],
+								{<<"disposition">>,<<"inline">>}}],
+						<<"This is a plain message">>},
+					Result = decode(encode(Email)),
+					?assertEqual(<<"<abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
+			end
+		},
+		{"Reference header should be appended to in presence of In-Reply-To, if appropiate",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"In-Reply-To">>, <<"<abcd@example.com>">>},
+							{<<"References">>, <<"<wxyz@example.com>">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"content-type-params">>,
+								[{<<"charset">>,<<"US-ASCII">>}],
+								{<<"disposition">>,<<"inline">>}}],
+						<<"This is a plain message">>},
+					Result = decode(encode(Email)),
+					?assertEqual(<<"<wxyz@example.com> <abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
+			end
+		},
+		{"Reference header should NOT be appended to in presence of In-Reply-To, if already present",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"In-Reply-To">>, <<"<abcd@example.com>">>},
+							{<<"References">>, <<"<wxyz@example.com> <abcd@example.com>">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"content-type-params">>,
+								[{<<"charset">>,<<"US-ASCII">>}],
+								{<<"disposition">>,<<"inline">>}}],
+						<<"This is a plain message">>},
+					Result = decode(encode(Email)),
+					?assertEqual(<<"<wxyz@example.com> <abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
 			end
 		}
 	].
