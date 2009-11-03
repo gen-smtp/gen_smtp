@@ -41,10 +41,11 @@
 		to_upper/1,
 		all/2,
 		reverse/1,
-		reverse_str_to_bin/1
+		reverse_str_to_bin/1,
+		join/2
 ]).
 
-strchr(Bin, C) ->
+strchr(Bin, C) when is_binary(Bin) ->
 	strchr(Bin, C, 0).
 
 strchr(Bin, C, I) ->
@@ -253,4 +254,11 @@ reverse(Bin) ->
 %% it's probably slower (but still not that bad).
 reverse_str_to_bin(String) ->
 	reverse(list_to_binary(String)).
-	
+
+join(Binaries, Glue) ->
+	join(Binaries, Glue, []).
+
+join([H], _Glue, Acc) ->
+	list_to_binary(lists:reverse([H | Acc]));
+join([H|T], Glue, Acc) ->
+	join(T, Glue, [Glue, H | Acc]).
