@@ -93,3 +93,10 @@ zone(Val) when Val < 0 ->
 	io_lib:format("-~4..0w", [trunc(abs(Val))]);
 zone(Val) when Val >= 0 ->
 	io_lib:format("+~4..0w", [trunc(abs(Val))]).
+
+generate_message_id() ->
+	FQDN = guess_FQDN(),
+	Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(erlang:localtime()))],
+	io_lib:format("<~s@~s>", [Md5, FQDN]).
+
+
