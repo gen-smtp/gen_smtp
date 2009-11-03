@@ -508,10 +508,10 @@ wrap_to_76(String) ->
 	wrap_to_76(String, []).
 wrap_to_76([], Lines) ->
 	Lines;
-wrap_to_76(String, Lines) when length(String) >= 76 ->
+wrap_to_76(String, Lines) when byte_size(String) >= 76 ->
 	wrap_to_76(
-		string:substr(String, 76+1),
-		Lines ++ [string:substr(String, 1, 76)]
+		binstr:substr(String, 76+1),
+		Lines ++ [binstr:substr(String, 1, 76)]
 	);
 wrap_to_76(String, Lines) ->
 	wrap_to_76(
@@ -1234,8 +1234,7 @@ roundtrip_test_disabled() ->
 	[
 		{"roundtrip test for the gamut",
 			fun() ->
-					{ok, Bin} = file:read_file("testdata/the-gamut.eml"),
-					Email = binary_to_list(Bin),
+					{ok, Email} = file:read_file("testdata/the-gamut.eml"),
 					Decoded = decode(Email),
 					Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
@@ -1249,8 +1248,7 @@ roundtrip_test_disabled() ->
 		},
 		{"round trip plain text only email",
 			fun() ->
-					{ok, Bin} = file:read_file("testdata/Plain-text-only.eml"),
-					Email = binary_to_list(Bin),
+					{ok, Email} = file:read_file("testdata/Plain-text-only.eml"),
 					Decoded = decode(Email),
 					Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
@@ -1264,18 +1262,17 @@ roundtrip_test_disabled() ->
 		},
 		{"round trip quoted-printable email",
 			fun() ->
-					{ok, Bin} = file:read_file("testdata/testcase1"),
-					Email = binary_to_list(Bin),
+					{ok, Email} = file:read_file("testdata/testcase1"),
 					Decoded = decode(Email),
 					Encoded = encode(Decoded),
-					{ok, F1} = file:open("f1", [write]),
-					{ok, F2} = file:open("f2", [write]),
+					%{ok, F1} = file:open("f1", [write]),
+					%{ok, F2} = file:open("f2", [write]),
 					%file:write(F1, Email),
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					%?assertEqual(Email, Encoded)
-					ok
+					?assertEqual(Email, Encoded)
+					%ok
 			end
 		}
 	].
