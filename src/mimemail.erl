@@ -495,12 +495,12 @@ encode_body(undefined, Body) ->
 	Body;
 encode_body(Type, Body) ->
 	case binstr:to_lower(Type) of
-		"quoted-printable" ->
+		<<"quoted-printable">> ->
 			[InnerBody] = Body,
 			encode_quoted_printable(InnerBody);
-		"base64" ->
+		<<"base64">> ->
 			[InnerBody] = Body,
-			wrap_to_76(base64:encode_to_string(InnerBody)) ++ [""];
+			wrap_to_76(base64:encode(InnerBody)) ++ [""];
 		_ -> Body
 	end.
 
@@ -527,7 +527,7 @@ encode_quoted_printable(Body, Acc, L) when L >= 75 ->
 		0 ->
 			Acc;
 		Index ->
-			string:substr(Acc, 1, Index-1)
+			binstr:substr(Acc, 1, Index-1)
 	end,
 	Len = length(LastLine),
 	case string:str(LastLine, " ") of
@@ -557,22 +557,22 @@ encode_quoted_printable(Body, Acc, L) when L >= 75 ->
 			NewAcc = lists:concat([Prefix, "\n\r=", Suffix]),
 			encode_quoted_printable(Body, NewAcc, 0)
 	end;
-encode_quoted_printable([], Acc, _L) ->
-	lists:reverse(Acc);
-encode_quoted_printable([$= | T] , Acc, L) ->
+encode_quoted_printable(<<>>, Acc, _L) ->
+	list_to_binary(lists:reverse(Acc));
+encode_quoted_printable(<<$=, T/binary>> , Acc, L) ->
 	encode_quoted_printable(T, [$D, $3, $= | Acc], L+3);
-encode_quoted_printable([$\r, $\n | T] , Acc, L) ->
+encode_quoted_printable(<<$\r, $\n, T/binary>> , Acc, L) ->
 	encode_quoted_printable(T, [$\n, $\r | Acc], 0);
-encode_quoted_printable([H | T], Acc, L) when H >= $!, H =< $< ->
+encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $!, H =< $< ->
 	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable([H | T], Acc, L) when H >= $>, H =< $~ ->
+encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $>, H =< $~ ->
 	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable([H, $\r, $\n | T], Acc, L) when H =:= $\s; H =< $\t ->
+encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, L) when H =:= $\s; H =< $\t ->
 	[[A, B]] = io_lib:format("~2.16.0B", [H]),
 	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
-encode_quoted_printable([H | T], Acc, L) when H =:= $\s; H =< $\t ->
+encode_quoted_printable(<<H, T/binary>>, Acc, L) when H =:= $\s; H =< $\t ->
 	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable([H | T], Acc, L) ->
+encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
 	[[A, B]]= io_lib:format("=~2.16.0B", [H]),
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
@@ -1055,34 +1055,43 @@ encode_quoted_printable_test_() ->
 	[
 		{"bleh",
 			fun() ->
-					?assertEqual("!", encode_quoted_printable("!", [], 0)),
-					?assertEqual("!!", encode_quoted_printable("!!", [], 0)),
-					?assertEqual("=3D:=3D", encode_quoted_printable("=:=", [], 0)),
-					?assertEqual("Thequickbrownfoxjumpedoverthelazydog.", encode_quoted_printable("Thequickbrownfoxjumpedoverthelazydog.", [], 0))
+					?assertEqual(<<"!">>, encode_quoted_printable(<<"!">>, [], 0)),
+					?assertEqual(<<"!!">>, encode_quoted_printable(<<"!!">>, [], 0)),
+					?assertEqual(<<"=3D:=3D">>, encode_quoted_printable(<<"=:=">>, [], 0)),
+					?assertEqual(<<"Thequickbrownfoxjumpedoverthelazydog.">>,
+						encode_quoted_printable(<<"Thequickbrownfoxjumpedoverthelazydog.">>, [], 0))
 			end
 		},
 		{"input with spaces",
 			fun() ->
-					?assertEqual("The quick brown fox jumped over the lazy dog.", encode_quoted_printable("The quick brown fox jumped over the lazy dog.", "", 0))
+					?assertEqual(<<"The quick brown fox jumped over the lazy dog.">>,
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.">>, "", 0))
 			end
 		},
 		{"input with tabs",
 			fun() ->
-					?assertEqual("The\tquick brown fox jumped over\tthe lazy dog.", encode_quoted_printable("The\tquick brown fox jumped over\tthe lazy dog.", "", 0))
+					?assertEqual(<<"The\tquick brown fox jumped over\tthe lazy dog.">>,
+						encode_quoted_printable(<<"The\tquick brown fox jumped over\tthe lazy dog.">>, "", 0))
 			end
 		},
 		{"input with trailing spaces",
 			fun() ->
-					?assertEqual("The quick brown fox jumped over the lazy dog.      =20\r\n", encode_quoted_printable("The quick brown fox jumped over the lazy dog.       \r\n", "", 0))
+					?assertEqual(<<"The quick brown fox jumped over the lazy dog.      =20\r\n">>,
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       \r\n">>, "", 0))
 			end
 		},
 		{"add soft newlines",
 			fun() ->
-					?assertEqual("The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.", encode_quoted_printable("The quick brown fox jumped over the lazy dog. The quick brown fox jumped over the lazy dog.", "", 0)),
-					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_ov=\r\ner_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_over_the_lazy_dog.", "", 0)),
-					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=\r\n=3Dver_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=ver_the_lazy_dog.", "", 0)),
-					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=\r\n=3Dover_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.", "", 0)),
-					?assertEqual("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.", encode_quoted_printable("The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.", "", 0))
+					?assertEqual(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.">>,
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped over the lazy dog.">>, "", 0)),
+					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_ov=\r\ner_the_lazy_dog.">>,
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_over_the_lazy_dog.">>, "", 0)),
+					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=\r\n=3Dver_the_lazy_dog.">>,
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=ver_the_lazy_dog.">>, "", 0)),
+					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=\r\n=3Dover_the_lazy_dog.">>,
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.">>, "", 0)),
+					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.">>,
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.">>, "", 0))
 			end
 		}
 	].
@@ -1141,7 +1150,10 @@ encoding_test_() ->
 					Email = {<<"multipart">>, <<"alternative">>, [
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
-							{<<"Subject">>, <<"This is a test">>}],
+							{<<"Subject">>, <<"This is a test">>},
+							{<<"MIME-Version">>, <<"1.0">>},
+							{<<"Content-Type">>,
+								<<"multipart/alternative; boundary=wtf-123234234">>}],
 						[{<<"content-type-params">>,
 								[{<<"boundary">>, <<"wtf-123234234">>}]},
 							{<<"disposition">>,<<"inline">>},
@@ -1164,12 +1176,57 @@ encoding_test_() ->
 									{<<"disposition">>,<<"inline">>},
 									{<<"disposition-params">>,[]}],
 								<<"<html><body>This message also contains HTML</body></html>">>}]},
-
-					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\n\r\nThis is a plain message">>,
-					?assertEqual(Result, encode(Email))
+					Result = decode(encode(Email)),
+					?assertMatch({<<"multipart">>, <<"alternative">>, _, _, [{<<"text">>,
+									<<"plain">>, _, _, _}, {<<"text">>, <<"html">>, _, _, _}]},
+						Result)
+			end
+		},
+		{"multipart/alternative email with encoding",
+			fun() ->
+					Email = {<<"multipart">>, <<"alternative">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>},
+							{<<"MIME-Version">>, <<"1.0">>},
+							{<<"Content-Type">>,
+								<<"multipart/alternative; boundary=wtf-123234234">>}],
+						[{<<"content-type-params">>,
+								[{<<"boundary">>, <<"wtf-123234234">>}]},
+							{<<"disposition">>,<<"inline">>},
+							{<<"disposition-params">>,[]}],
+						[{<<"text">>,<<"plain">>,
+								[{<<"Content-Type">>,
+										<<"text/plain;charset=US-ASCII;format=flowed">>},
+									{<<"Content-Transfer-Encoding">>,<<"quoted-printable">>}],
+								[{<<"content-type-params">>,
+										[{<<"charset">>,<<"US-ASCII">>},
+											{<<"format">>,<<"flowed">>}]},
+									{<<"disposition">>,<<"inline">>},
+									{<<"disposition-params">>,[]}],
+								<<"This message contains rich text.\r\n",
+								"and is =quoted printable= encoded!">>},
+							{<<"text">>,<<"html">>,
+								[{<<"Content-Type">>,<<"text/html;charset=US-ASCII">>},
+									{<<"Content-Transfer-Encoding">>,<<"base64">>}],
+								[{<<"content-type-params">>,
+										[{<<"charset">>,<<"US-ASCII">>}]},
+									{<<"disposition">>,<<"inline">>},
+									{<<"disposition-params">>,[]}],
+								<<"<html><body>This message also contains",
+								"HTML and is base64",
+								"encoded\r\n\r\n</body></html>">>}]},
+					Result = decode(encode(Email)),
+					?assertMatch({<<"multipart">>, <<"alternative">>, _, _, [{<<"text">>,
+									<<"plain">>, _, _, <<"This message contains rich text.\r\n",
+									"and is =quoted printable= encoded!">>},
+								{<<"text">>, <<"html">>, _, _,
+									<<"<html><body>This message also contains",
+									"HTML and is base64",
+									"encoded\r\n\r\n</body></html>">>}]},
+						Result)
 			end
 		}
-
 	].
 
 
