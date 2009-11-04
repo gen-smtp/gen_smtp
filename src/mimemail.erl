@@ -79,12 +79,14 @@ decode(OrigHeaders, Body, Options) ->
 
 -spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
 encode({Type, Subtype, Headers, ContentTypeParams, Parts}) ->
+	FixedHeaders = check_headers(ensure_content_headers(Type, Subtype, ContentTypeParams, Headers, Parts, true)),
 	list_to_binary([binstr:join(
 				encode_headers(
-					check_headers(ensure_content_headers(Type, Subtype, ContentTypeParams, Headers, Parts, true))),
+					FixedHeaders
+					),
 				"\r\n"),
 			"\r\n\r\n",
-		binstr:join(encode_component(ContentTypeParams, Parts),
+		binstr:join(encode_component(Type, Subtype, FixedHeaders, ContentTypeParams, Parts),
 			"\r\n")]);
 encode(_) ->
 	io:format("Not a mime-decoded DATA~n"),
@@ -381,8 +383,6 @@ decode_quoted_printable(Body) ->
 decode_quoted_printable(<<>>, <<>>, Acc) ->
 	list_to_binary(lists:reverse(Acc));
 decode_quoted_printable(Line, Rest, Acc) ->
-	%?debugFmt("line ~p~n", [Line]),
-	%?debugFmt("rest ~p~n", [Rest]),
 	case binstr:strpos(Rest, "\r\n") of
 		0 ->
 			decode_quoted_printable(Rest, <<>>, [decode_quoted_printable_line(Line, []) | Acc]);
@@ -441,7 +441,6 @@ check_headers([Header | Tail], Headers) ->
 		undefined when Header == <<"Date">> ->
 			check_headers(Tail, [{<<"Date">>, list_to_binary(smtp_util:rfc5322_timestamp())} | Headers]);
 		undefined when Header == <<"From">> ->
-			?debugFmt("Headers: ~p~n", [Headers]),
 			erlang:error(missing_from);
 		undefined when Header == <<"Message-ID">> ->
 			check_headers(Tail, [{<<"Message-ID">>, list_to_binary(smtp_util:generate_message_id())} | Headers]);
@@ -559,40 +558,41 @@ encode_folded_header(Header, HeaderLines) ->
 				encode_folded_header(TabbedRemainder, [])
 	end.
 
-encode_component(Params, Parts) ->
-	case Params of
-		% is this a multipart component?
-		[ {<<"content-type-params">>, [{<<"boundary">>, Boundary}]},
-			{<<"disposition">>, <<"inline">>},
-			{<<"disposition-params">>, []}
-		] ->
+encode_component(Type, SubType, Headers, Params, Body) ->
+	if
+		is_list(Body) -> % is this a multipart component?
+			Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Params)),
 			[<<>>] ++  % blank line before start of component
 			lists:flatmap(
 				fun(Part) ->
 						[list_to_binary([<<"--">>, Boundary])] ++ % start with the boundary
 						encode_component_part(Part)
 				end,
-				Parts
+				Body
 			) ++ [list_to_binary([<<"--">>, Boundary, <<"--">>])] % final boundary (with /--$/)
 			  ++ [<<>>]; % blank line at the end of the multipart component
-
-		% or an inline component?
-	  _ -> [Parts]
+		true -> % or an inline component?
+			%encode_component_part({Type, SubType, Headers, Params, Body})
+			encode_body(
+					get_header_value(<<"Content-Transfer-Encoding">>, Headers),
+					[Body]
+			 )
 	end.
 
 encode_component_part(Part) ->
 	case Part of
 		{<<"multipart">>, SubType, Headers, PartParams, Body} ->
 			encode_headers(ensure_content_headers(<<"multipart">>, SubType, PartParams, Headers, Body, false)) ++ [<<>>] ++
-			encode_component(PartParams, Body);
+			encode_component(<<"multipart">>, SubType, Headers, PartParams, Body);
 		{Type, SubType, Headers, PartParams, Body} ->
 			PartData = case Body of
 				{_,_,_,_,_} -> encode_component_part(Body);
 				String      -> [String]
 			end,
-			encode_headers(ensure_content_headers(Type, SubType, PartParams, Headers, Body, false)) ++ [<<>>] ++
+			FixedHeaders = ensure_content_headers(Type, SubType, PartParams, Headers, Body, false),
+			encode_headers(FixedHeaders) ++ [<<>>] ++
 			encode_body(
-					get_header_value(<<"Content-Transfer-Encoding">>, Headers),
+					get_header_value(<<"Content-Transfer-Encoding">>, FixedHeaders),
 					PartData
 			 );
 		_ ->
@@ -676,13 +676,13 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $!, H =< $< ->
 	encode_quoted_printable(T, [H | Acc], L+1);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $>, H =< $~ ->
 	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, L) when H =:= $\s; H =< $\t ->
+encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, L) when H == $\s; H == $\t ->
 	[[A, B]] = io_lib:format("~2.16.0B", [H]),
 	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
-encode_quoted_printable(<<H, T/binary>>, Acc, L) when H =:= $\s; H =< $\t ->
+encode_quoted_printable(<<H, T/binary>>, Acc, L) when H == $\s; H == $\t ->
 	encode_quoted_printable(T, [H | Acc], L+1);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
-	[[A, B]]= io_lib:format("=~2.16.0B", [H]),
+	[[A, B]] = io_lib:format("~2.16.0B", [H]),
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
 get_default_encoding() ->
@@ -1189,6 +1189,12 @@ encode_quoted_printable_test_() ->
 						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       \r\n">>, "", 0))
 			end
 		},
+		{"input with non-ascii characters",
+			fun() ->
+					?assertEqual(<<"There's some n=F8n-=E1scii st=FCff in here\r\n">>,
+						encode_quoted_printable(<<"There's some n", 248, "n-", 225,"scii st", 252, "ff in here\r\n">>, "", 0))
+			end
+		},
 		{"add soft newlines",
 			fun() ->
 					?assertEqual(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.">>,
@@ -1253,6 +1259,7 @@ encoding_test_() ->
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
 					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					?debugFmt("~s~n", [encode(Email)]),
 					?assertEqual(Result, encode(Email))
 			end
 		},
@@ -1399,6 +1406,19 @@ encoding_test_() ->
 						<<"This is a plain message">>},
 					Result = decode(encode(Email)),
 					?assertEqual(<<"<wxyz@example.com> <abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
+			end
+		},
+		{"Content-Transfer-Encoding header should be added if missing",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						<<"This is a plain message with some non-ascii characters øÿ\r\nso there">>},
+					Encoded = encode(Email),
+					Result = decode(Encoded),
+					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result)))
 			end
 		}
 	].
