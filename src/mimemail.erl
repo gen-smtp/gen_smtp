@@ -78,8 +78,12 @@ decode(OrigHeaders, Body, Options) ->
 	end.
 
 -spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
-encode({_Type, _Subtype, Headers, ContentTypeParams, Parts}) ->
-	list_to_binary([binstr:join(encode_headers(check_headers(Headers)), "\r\n"), "\r\n\r\n",
+encode({Type, Subtype, Headers, ContentTypeParams, Parts}) ->
+	list_to_binary([binstr:join(
+				encode_headers(
+					check_headers(ensure_content_headers(Type, Subtype, ContentTypeParams, Headers, Parts, true))),
+				"\r\n"),
+			"\r\n\r\n",
 		binstr:join(encode_component(ContentTypeParams, Parts),
 			"\r\n")]);
 encode(_) ->
@@ -466,6 +470,70 @@ check_headers([Header | Tail], Headers) ->
 			check_headers(Tail, Headers)
 	end.
 
+ensure_content_headers(Type, SubType, Parameters, Headers, Body, Toplevel) ->
+	CheckHeaders = [<<"Content-Type">>, <<"Content-Disposition">>, <<"Content-Transfer-Encoding">>],
+	ensure_content_headers(CheckHeaders, Type, SubType, Parameters, Headers, Body, Toplevel).
+
+ensure_content_headers([], _, _, _, Headers, _, _) ->
+	Headers;
+ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body, Toplevel) ->
+	case get_header_value(Header, Headers) of
+		undefined when Header == <<"Content-Type">>, Type =/= <<"text">>, SubType =/= <<"plain">> ->
+			% no content-type header, and its not text/plain
+			CT = io_lib:format("~s/~s", [Type, SubType]),
+			CTP = proplists:get_value(<<"content-type-params">>, Parameters, [{<<"charset">>, <<"us-ascii">>}]),
+			CTH = binstr:join([CT | encode_parameters(CTP)], ";\r\n\t"),
+			ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel);
+		undefined when Header == <<"Content-Transfer-Encoding">>, Type =/= <<"multipart">> ->
+			Enc = case proplists:get_value(<<"transfer-encoding">>, Parameters) of
+				undefined ->
+					guess_best_encoding(Body);
+				Value ->
+					Value
+			end,
+			case Enc of
+				<<"7bit">> ->
+					ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel);
+				_ -> 
+					ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Transfer-Encoding">>, Enc} | Headers], Body, Toplevel)
+			end;
+		undefined when Header == <<"Content-Disposition">>, Toplevel == false ->
+			CD = proplists:get_value(<<"disposition">>, Parameters, <<"inline">>),
+			CDP = proplists:get_value(<<"disposition-params">>, Parameters, []),
+			CDH = binstr:join([CD | encode_parameters(CDP)], ";\r\n\t"),
+			ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Disposition">>, CDH} | Headers], Body, Toplevel);
+		_ ->
+			ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel)
+	end.
+
+guess_best_encoding(Body) ->
+	Size = byte_size(Body),
+	% get only the allowed ascii characters
+	% TODO - this might not be the complete list
+	FilteredSize = length([X || <<X>> <= Body, ((X > 31 andalso X < 127) orelse X == $\r orelse X == $\n)]),
+
+	Percent = round((FilteredSize / Size) * 100),
+
+	%based on the % of printable characters, choose an encoding
+	if
+		Percent == 100 ->
+			<<"7bit">>;
+		Percent > 80 ->
+			<<"quoted-printable">>;
+		true ->
+			<<"base64">>
+	end.
+
+encode_parameters(Parameters) ->
+	lists:map(fun({X, Y}) ->
+				case binstr:strchr(Y, $\s) of
+					0 ->
+						[X, "=", Y];
+					_ ->
+						[X, "=\"", Y, "\""]
+				end
+		end, Parameters).
+
 encode_headers(Headers) ->
 	encode_headers(Headers, []).
 
@@ -514,15 +582,15 @@ encode_component(Params, Parts) ->
 
 encode_component_part(Part) ->
 	case Part of
-		{<<"multipart">>, _, Headers, PartParams, Body} ->
-			encode_headers(Headers) ++ [<<>>] ++
+		{<<"multipart">>, SubType, Headers, PartParams, Body} ->
+			encode_headers(ensure_content_headers(<<"multipart">>, SubType, PartParams, Headers, Body, false)) ++ [<<>>] ++
 			encode_component(PartParams, Body);
-		{_Type, _SubType, Headers, _PartParams, Body} ->
+		{Type, SubType, Headers, PartParams, Body} ->
 			PartData = case Body of
 				{_,_,_,_,_} -> encode_component_part(Body);
 				String      -> [String]
 			end,
-			encode_headers(Headers) ++ [<<>>] ++
+			encode_headers(ensure_content_headers(Type, SubType, PartParams, Headers, Body, false)) ++ [<<>>] ++
 			encode_body(
 					get_header_value(<<"Content-Transfer-Encoding">>, Headers),
 					PartData
@@ -1334,7 +1402,6 @@ encoding_test_() ->
 			end
 		}
 	].
-
 
 roundtrip_test_disabled() ->
 	[
