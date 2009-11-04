@@ -351,6 +351,8 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, Body);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
+	%?debugFmt("In: ~p, Out: ~p~n", [InEncoding, OutEncoding]),
+	%?debugFmt("Body ~p~n", [NewBody]),
 	{ok, CD} = iconv:open(OutEncoding, InEncoding),
 	{ok, Result} = iconv:conv_chunked(CD, NewBody),
 	iconv:close(CD),
@@ -477,10 +479,10 @@ ensure_content_headers([], _, _, _, Headers, _, _) ->
 	Headers;
 ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body, Toplevel) ->
 	case get_header_value(Header, Headers) of
-		undefined when Header == <<"Content-Type">>, Type =/= <<"text">>, SubType =/= <<"plain">> ->
+		undefined when Header == <<"Content-Type">>, (Type == <<"text">> andalso SubType =/= <<"plain">>); Type =/= <<"text">> ->
 			% no content-type header, and its not text/plain
 			CT = io_lib:format("~s/~s", [Type, SubType]),
-			CTP = proplists:get_value(<<"content-type-params">>, Parameters, [{<<"charset">>, <<"us-ascii">>}]),
+			CTP = proplists:get_value(<<"content-type-params">>, Parameters, [guess_charset(Body)]),
 			CTH = binstr:join([CT | encode_parameters(CTP)], ";\r\n\t"),
 			ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel);
 		undefined when Header == <<"Content-Transfer-Encoding">>, Type =/= <<"multipart">> ->
@@ -503,6 +505,14 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 			ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Disposition">>, CDH} | Headers], Body, Toplevel);
 		_ ->
 			ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel)
+	end.
+
+guess_charset(Body) when is_list(Body) ->
+	[];
+guess_charset(Body) ->
+	case binstr:all(fun(X) -> X < 128 end, Body) of
+		true -> {<<"charset">>, <<"us-ascii">>};
+		false -> {<<"charset">>, <<"utf-8">>}
 	end.
 
 guess_best_encoding(Body) ->
@@ -1408,7 +1418,7 @@ encoding_test_() ->
 					?assertEqual(<<"<wxyz@example.com> <abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
 			end
 		},
-		{"Content-Transfer-Encoding header should be added if missing",
+		{"Content-Transfer-Encoding header should be added if missing and appropriate",
 			fun() ->
 					Email = {<<"text">>, <<"plain">>, [
 							{<<"From">>, <<"me@example.com">>},
@@ -1418,9 +1428,53 @@ encoding_test_() ->
 						<<"This is a plain message with some non-ascii characters øÿ\r\nso there">>},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
-					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result)))
+					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result))),
+					Email2 = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						<<"This is a plain message with no non-ascii characters">>},
+					Encoded2 = encode(Email2),
+					Result2 = decode(Encoded2),
+					?assertEqual(undefined, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result2))),
+					Email3 = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[{<<"transfer-encoding">>, <<"base64">>}],
+						<<"This is a plain message with no non-ascii characters">>},
+					Encoded3 = encode(Email3),
+					Result3 = decode(Encoded3),
+					?assertEqual(<<"base64">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result3)))
+			end
+		},
+		{"Content-Type header should be added if missing and appropriate",
+			fun() ->
+					Email = {<<"text">>, <<"html">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						<<"This is a HTML message with some non-ascii characters øÿ\r\nso there">>},
+					Encoded = encode(Email),
+					?debugFmt("~s~n", [Encoded]),
+					Result = decode(Encoded),
+					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result))),
+					?assertMatch(<<"text/html;charset=utf-8">>, proplists:get_value(<<"Content-Type">>, element(3, Result))),
+					Email2 = {<<"text">>, <<"html">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						<<"This is a HTML message with no non-ascii characters\r\nso there">>},
+					Encoded2 = encode(Email2),
+					Result2 = decode(Encoded2),
+					?assertMatch(<<"text/html;charset=us-ascii">>, proplists:get_value(<<"Content-Type">>, element(3, Result2)))
+
 			end
 		}
+
 	].
 
 roundtrip_test_disabled() ->
