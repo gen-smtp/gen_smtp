@@ -79,14 +79,15 @@ decode(OrigHeaders, Body, Options) ->
 
 -spec(encode/1 :: (MimeMail :: {string(), string(), [{string(), string()}], [{string(), string()}], list()}) -> string()).
 encode({Type, Subtype, Headers, ContentTypeParams, Parts}) ->
-	FixedHeaders = check_headers(ensure_content_headers(Type, Subtype, ContentTypeParams, Headers, Parts, true)),
+	{FixedParams, FixedHeaders} = ensure_content_headers(Type, Subtype, ContentTypeParams, Headers, Parts, true),
+	FixedHeaders2 = check_headers(FixedHeaders),
 	list_to_binary([binstr:join(
 				encode_headers(
-					FixedHeaders
+					FixedHeaders2
 					),
 				"\r\n"),
 			"\r\n\r\n",
-		binstr:join(encode_component(Type, Subtype, FixedHeaders, ContentTypeParams, Parts),
+		binstr:join(encode_component(Type, Subtype, FixedHeaders2, FixedParams, Parts),
 			"\r\n")]);
 encode(_) ->
 	io:format("Not a mime-decoded DATA~n"),
@@ -475,16 +476,36 @@ ensure_content_headers(Type, SubType, Parameters, Headers, Body, Toplevel) ->
 	CheckHeaders = [<<"Content-Type">>, <<"Content-Disposition">>, <<"Content-Transfer-Encoding">>],
 	ensure_content_headers(CheckHeaders, Type, SubType, Parameters, Headers, Body, Toplevel).
 
-ensure_content_headers([], _, _, _, Headers, _, _) ->
-	Headers;
+ensure_content_headers([], _, _, Parameters, Headers, _, _) ->
+	{Parameters, Headers};
 ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body, Toplevel) ->
 	case get_header_value(Header, Headers) of
 		undefined when Header == <<"Content-Type">>, (Type == <<"text">> andalso SubType =/= <<"plain">>); Type =/= <<"text">> ->
 			% no content-type header, and its not text/plain
 			CT = io_lib:format("~s/~s", [Type, SubType]),
-			CTP = proplists:get_value(<<"content-type-params">>, Parameters, [guess_charset(Body)]),
+			CTP = case Type of
+				<<"multipart">> ->
+					Boundary = case proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
+						undefined ->
+							<<"fooboundary">>;
+						B ->
+							B
+					end,
+					[{<<"boundary">>, Boundary} | proplists:delete(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Parameters, []))];
+				_ ->
+					Charset = case proplists:get_value(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
+						undefined ->
+							guess_charset(Body);
+						C ->
+							C
+					end,
+					[{<<"charset">>, Charset} | proplists:delete(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, []))]
+			end,
+
+			%CTP = proplists:get_value(<<"content-type-params">>, Parameters, [guess_charset(Body)]),
 			CTH = binstr:join([CT | encode_parameters(CTP)], ";\r\n\t"),
-			ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel);
+			NewParameters = [{<<"content-type-params">>, CTP} | proplists:delete(<<"content-type-params">>, Parameters)],
+			ensure_content_headers(Tail, Type, SubType, NewParameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel);
 		undefined when Header == <<"Content-Transfer-Encoding">>, Type =/= <<"multipart">> ->
 			Enc = case proplists:get_value(<<"transfer-encoding">>, Parameters) of
 				undefined ->
@@ -507,12 +528,10 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 			ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel)
 	end.
 
-guess_charset(Body) when is_list(Body) ->
-	[];
 guess_charset(Body) ->
 	case binstr:all(fun(X) -> X < 128 end, Body) of
-		true -> {<<"charset">>, <<"us-ascii">>};
-		false -> {<<"charset">>, <<"utf-8">>}
+		true -> <<"us-ascii">>;
+		false -> <<"utf-8">>
 	end.
 
 guess_best_encoding(Body) ->
@@ -533,6 +552,8 @@ guess_best_encoding(Body) ->
 			<<"base64">>
 	end.
 
+encode_parameters([[]]) ->
+	[];
 encode_parameters(Parameters) ->
 	lists:map(fun({X, Y}) ->
 				case binstr:strchr(Y, $\s) of
@@ -592,14 +613,15 @@ encode_component(Type, SubType, Headers, Params, Body) ->
 encode_component_part(Part) ->
 	case Part of
 		{<<"multipart">>, SubType, Headers, PartParams, Body} ->
-			encode_headers(ensure_content_headers(<<"multipart">>, SubType, PartParams, Headers, Body, false)) ++ [<<>>] ++
-			encode_component(<<"multipart">>, SubType, Headers, PartParams, Body);
+			{FixedParams, FixedHeaders} = ensure_content_headers(<<"multipart">>, SubType, PartParams, Headers, Body, false),
+			encode_headers(FixedHeaders) ++ [<<>>] ++
+			encode_component(<<"multipart">>, SubType, FixedHeaders, FixedParams, Body);
 		{Type, SubType, Headers, PartParams, Body} ->
 			PartData = case Body of
 				{_,_,_,_,_} -> encode_component_part(Body);
 				String      -> [String]
 			end,
-			FixedHeaders = ensure_content_headers(Type, SubType, PartParams, Headers, Body, false),
+			{_FixedParams, FixedHeaders} = ensure_content_headers(Type, SubType, PartParams, Headers, Body, false),
 			encode_headers(FixedHeaders) ++ [<<>>] ++
 			encode_body(
 					get_header_value(<<"Content-Transfer-Encoding">>, FixedHeaders),
@@ -1269,7 +1291,7 @@ encoding_test_() ->
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
 					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
-					?debugFmt("~s~n", [encode(Email)]),
+					%?debugFmt("~s~n", [encode(Email)]),
 					?assertEqual(Result, encode(Email))
 			end
 		},
@@ -1458,7 +1480,7 @@ encoding_test_() ->
 						[],
 						<<"This is a HTML message with some non-ascii characters øÿ\r\nso there">>},
 					Encoded = encode(Email),
-					?debugFmt("~s~n", [Encoded]),
+					%?debugFmt("~s~n", [Encoded]),
 					Result = decode(Encoded),
 					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result))),
 					?assertMatch(<<"text/html;charset=utf-8">>, proplists:get_value(<<"Content-Type">>, element(3, Result))),
@@ -1471,10 +1493,35 @@ encoding_test_() ->
 					Encoded2 = encode(Email2),
 					Result2 = decode(Encoded2),
 					?assertMatch(<<"text/html;charset=us-ascii">>, proplists:get_value(<<"Content-Type">>, element(3, Result2)))
-
+			end
+		},
+		{"A boundary should be generated if applicable",
+			fun() ->
+					Email = {<<"multipart">>, <<"alternative">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"MIME-Version">>, <<"1.0">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						[{<<"text">>,<<"plain">>,
+								[],
+								[],
+								<<"This message contains rich text.\r\n",
+								"and is =quoted printable= encoded!">>},
+							{<<"text">>,<<"html">>,
+								[],
+								[],
+								<<"<html><body>This message also contains",
+								"HTML and is base64",
+								"encoded\r\n\r\n</body></html>">>}]},
+					Encoded = encode(Email),
+					Result = decode(Encoded),
+					?debugFmt(":::~s~n", [Encoded]),
+					Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, element(4, Result))),
+					%?assertEqual("fooheader", Boundary)
+					ok
 			end
 		}
-
 	].
 
 roundtrip_test_disabled() ->
