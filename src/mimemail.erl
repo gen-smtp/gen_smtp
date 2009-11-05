@@ -489,19 +489,21 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 				<<"multipart">> ->
 					Boundary = case proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
 						undefined ->
-							<<"fooboundary">>;
+							list_to_binary(smtp_util:generate_message_boundary());
 						B ->
 							B
 					end,
 					[{<<"boundary">>, Boundary} | proplists:delete(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Parameters, []))];
-				_ ->
+				<<"text">> ->
 					Charset = case proplists:get_value(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
 						undefined ->
 							guess_charset(Body);
 						C ->
 							C
 					end,
-					[{<<"charset">>, Charset} | proplists:delete(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, []))]
+					[{<<"charset">>, Charset} | proplists:delete(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, []))];
+				_ ->
+					proplists:get_value(<<"content-type-params">>, Parameters, [])
 			end,
 
 			%CTP = proplists:get_value(<<"content-type-params">>, Parameters, [guess_charset(Body)]),
@@ -1520,7 +1522,7 @@ encoding_test_() ->
 					Result = decode(Encoded),
 					?debugFmt(":::~s~n", [Encoded]),
 					Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, element(4, Result))),
-					?assertEqual(<<"fooboundary">>, Boundary),
+					?assert(is_binary(Boundary)),
 					% ensure we don't add the header multiple times
 					?assertEqual(1, length(proplists:get_all_values(<<"Content-Type">>, element(3, Result)))),
 					ok

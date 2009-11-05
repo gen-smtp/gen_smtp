@@ -96,7 +96,12 @@ zone(Val) when Val >= 0 ->
 
 generate_message_id() ->
 	FQDN = guess_FQDN(),
-	Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(erlang:localtime()))],
+	Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([erlang:now(), FQDN]))],
 	io_lib:format("<~s@~s>", [Md5, FQDN]).
+
+generate_message_boundary() ->
+	FQDN = guess_FQDN(),
+	["_=", [io_lib:format("~2.36.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([erlang:now(), FQDN]))], "=_"].
+
 
 
