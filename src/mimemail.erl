@@ -434,13 +434,15 @@ decode_quoted_printable_line(<<H, T/binary>>, Acc) when H =:= $\s; H =:= $\t ->
 	end.
 
 check_headers(Headers) ->
-	Checked = [<<"Date">>, <<"From">>, <<"Message-ID">>, <<"References">>, <<"Subject">>],
+	Checked = [<<"MIME-Version">>, <<"Date">>, <<"From">>, <<"Message-ID">>, <<"References">>, <<"Subject">>],
 	check_headers(Checked, Headers).
 
 check_headers([], Headers) ->
 	Headers;
 check_headers([Header | Tail], Headers) ->
 	case get_header_value(Header, Headers) of
+		undefined when Header == <<"MIME-Version">> ->
+			check_headers(Tail, [{<<"MIME-Version">>, <<"1.0">>} | Headers]);
 		undefined when Header == <<"Date">> ->
 			check_headers(Tail, [{<<"Date">>, list_to_binary(smtp_util:rfc5322_timestamp())} | Headers]);
 		undefined when Header == <<"From">> ->
@@ -1285,12 +1287,13 @@ encoding_test_() ->
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>},
 							{<<"Message-ID">>, <<"<abcd@example.com>">>},
+							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
 						[{<<"content-type-params">>,
 								[{<<"charset">>,<<"US-ASCII">>}],
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
-					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					%?debugFmt("~s~n", [encode(Email)]),
 					?assertEqual(Result, encode(Email))
 			end
@@ -1500,7 +1503,6 @@ encoding_test_() ->
 					Email = {<<"multipart">>, <<"alternative">>, [
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
-							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Subject">>, <<"This is a test">>}],
 						[],
 						[{<<"text">>,<<"plain">>,
