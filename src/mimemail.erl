@@ -435,10 +435,10 @@ decode_quoted_printable_line(<<H, T/binary>>, Acc) when H =:= $\s; H =:= $\t ->
 
 check_headers(Headers) ->
 	Checked = [<<"MIME-Version">>, <<"Date">>, <<"From">>, <<"Message-ID">>, <<"References">>, <<"Subject">>],
-	check_headers(Checked, Headers).
+	check_headers(Checked, lists:reverse(Headers)).
 
 check_headers([], Headers) ->
-	Headers;
+	lists:reverse(Headers);
 check_headers([Header | Tail], Headers) ->
 	case get_header_value(Header, Headers) of
 		undefined when Header == <<"MIME-Version">> ->
@@ -476,10 +476,10 @@ check_headers([Header | Tail], Headers) ->
 
 ensure_content_headers(Type, SubType, Parameters, Headers, Body, Toplevel) ->
 	CheckHeaders = [<<"Content-Type">>, <<"Content-Disposition">>, <<"Content-Transfer-Encoding">>],
-	ensure_content_headers(CheckHeaders, Type, SubType, Parameters, Headers, Body, Toplevel).
+	ensure_content_headers(CheckHeaders, Type, SubType, Parameters, lists:reverse(Headers), Body, Toplevel).
 
 ensure_content_headers([], _, _, Parameters, Headers, _, _) ->
-	{Parameters, Headers};
+	{Parameters, lists:reverse(Headers)};
 ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body, Toplevel) ->
 	case get_header_value(Header, Headers) of
 		undefined when Header == <<"Content-Type">>, ((Type == <<"text">> andalso SubType =/= <<"plain">>) orelse Type =/= <<"text">>) ->
@@ -1525,6 +1525,8 @@ encoding_test_() ->
 					?assert(is_binary(Boundary)),
 					% ensure we don't add the header multiple times
 					?assertEqual(1, length(proplists:get_all_values(<<"Content-Type">>, element(3, Result)))),
+					% headers should be appended, not prepended
+					?assertMatch({<<"From">>, _}, lists:nth(1, element(3, Result))),
 					ok
 			end
 		}
