@@ -482,7 +482,7 @@ ensure_content_headers([], _, _, Parameters, Headers, _, _) ->
 	{Parameters, Headers};
 ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body, Toplevel) ->
 	case get_header_value(Header, Headers) of
-		undefined when Header == <<"Content-Type">>, (Type == <<"text">> andalso SubType =/= <<"plain">>); Type =/= <<"text">> ->
+		undefined when Header == <<"Content-Type">>, ((Type == <<"text">> andalso SubType =/= <<"plain">>) orelse Type =/= <<"text">>) ->
 			% no content-type header, and its not text/plain
 			CT = io_lib:format("~s/~s", [Type, SubType]),
 			CTP = case Type of
@@ -1520,7 +1520,9 @@ encoding_test_() ->
 					Result = decode(Encoded),
 					?debugFmt(":::~s~n", [Encoded]),
 					Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, element(4, Result))),
-					%?assertEqual("fooheader", Boundary)
+					?assertEqual(<<"fooboundary">>, Boundary),
+					% ensure we don't add the header multiple times
+					?assertEqual(1, length(proplists:get_all_values(<<"Content-Type">>, element(3, Result)))),
 					ok
 			end
 		}
