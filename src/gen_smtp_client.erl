@@ -231,7 +231,7 @@ do_AUTH(Socket, Username, Password, Types) ->
 	AllowedTypes = lists:filter(fun(X) -> lists:member(X, FixedTypes) end,
 		?AUTH_PREFERENCE),
 	%io:format("available authentication types, in order of preference: ~p~n",
-		[AllowedTypes]),
+	%	[AllowedTypes]),
 	do_AUTH_each(Socket, Username, Password, AllowedTypes).
 
 do_AUTH_each(Socket, Username, Password, []) ->
