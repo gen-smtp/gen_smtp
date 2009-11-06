@@ -87,16 +87,16 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 			case proplists:get_value(Host, RetryList) of
 				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
 					% out of chances
-					io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
+					%io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
 					NewHosts = lists:keydelete(Host, 2, Hosts),
 					NewRetryList = lists:keydelete(Host, 1, RetryList);
 				RetryCount when is_integer(RetryCount) ->
-					io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
+					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
 					NewHosts = lists:append(lists:keydelete(Host, 2, Hosts), [{Distance, Host}]),
 					NewRetryList = lists:append(lists:keydelete(Host, 1, RetryList), [{Host, RetryCount + 1}]);
 				_ ->
 					% otherwise...
-					io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
+					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
 					NewHosts = lists:append(lists:keydelete(Host, 2, Hosts), [{Distance, Host}]),
 					NewRetryList = lists:append(lists:keydelete(Host, 1, RetryList), [{Host, 1}])
 			end,
@@ -110,16 +110,16 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 
 do_smtp_session(Host, Email, Options) ->
 	{ok, Socket, Host, Banner} = connect(Host, Options),
-	io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
+	%io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
 	{ok, Extensions} = try_EHLO(Socket, Options),
-	io:format("Extensions are ~p~n", [Extensions]),
+	%io:format("Extensions are ~p~n", [Extensions]),
 	{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
 		Extensions),
-	io:format("Extensions are ~p~n", [Extensions2]),
+	%io:format("Extensions are ~p~n", [Extensions2]),
 	Authed = try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
-	io:format("Authentication status is ~p~n", [Authed]),
+	%io:format("Authentication status is ~p~n", [Authed]),
 	try_sending_it(Email, Socket2, Extensions2),
-	io:format("Mail sending successful~n"),
+	%io:format("Mail sending successful~n"),
 	quit(Socket).
 
 try_sending_it({From, To, Body}, Socket, Extensions) ->
@@ -137,7 +137,7 @@ try_MAIL_FROM([$< | _] = From, Socket, Extensions) ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
-			io:format("Mail FROM rejected: ~p~n", [Msg]),
+			%io:format("Mail FROM rejected: ~p~n", [Msg]),
 			quit(Socket),
 			throw({permanant_failure, Msg})
 	end;
@@ -210,7 +210,7 @@ try_AUTH(Socket, Options, AuthTypes) ->
 		true ->
 			Username = proplists:get_value(username, Options),
 			Password = proplists:get_value(password, Options),
-			io:format("Auth types: ~p~n", [AuthTypes]),
+			%io:format("Auth types: ~p~n", [AuthTypes]),
 			Types = re:split(AuthTypes, " ", [{return, list}, trim]),
 			case do_AUTH(Socket, Username, Password, Types) of
 				false ->
@@ -227,10 +227,10 @@ try_AUTH(Socket, Options, AuthTypes) ->
 
 do_AUTH(Socket, Username, Password, Types) ->
 	FixedTypes = lists:map(fun(X) -> string:to_upper(X) end, Types),
-	io:format("Fixed types: ~p~n", [FixedTypes]),
+	%io:format("Fixed types: ~p~n", [FixedTypes]),
 	AllowedTypes = lists:filter(fun(X) -> lists:member(X, FixedTypes) end,
 		?AUTH_PREFERENCE),
-	io:format("available authentication types, in order of preference: ~p~n",
+	%io:format("available authentication types, in order of preference: ~p~n",
 		[AllowedTypes]),
 	do_AUTH_each(Socket, Username, Password, AllowedTypes).
 
@@ -247,42 +247,42 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 			socket:send(Socket, String++"\r\n"),
 			case read_possible_multiline_reply(Socket) of
 				{ok, "235"++_} ->
-					io:format("authentication accepted~n"),
+					%io:format("authentication accepted~n"),
 					true;
 				{ok, Msg} ->
-					io:format("authentication rejected: ~s~n", [Msg]),
+					%io:format("authentication rejected: ~s~n", [Msg]),
 					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
 		{ok, Something} ->
-			io:format("got ~s~n", [Something]),
+			%io:format("got ~s~n", [Something]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 	socket:send(Socket, "AUTH LOGIN\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, "334 VXNlcm5hbWU6\r\n"} ->
-			io:format("username prompt~n"),
+			%io:format("username prompt~n"),
 			U = binary_to_list(base64:encode(Username)),
 			socket:send(Socket, U++"\r\n"),
 			case read_possible_multiline_reply(Socket) of
 				{ok, "334 UGFzc3dvcmQ6\r\n"} ->
-					io:format("password prompt~n"),
+					%io:format("password prompt~n"),
 					P = binary_to_list(base64:encode(Password)),
 					socket:send(Socket, P++"\r\n"),
 					case read_possible_multiline_reply(Socket) of
 						{ok, "235 "++_} ->
-							io:format("authentication accepted~n"),
+							%io:format("authentication accepted~n"),
 							true;
 						{ok, Msg} ->
-							io:format("password rejected: ~s", [Msg]),
+							%io:format("password rejected: ~s", [Msg]),
 							do_AUTH_each(Socket, Username, Password, Tail)
 					end;
 				{ok, Msg2} ->
-					io:format("username rejected: ~s", [Msg2]),
+					%io:format("username rejected: ~s", [Msg2]),
 					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
 		{ok, Something} ->
-			io:format("got ~s~n", [Something]),
+			%io:format("got ~s~n", [Something]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
@@ -290,16 +290,16 @@ do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
 	socket:send(Socket, "AUTH PLAIN "++AuthString++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, "235"++_} ->
-			io:format("authentication accepted~n"),
+			%io:format("authentication accepted~n"),
 			true;
 		Else ->
 			% TODO do we need to bother trying the multi-step PLAIN?
-			io:format("authentication rejected~n"),
-			io:format("~p~n", [Else]),
+			%io:format("authentication rejected~n"),
+			%io:format("~p~n", [Else]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, [Type | Tail]) ->
-	io:format("unsupported AUTH type ~s~n", [Type]),
+	%io:format("unsupported AUTH type ~s~n", [Type]),
 	do_AUTH_each(Socket, Username, Password, Tail).
 
 try_EHLO(Socket, Options) ->
@@ -318,7 +318,7 @@ try_EHLO(Socket, Options) ->
 									0 ->
 										{string:to_upper(Body), true};
 									_ ->
-										io:format("discarding option ~p~n", [Body]),
+										%io:format("discarding option ~p~n", [Body]),
 										[]
 								end
 						end
@@ -331,16 +331,16 @@ try_STARTTLS(Socket, Options, Extensions) ->
 		case {proplists:get_value(tls, Options),
 				proplists:get_value("STARTTLS", Extensions)} of
 			{Atom, true} when Atom =:= always; Atom =:= if_available ->
-			io:format("Starting TLS~n"),
+			%io:format("Starting TLS~n"),
 			case {do_STARTTLS(Socket, Options), Atom} of
 				{false, always} ->
-					io:format("TLS failed~n"),
+					%io:format("TLS failed~n"),
 					erlang:exit(no_tls);
 				{false, if_available} ->
-					io:format("TLS failed~n"),
+					%io:format("TLS failed~n"),
 					{Socket, Extensions};
 				{{S, E}, _} ->
-					io:format("TLS started~n"),
+					%io:format("TLS started~n"),
 					{S, E}
 			end;
 		{always, _} ->
@@ -362,7 +362,7 @@ do_STARTTLS(Socket, Options) ->
 					{ok, Extensions} = try_EHLO(NewSocket, Options),
 					{NewSocket, Extensions};
 				Else ->
-					io:format("~p~n", [Else]),
+					%io:format("~p~n", [Else]),
 					false
 			end;
 		{ok, "4"++_ = Msg} ->
