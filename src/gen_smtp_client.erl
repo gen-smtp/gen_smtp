@@ -72,7 +72,7 @@ send_it(Email, Options, Parent) ->
 		_ ->
 			MXRecords
 	end,
-	Parent ! try_smtp_sessions(Hosts, Email, Options, []).
+	try_smtp_sessions(Hosts, Email, Options, []).
 
 try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) ->
 	Retries = proplists:get_value(retries, Options),
@@ -82,7 +82,7 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 	catch
 		throw:{permanant_failure, Message} ->
 			% permanant failure means no retries, and don't even continue with other hosts
-			{error, no_more_hosts, {permanant_failure, Host, Message}};
+			exit({error, no_more_hosts, {permanant_failure, Host, Message}});
 		throw:{FailureType, Message} ->
 			case proplists:get_value(Host, RetryList) of
 				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
@@ -102,7 +102,7 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 			end,
 			case NewHosts of
 				[] ->
-					{error, retries_exceeded, {FailureType, Host, Message}};
+					exit({error, retries_exceeded, {FailureType, Host, Message}});
 				_ ->
 					try_smtp_sessions(NewHosts, Email, Options, NewRetryList)
 			end
