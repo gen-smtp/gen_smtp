@@ -67,3 +67,41 @@ compute_cram_digest(Key, Data) ->
 -spec(trim_crlf/1 :: (String :: string()) -> string()).
 trim_crlf(String) ->
 	string:strip(string:strip(String, right, $\n), right, $\r).
+
+-define(DAYS, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).
+-define(MONTHS, ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]).
+
+rfc5322_timestamp() ->
+	{{Year, Month, Day}, {Hour, Minute, Second}} = calendar:local_time(),
+	NDay = calendar:day_of_the_week(Year, Month, Day),
+	DoW = lists:nth(NDay, ?DAYS),
+	MoY = lists:nth(Month, ?MONTHS),
+	io_lib:format("~s, ~b ~s ~b ~b:~b:~b ~s", [DoW, Day, MoY, Year, Hour, Minute, Second, zone()]).
+
+% borrowed from YAWS
+zone() ->
+	Time = erlang:universaltime(),
+	LocalTime = calendar:universal_time_to_local_time(Time),
+	DiffSecs = calendar:datetime_to_gregorian_seconds(LocalTime) -
+	calendar:datetime_to_gregorian_seconds(Time),
+	zone((DiffSecs/3600)*100).
+
+%% Ugly reformatting code to get times like +0000 and -1300
+
+zone(Val) when Val < 0 ->
+	io_lib:format("-~4..0w", [trunc(abs(Val))]);
+zone(Val) when Val >= 0 ->
+	io_lib:format("+~4..0w", [trunc(abs(Val))]).
+
+generate_message_id() ->
+	FQDN = guess_FQDN(),
+	Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([erlang:now(), FQDN]))],
+	io_lib:format("<~s@~s>", [Md5, FQDN]).
+
+generate_message_boundary() ->
+	FQDN = guess_FQDN(),
+	["_=", [io_lib:format("~2.36.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([erlang:now(), FQDN]))], "=_"].
+
+
+
