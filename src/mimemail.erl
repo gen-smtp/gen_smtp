@@ -538,6 +538,8 @@ guess_charset(Body) ->
 		false -> <<"utf-8">>
 	end.
 
+guess_best_encoding(<<Body:200/binary, _/binary>>) ->
+	guess_best_encoding(Body);
 guess_best_encoding(Body) ->
 	Size = byte_size(Body),
 	% get only the allowed ascii characters
