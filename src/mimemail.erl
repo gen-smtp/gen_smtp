@@ -645,24 +645,19 @@ encode_body(Type, Body) ->
 			encode_quoted_printable(InnerBody);
 		<<"base64">> ->
 			[InnerBody] = Body,
-			wrap_to_76(base64:encode(InnerBody)) ++ [""];
+			wrap_to_76(base64:encode(InnerBody));
 		_ -> Body
 	end.
 
 wrap_to_76(String) ->
-	wrap_to_76(String, []).
-wrap_to_76([], Lines) ->
-	Lines;
-wrap_to_76(String, Lines) when byte_size(String) >= 76 ->
-	wrap_to_76(
-		binstr:substr(String, 76+1),
-		Lines ++ [binstr:substr(String, 1, 76)]
-	);
-wrap_to_76(String, Lines) ->
-	wrap_to_76(
-		[],
-		Lines ++ [String]
-	).
+	[wrap_to_76(String, [])].
+
+wrap_to_76(<<>>, Acc) ->
+	list_to_binary(lists:reverse(Acc));
+wrap_to_76(<<Head:76/binary, Tail/binary>>, Acc) ->
+	wrap_to_76(Tail, [<<"\r\n">>, Head | Acc]);
+wrap_to_76(Head, Acc) ->
+	list_to_binary(lists:reverse([<<"\r\n">>, Head | Acc])).
 
 encode_quoted_printable(Body) ->
 	[encode_quoted_printable(Body, [], 0)].
