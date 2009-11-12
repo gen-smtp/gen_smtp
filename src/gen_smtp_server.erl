@@ -41,6 +41,7 @@
 -record(listener, {
 		hostname :: list(),
 		port :: port(),
+		sessionoptions = [] :: [tuple()],
 		socket :: port() | any()
 		}).
 -type(listener() :: #listener{}).
@@ -106,6 +107,7 @@ init([Module, Configurations]) ->
 				IP       = proplists:get_value(address,  NewConfig),
 				Hostname = proplists:get_value(domain,   NewConfig),
 				Protocol = proplists:get_value(protocol, NewConfig),
+				SessionOptions = proplists:get_value(sessionoptions, NewConfig, []),
 				io:format("~p starting at ~p~n", [?MODULE, node()]),
 				io:format("listening on ~p:~p via ~p~n", [IP, Port, Protocol]),
 				process_flag(trap_exit, true),
@@ -115,6 +117,7 @@ init([Module, Configurations]) ->
 						socket:begin_inet_async(ListenSocket),
 						#listener{port = socket:extract_port_from_socket(ListenSocket),
 						          hostname = Hostname,
+						          sessionoptions = SessionOptions,
 						          socket = ListenSocket};
 					{error, Reason} ->
 						exit({init, Reason})
@@ -155,7 +158,7 @@ handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}}, #state{module 
 		{ok, ClientSocket} = socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket),
 		%% New client connected
 		% io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, [{hostname, Listener#listener.hostname}, {sessioncount, length(State#state.sessions) + 1}]) of
+		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, [{hostname, Listener#listener.hostname}, {sessioncount, length(State#state.sessions) + 1} | Listener#listener.sessionoptions]) of
 			{ok, Pid} ->
 				link(Pid),
 				socket:controlling_process(ClientSocket, Pid),
