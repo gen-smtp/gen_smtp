@@ -27,7 +27,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([encode/1, decode/2, decode/1, get_header_value/2]).
+-export([encode/1, decode/2, decode/1, get_header_value/2, get_header_value/3]).
 
 -define(DEFAULT_OPTIONS, [
 		{encoding, get_default_encoding()}, % default encoding is utf-8 if we can find the iconv module
@@ -175,8 +175,7 @@ decode_component(Headers, Body, Other, Options) ->
 	 io:format("Unknown mime version ~s~n", [Other]),
 	{error, mime_version}.
 
--spec(get_header_value/2 :: (Needle :: string(), Headers :: [{string(), string()}]) -> string() | 'undefined').
-get_header_value(Needle, Headers) ->
+get_header_value(Needle, Headers, Default) ->
 	%io:format("Headers: ~p~n", [Headers]),
 	F =
 	fun({Header, _Value}) ->
@@ -187,8 +186,12 @@ get_header_value(Needle, Headers) ->
 		[{_Header, Value}|_T] ->
 			Value;
 		_ ->
-			undefined
+			Default
 	end.
+
+-spec(get_header_value/2 :: (Needle :: string(), Headers :: [{string(), string()}]) -> string() | 'undefined').
+get_header_value(Needle, Headers) ->
+	get_header_value(Needle, Headers, undefined).
 
 -spec(parse_with_comments/1 :: (Value :: string()) -> string() | 'error';
 	(Value :: atom()) -> atom()).
