@@ -27,9 +27,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([encode/1, decode/2, decode/1]).
-
--compile(export_all).
+-export([encode/1, decode/2, decode/1, get_header_value/2]).
 
 -define(DEFAULT_OPTIONS, [
 		{encoding, get_default_encoding()}, % default encoding is utf-8 if we can find the iconv module
