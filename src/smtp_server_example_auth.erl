@@ -3,7 +3,7 @@
 
 
 -export([init/3, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
-	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/5, handle_RSET/1, handle_VRFY/2, handle_AUTH/4, handle_other/3]).
+	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4, handle_RSET/1, handle_VRFY/2, handle_AUTH/4, handle_other/3]).
 
 init(Hostname, SessionCount, Address) ->
 	io:format("peer: ~p~n", [Address]),
@@ -42,7 +42,7 @@ handle_RCPT_extension(Extension, State) ->
 	io:format("Mail from extension ~s~n", [Extension]),
 	{ok, State}.
 
-handle_DATA(From, To, Headers, Data, State) ->
+handle_DATA(From, To, Data, State) ->
 	% some kind of unique id
 	Reference = io_lib:format("~p", [make_ref()]),
 	{ok, Reference, State}.

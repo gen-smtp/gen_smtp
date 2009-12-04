@@ -50,7 +50,6 @@
 		from :: string(),
 		to = [] :: [string()],
 		data = "" :: string(),
-		headers = [] :: [{string(), string()}], %proplist
 		expectedsize = 0 :: pos_integer(),
 		auth = {[], []} :: {string(), string()} % {"username", "password"}
 	}
@@ -65,7 +64,6 @@
 		waitingauth = false :: bool() | string(),
 		authdata :: 'undefined' | string(),
 		readmessage = false :: bool(),
-		readheaders = false :: bool(),
 		tls = false :: bool(),
 		callbackstate :: any(),
 		options = [] :: [tuple()]
@@ -80,7 +78,7 @@ behaviour_info(callbacks) ->
 		{handle_MAIL_extension,2},
 		{handle_RCPT,2},
 		{handle_RCPT_extension,2},
-		{handle_DATA,5},
+		{handle_DATA,4},
 		{handle_RSET,1},
 		{handle_VRFY,2},
 		{handle_other,3},
@@ -161,7 +159,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	end,
 	case Valid of
 		true ->
-			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.headers, Envelope#envelope.data, State#state.callbackstate) of
+			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, State#state.callbackstate) of
 				{ok, Reference, CallbackState} ->
 					socket:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
 					socket:active_once(Socket),
@@ -175,103 +173,24 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 			% might not even be able to get here anymore...
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
-handle_info({_Proto, Socket, <<"\r\n">>}, #state{readheaders = true, envelope = Envelope} = State) ->
-	%io:format("Header terminator~n", []),
-	socket:active_once(Socket),
-	{noreply, State#state{readheaders = false, readmessage = true, envelope = Envelope#envelope{headers = lists:reverse(Envelope#envelope.headers)}}, ?TIMEOUT};
-handle_info({_SocketType, Socket, Packet}, #state{readheaders = true, envelope = Envelope, options = Options} = State) ->
-	case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
-		error ->
-			socket:send(Socket, "451 Bare newline detected\r\n"),
-			socket:active_once(Socket),
-			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		FixedPacket ->
-			Bin = case FixedPacket of
-				<<$., _/binary>> ->
-					binstr:substr(FixedPacket, 2);
-				_ ->
-					FixedPacket
-			end,
-			%io:format("Header candidate: ~p~n", [Bin]),
-			NewState = case Bin of % first, check for a leading space or tab
-				<<H:1/binary, _/binary>> when H =:= <<"\s">>; H =:= <<"\t">> ->
-				% TODO - check for "invisible line" - ie, a line consisting entirely of whitespace
-				case Envelope#envelope.headers of
-					[] ->
-						% if the header list is empty, this means that this line can't be a continuation of a previous header
-						State#state{readmessage = true, readheaders = false,
-							envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}};
-					_ ->
-						[{FieldName, FieldValue} | T] = Envelope#envelope.headers,
-						State#state{envelope = Envelope#envelope{headers = [{FieldName, list_to_binary([FieldValue, binstr:chomp(Bin)])} | T]}}
-				end;
-			_ -> % okay, now see if it's a header
-				case binstr:strchr(Bin, $:) of
-					0 -> % not a line starting a field
-						State#state{readmessage = true, readheaders = false,
-							envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
-					1 -> % WTF, colon as first character on line
-						State#state{readmessage = true, readheaders = false,
-							envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}};
-					Index ->
-						FieldName = binstr:substr(Bin, 1, Index - 1),
-						F = fun(X) -> X > 32 andalso X < 127 end,
-						case binstr:all(F, FieldName) of
-							true ->
-								FieldValue = binstr:strip(binstr:chomp(binstr:substr(Bin, Index+1))),
-								State#state{envelope = Envelope#envelope{headers = [{FieldName, FieldValue} | Envelope#envelope.headers]}};
-							false ->
-								State#state{readmessage = true, readheaders = false,
-									envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data], headers = lists:reverse(Envelope#envelope.headers)}}
-						end
-				end
-		end,
-		socket:active_once(Socket),
-		{noreply, NewState, ?TIMEOUT}
-	end;
-handle_info({_Proto, Socket, Packet}, #state{readmessage = true, envelope = Envelope, options = Options} = State) ->
-	case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
-		error ->
-			socket:send(Socket, "451 Bare newline detected\r\n"),
-			socket:active_once(Socket),
-			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		FixedPacket->
-			%io:format("got message chunk \"~p\"~n", [Packet]),
-			% if there's a leading dot, trim it off
-			Bin = case FixedPacket of
-				<<$., _/binary>> ->
-					binstr:substr(FixedPacket, 2);
-				_ ->
-					FixedPacket
-			end,
-			%socket:active_once(Socket),
-			%{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT};
-
-			Self = self(),
-			% receive in a child process
-			ExistingData = [Bin | Envelope#envelope.data],
-			ExistingSize = lists:foldl(fun(E, A) -> A + byte_size(E) end, 0, ExistingData),
-
-			HeaderSize = lists:foldl(fun({K, V}, A) -> byte_size(K) + byte_size(V) + A end, 0, Envelope#envelope.headers),
-
-			Size = HeaderSize + ExistingSize,
-
-			MaxSize = case has_extension(State#state.extensions, "SIZE") of
+handle_info({_SocketType, Socket, Packet}, State) ->
+	case handle_request(parse_request(binary_to_list(Packet)), State) of
+		{ok, NewState} when NewState#state.readmessage == true ->
+			Envelope = NewState#state.envelope,
+			Options = NewState#state.options,
+			MaxSize = case has_extension(NewState#state.extensions, "SIZE") of
 				{true, Value} ->
 					list_to_integer(Value);
 				false ->
 					?MAXIMUMSIZE
 			end,
-
+			Session = self(),
+			Size = 0,
 			socket:setopts(Socket, [{packet, raw}]),
-			spawn_opt(fun() -> receive_data(ExistingData,
-							Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Self, Options) end,
+			spawn_opt(fun() -> receive_data([],
+							Socket, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Session, Options) end,
 				[link, {fullsweep_after, 0}]),
-
-			{noreply, State#state{envelope = Envelope#envelope{data = [Bin | Envelope#envelope.data]}}, ?TIMEOUT}
-	end;
-handle_info({_SocketType, Socket, Packet}, State) ->
-	case handle_request(parse_request(binary_to_list(Packet)), State) of
+			{noreply, NewState, ?TIMEOUT};
 		{ok, NewState} ->
 			socket:active_once(NewState#state.socket),
 			{noreply, NewState, ?TIMEOUT};
@@ -596,7 +515,8 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 		_Else ->
 			socket:send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
 			%io:format("switching to data read mode~n", []),
-			{ok, State#state{readheaders = true}}
+
+			{ok, State#state{readmessage = true}}
 	end;
 handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
 	socket:send(Socket, "250 Ok\r\n"),
@@ -639,7 +559,7 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 					io:format("SSL negotiation sucessful~n"),
 					{ok, State#state{socket = NewSocket, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
-							readheaders=false, tls=true}};
+							tls=true}};
 				{error, Reason} ->
 					io:format("SSL handshake failed : ~p~n", [Reason]),
 					socket:send(Socket, "454 TLS negotiation failed\r\n"),
@@ -778,6 +698,20 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 	end,
 	%socket:setopts(Socket, [{packet, raw}]),
 	case socket:recv(Socket, RecvSize, 1000) of
+		{ok, Packet} when Acc == [] ->
+			case binstr:strpos(Packet, "\r\n.\r\n") of
+				0 ->
+					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+					receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session, Options);
+				Index ->
+					String = binstr:substr(Packet, 1, Index - 1),
+					Rest = binstr:substr(Packet, Index+5),
+					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Result = list_to_binary(lists:reverse([String | Acc])),
+					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Session ! {receive_data, Result, Rest}
+			end;
 		{ok, Packet} ->
 			[Last | _] = Acc,
 			Lastchar = binstr:substr(Last, -1),
