@@ -724,7 +724,7 @@ get_default_encoding() ->
 		{error, _} ->
 			none;
 		{module, iconv} ->
-			<<"utf-8">>
+			<<"utf-8//IGNORE">>
 	end.
 
 -ifdef(EUNIT).
@@ -1274,6 +1274,13 @@ rfc2047_decode_test_() ->
 			fun() ->
 					?assertEqual(<<"this is some text">>, decode_header(<<"=?iso-8859-1?q?this=20is=20some=20text?=">>, "utf-8")),
 					?assertEqual(<<"=?iso-8859-1?q?this is some text?=">>, decode_header(<<"=?iso-8859-1?q?this is some text?=">>, "utf-8"))
+			end
+		},
+		{"invalid character sequence handling",
+			fun() ->
+					?assertError({badmatch, {error, eilseq}}, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
+					?assertEqual(<<"this contains a copyright  symbol">>, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE")),
+					?assertEqual(<<"this contains a copyright © symbol">>, decode_header(<<"=?iso-8859-1?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE"))
 			end
 		}
 	].
