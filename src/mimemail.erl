@@ -333,7 +333,20 @@ parse_headers(Body, Line, Headers) ->
 			F = fun(X) -> X > 32 andalso X < 127 end,
 			case binstr:all(F, FieldName) of
 				true ->
-					FieldValue = binstr:strip(binstr:substr(Line, Index+1)),
+					F2 = fun(X) -> (X > 31 andalso X < 127) orelse X == 9 end,
+					FValue = binstr:strip(binstr:substr(Line, Index+1)),
+					FieldValue = case binstr:all(F2, FValue) of
+						true ->
+							FValue;
+						_ ->
+							% this is a little ugly, but binstr doesn't have a map()
+							list_to_binary(lists:map(fun(C) when (C > 31 andalso C < 127); C == 9 ->
+									C;
+								(C) ->
+									$? % sanitize any non-ascii values
+							end,
+							binary_to_list(FValue)))
+					end,
 					case binstr:strpos(Body, "\r\n") of
 						0 ->
 							{lists:reverse([{FieldName, FieldValue} | Headers]), Body};
@@ -843,7 +856,19 @@ various_parsing_test_() ->
 					?assertEqual({[], <<" foo bar baz\r\nbam">>}, parse_headers(<<"\sfoo bar baz\r\nbam">>)),
 					ok
 			end
+		},
+		{"Headers with non-ASCII characters",
+			fun() ->
+					?assertEqual({[{<<"foo">>, <<"bar ?? baz">>}], <<>>}, parse_headers(<<"foo: bar ø baz\r\n">>)),
+					?assertEqual({[], <<"bär: bar baz\r\n">>}, parse_headers(<<"bär: bar baz\r\n">>))
+			end
+		},
+		{"Headers with tab characters",
+			fun() ->
+					?assertEqual({[{<<"foo">>, <<"bar		baz">>}], <<>>}, parse_headers(<<"foo: bar		baz\r\n">>))
+			end
 		}
+
 	].
 
 -define(IMAGE_MD5, <<110,130,37,247,39,149,224,61,114,198,227,138,113,4,198,60>>).
