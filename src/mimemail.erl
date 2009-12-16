@@ -108,8 +108,6 @@ decode_header(Value, Charset) ->
 			Type = binstr:to_lower(binstr:substr(Value, TypeStart+1, 1)),
 			Data = binstr:substr(Value, DataStart+1, DataEnd),
 
-			io:format("data: ~p~n", [Data]),
-
 			{ok, CD} = iconv:open(Charset, Encoding),
 
 			DecodedData = case Type of
@@ -123,8 +121,6 @@ decode_header(Value, Charset) ->
 
 			iconv:close(CD),
 
-			io:format("~p~n", [binstr:substr(Value, AllStart + 1 + AllEnd)]),
-
 			Tail = case binstr:strpos(binstr:substr(Value, AllStart + 1 + AllEnd), "=?") of
 				0 ->
 					binstr:substr(Value, AllStart + 1 + AllEnd);
@@ -132,7 +128,6 @@ decode_header(Value, Charset) ->
 					binstr:substr(Value, AllStart + AllEnd + Index)
 			end,
 
-			io:format("Encoding is ~p, Data is ~p~n", [Encoding, DecodedData]),
 			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, Tail]),
 			decode_header(NewValue, Charset)
 	end.

@@ -138,7 +138,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	self() ! {socket:get_proto(Socket), Socket, Rest},
 	socket:setopts(Socket, [{packet, line}]),
 	Envelope = Env#envelope{data = Body},% size = length(Body)},
-	io:format("received body from child process, remainder was ~p (~p)~n", [Rest, self()]),
+	%io:format("received body from child process, remainder was ~p (~p)~n", [Rest, self()]),
 
 %handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Env, module = Module} = State) ->
 	%io:format("done reading message~n"),
@@ -556,7 +556,7 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 			% TODO: certfile and keyfile should be at configurable locations
 			case socket:to_ssl_server(Socket, [], 5000) of
 				{ok, NewSocket} ->
-					io:format("SSL negotiation sucessful~n"),
+					%io:format("SSL negotiation sucessful~n"),
 					{ok, State#state{socket = NewSocket, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true}};
@@ -741,7 +741,7 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 			case binstr:strpos(Packet, "\r\n.\r\n") of
 				0 ->
 					% uh-oh
-					io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
+					%io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
 					receive_data(Acc, Socket, {Count - 1, RecvSize}, Size, MaxSize, Session, Options);
 				Index ->
