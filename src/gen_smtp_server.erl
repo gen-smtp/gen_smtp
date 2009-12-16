@@ -168,7 +168,7 @@ handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}}, #state{module 
 		end,
 		{noreply, State#state{sessions = Sessions}}
 	catch _:Error ->
-		error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),
+		error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
 		{noreply, State}
 	end;
 
@@ -187,7 +187,7 @@ handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 	{noreply, State};
 
 handle_info({inet_async, ListenSocket,_, Error}, State) ->
-	error_logger:error_msg("Error in socket acceptor: ~p.\n", [Error]),
+	error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
 	{stop, Error, State};
 
 handle_info(_Info, State) ->
@@ -195,8 +195,8 @@ handle_info(_Info, State) ->
 
 %% @hidden
 terminate(Reason, State) ->
-	io:format("Terminating due to ~p", [Reason]),
-	lists:foreach(fun({S,_}) -> catch socket:close(S) end, State#state.listeners),
+	io:format("Terminating due to ~p~n", [Reason]),
+	lists:foreach(fun(#listener{socket=S}) -> catch socket:close(S) end, State#state.listeners),
 	ok.
 
 %% @hidden
