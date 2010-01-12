@@ -1,5 +1,5 @@
-Message-Id: <285CFC47-B9E2-4B6C-A59C-DD864500F7A6@spicecsm.com>
-From: Micah Warren <mwarren@spicecsm.com>
+Message-Id: <285CFC47-B9E2-4B6C-A59C-DD864500F7A6@openacd.example.com>
+From: Micah Warren <mwarren@openacd.example.com>
 To: test@devmicah.fusedsolutions.com
 Content-Type: multipart/mixed;
 	boundary=Apple-Mail-21--712367366
@@ -49,10 +49,10 @@ Content-Transfer-Encoding: 7bit
 \f0\fs24 \cf0 This is a basic rtf file.}
 --Apple-Mail-21--712367366
 Content-Disposition: inline;
-	filename=spice-logo.jpg
+	filename=chili-pepper.jpg
 Content-Type: image/jpeg;
 	x-unix-mode=0644;
-	name="spice-logo.jpg"
+	name="chili-pepper.jpg"
 Content-Transfer-Encoding: base64
 
 /9j/4AAQSkZJRgABAgAAZABkAAD/7AARRHVja3kAAQAEAAAAPAAA/+4ADkFkb2JlAGTAAAAAAf/b

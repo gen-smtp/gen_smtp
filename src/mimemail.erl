@@ -984,8 +984,8 @@ parse_example_mails_test_() ->
 				[{<<"image">>, <<"jpeg">>, _, Parameters, Image}] = Body,
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H))),
 				?assertEqual(<<"inline">>, proplists:get_value(<<"disposition">>, Parameters)),
-				?assertEqual(<<"spice-logo.jpg">>, proplists:get_value(<<"filename">>, proplists:get_value(<<"disposition-params">>, Parameters))),
-				?assertEqual(<<"spice-logo.jpg">>, proplists:get_value(<<"name">>, proplists:get_value(<<"content-type-params">>, Parameters)))
+				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"filename">>, proplists:get_value(<<"disposition-params">>, Parameters))),
+				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"name">>, proplists:get_value(<<"content-type-params">>, Parameters)))
 			end
 		},
 		{"message attachment only",

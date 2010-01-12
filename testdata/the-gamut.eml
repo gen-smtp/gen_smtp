@@ -1,5 +1,5 @@
-Message-Id: <D2C3D072-03B7-4FE6-8ABE-60AA95989BCA@spicecsm.com>
-From: Micah Warren <mwarren@spicecsm.com>
+Message-Id: <D2C3D072-03B7-4FE6-8ABE-60AA95989BCA@openacd.example.com>
+From: Micah Warren <mwarren@openacd.example.com>
 To: test@devmicah.fusedsolutions.com
 Content-Type: multipart/alternative;
 	boundary=Apple-Mail-28--711949187
@@ -45,8 +45,8 @@ Content-Type: message/rfc822;
 	name="message as attachment.eml"
 Content-Transfer-Encoding: 7bit
 
-Message-Id: <AF6A2412-AFCD-4E45-96B0-C1B8C896B2A2@spicecsm.com>
-From: Micah Warren <mwarren@spicecsm.com>
+Message-Id: <AF6A2412-AFCD-4E45-96B0-C1B8C896B2A2@openacd.example.com>
+From: Micah Warren <mwarren@openacd.example.com>
 To: test@devmicah.fusedsolutions.com
 Content-Type: multipart/mixed;
 	boundary=Apple-Mail-19--712443629
@@ -118,10 +118,10 @@ Content-Transfer-Encoding: 7bit
 <html><body style="word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; "><div></div></body></html>
 --Apple-Mail-29--711949186
 Content-Disposition: inline;
-	filename=spice-logo.jpg
+	filename=chili-pepper.jpg
 Content-Type: image/jpeg;
 	x-unix-mode=0644;
-	name="spice-logo.jpg"
+	name="chili-pepper.jpg"
 Content-Transfer-Encoding: base64
 
 /9j/4AAQSkZJRgABAgAAZABkAAD/7AARRHVja3kAAQAEAAAAPAAA/+4ADkFkb2JlAGTAAAAAAf/b
