@@ -422,7 +422,7 @@ decode_quoted_printable_line(<<$=, $\r, $\n>>, Acc) ->
 	lists:reverse(Acc);
 decode_quoted_printable_line(<<$=, A:2/binary, T/binary>>, Acc) ->
 	%<<X:1/binary, Y:1/binary>> = A,
-	case binstr:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) end, A) of
+	case binstr:all(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) orelse (C >= $a andalso C =< $f) end, A) of
 		true ->
 			{ok, [C | []], []} = io_lib:fread("~16u", binary_to_list(A)),
 			decode_quoted_printable_line(T, [C | Acc]);
@@ -1161,6 +1161,11 @@ decode_quoted_printable_test_() ->
 					?assertEqual("!!", decode_quoted_printable_line(<<"=21=21">>, "")),
 					?assertEqual("=:=", decode_quoted_printable_line(<<"=3D:=3D">>, "")),
 					?assertEqual("Thequickbrownfoxjumpedoverthelazydog.", decode_quoted_printable_line(<<"Thequickbrownfoxjumpedoverthelazydog.">>, ""))
+			end
+		},
+		{"lowercase bleh",
+			fun() ->
+					?assertEqual("=:=", decode_quoted_printable_line(<<"=3d:=3d">>, ""))
 			end
 		},
 		{"input with spaces",
