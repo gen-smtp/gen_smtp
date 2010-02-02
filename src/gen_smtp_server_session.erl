@@ -59,10 +59,10 @@
 		module = erlang:error({undefined, module}) :: atom(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
-		waitingauth = false :: bool() | string(),
+		waitingauth = false :: boolean() | string(),
 		authdata :: 'undefined' | string(),
-		readmessage = false :: bool(),
-		tls = false :: bool(),
+		readmessage = false :: boolean(),
+		tls = false :: boolean(),
 		callbackstate :: any(),
 		options = [] :: [tuple()]
 	}
@@ -594,7 +594,7 @@ parse_encoded_address(" " ++ Address) ->
 parse_encoded_address(Address) ->
 	parse_encoded_address(Address, "", {false, false}).
 
--spec(parse_encoded_address/3 :: (Address :: string(), Acc :: string(), Flags :: {bool(), bool()}) -> {string(), string()}).
+-spec(parse_encoded_address/3 :: (Address :: string(), Acc :: string(), Flags :: {boolean(), boolean()}) -> {string(), string()}).
 parse_encoded_address([], Acc, {_Quotes, false}) ->
 	{lists:reverse(Acc), []};
 parse_encoded_address([], _Acc, {_Quotes, true}) ->

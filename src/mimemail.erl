@@ -198,7 +198,7 @@ parse_with_comments(Value) when is_binary(Value) ->
 parse_with_comments(Value) ->
 	Value.
 
--spec(parse_with_comments/4 :: (Value :: binary(), Acc :: list(), Depth :: non_neg_integer(), Quotes :: bool()) -> binary() | 'error').
+-spec(parse_with_comments/4 :: (Value :: binary(), Acc :: list(), Depth :: non_neg_integer(), Quotes :: boolean()) -> binary() | 'error').
 parse_with_comments(<<>>, _Acc, _Depth, Quotes) when Quotes ->
 	{error, quotes};
 parse_with_comments(<<>>, _Acc, Depth, _Quotes) when Depth > 0 ->
