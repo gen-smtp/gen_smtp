@@ -33,8 +33,7 @@ mxlookup(Domain) ->
 		P when is_pid(P) ->
 			ok;
 		_ -> 
-			inet_db:start(),
-			inet_db:init()
+			inet_db:start()
 	end,
 	case lists:keyfind(nameserver, 1, inet_db:get_rc()) of
 		false ->
@@ -44,8 +43,8 @@ mxlookup(Domain) ->
 			ok
 	end,
 	case inet_res:lookup(Domain, in, ?S_MX) of
-		{error, Reply} ->
-			Reply;
+		[] ->
+			[];
 		Result ->
 			lists:sort(fun({Pref, _Name}, {Pref2, _Name2}) -> Pref =< Pref2 end, Result)
 	end.

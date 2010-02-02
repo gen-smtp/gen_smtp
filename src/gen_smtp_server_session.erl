@@ -47,11 +47,11 @@
 
 -record(envelope,
 	{
-		from :: string(),
+		from :: string() | 'undefined',
 		to = [] :: [string()],
-		data = "" :: string(),
-		expectedsize = 0 :: pos_integer(),
-		auth = {[], []} :: {string(), string()} % {"username", "password"}
+		data = <<>> :: binary(),
+		expectedsize = 0 :: pos_integer() | 0,
+		auth = {[], []} :: {string() | [], string() | []} % {"username", "password"}
 	}
 ).
 
@@ -60,7 +60,7 @@
 		socket = erlang:error({undefined, socket}) :: port() | {'ssl', any()},
 		module = erlang:error({undefined, module}) :: atom(),
 		envelope = undefined :: 'undefined' | #envelope{},
-		extensions = [] :: [string()],
+		extensions = [] :: [{string(), string()}],
 		waitingauth = false :: bool() | string(),
 		authdata :: 'undefined' | string(),
 		readmessage = false :: bool(),
@@ -87,11 +87,11 @@ behaviour_info(callbacks) ->
 behaviour_info(_Other) ->
 	undefined.
 
--spec(start_link/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()}).
+-spec(start_link/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start_link(Socket, Module, Options) ->
 	gen_server:start_link(?MODULE, [Socket, Module, Options], []).
 
--spec(start/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()}).
+-spec(start/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start(Socket, Module, Options) ->
 	gen_server:start(?MODULE, [Socket, Module, Options], []).
 
@@ -769,9 +769,6 @@ adjust_receive_size_down(Size, RecvSize) when RecvSize > 8192 ->
 	8192;
 adjust_receive_size_down(Size, RecvSize) ->
 	0.
-
-check_for_bare_crlf(Bin) ->
-	check_for_bare_crlf(Bin, 0).
 
 check_for_bare_crlf(Bin, Offset) ->
 	case {re:run(Bin, "(?<!\r)\n", [{capture, none}, {offset, Offset}]), re:run(Bin, "\r(?!\n)", [{capture, none}, {offset, Offset}])}  of

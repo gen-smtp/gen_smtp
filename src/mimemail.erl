@@ -279,8 +279,8 @@ split_body_by_boundary(Body, Boundary, MimeVsn, Options) ->
 			[decode_component(Headers, Body2, MimeVsn, Options) || {Headers, Body2} <- [V || {_, Body3} = V <- Parts, byte_size(Body3) =/= 0]]
 		end.
 
-split_body_by_boundary_([], _Boundary, Acc) ->
-	list_to_binary(lists:reverse(Acc));
+split_body_by_boundary_(<<>>, _Boundary, Acc) ->
+	lists:reverse(Acc);
 split_body_by_boundary_(Body, Boundary, Acc) ->
 	% trim the incomplete first line
 	TrimmedBody = binstr:substr(Body, binstr:strpos(Body, "\r\n") + 2),
@@ -593,9 +593,10 @@ encode_folded_header(Header, HeaderLines) ->
 				<<$\t,_Rest/binary>> ->
 					Remainder;
 				_ ->
-					<<"\t", Remainder>>
+					list_to_binary(["\t", Remainder])
 			end,
-			HeaderLines ++ [ string:substr(Header, 1, Index) ] ++
+			% TODO - not tail recursive
+			HeaderLines ++ [ binstr:substr(Header, 1, Index) ] ++
 				encode_folded_header(TabbedRemainder, [])
 	end.
 
@@ -673,7 +674,7 @@ encode_quoted_printable(Body, Acc, L) when L >= 75 ->
 		0 ->
 			Acc;
 		Index ->
-			binstr:substr(Acc, 1, Index-1)
+			string:substr(Acc, 1, Index-1)
 	end,
 	Len = length(LastLine),
 	case string:str(LastLine, " ") of
@@ -1261,6 +1262,12 @@ encode_quoted_printable_test_() ->
 						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.">>, "", 0)),
 					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.">>,
 						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.">>, "", 0))
+			end
+		},
+		{"newline craziness",
+			fun() ->
+					?assertEqual(<<"foo ba=\r\nr\r\nThe quick brown fox jumped over the lazy dog.      =20\r\n">>,
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       \r\n">>, "\n\rrab oof", 78))
 			end
 		}
 	].

@@ -60,7 +60,7 @@
 -export([setopts/2]).
 -export([get_proto/1]).
 -export([begin_inet_async/1]).
--export([handle_inet_async/2, handle_inet_async/2]).
+-export([handle_inet_async/1, handle_inet_async/2]).
 -export([extract_port_from_socket/1]).
 -export([to_ssl_server/1,to_ssl_server/2,to_ssl_server/3]).
 -export([to_ssl_client/1,to_ssl_client/2,to_ssl_client/3]).
@@ -161,6 +161,7 @@ begin_inet_async(Socket) ->
 %% @doc handle the {inet_async,...} message
 handle_inet_async({inet_async, ListenSocket, _, {ok,ClientSocket}}) ->
 	handle_inet_async(ListenSocket, ClientSocket).
+
 handle_inet_async(ListenObject, ClientSocket) ->
 	ListenSocket = extract_port_from_socket(ListenObject),
 	case set_sockopt(ListenSocket, ClientSocket) of

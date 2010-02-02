@@ -25,14 +25,11 @@
 
 -module(gen_smtp_client).
 
--import(smtp_util, [guess_FQDN/0, compute_cram_digest/2, mxlookup/1]).
-
-
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
 		{tls, if_available}, % always, never, if_available
 		{auth, if_available},
-		{hostname, guess_FQDN()},
+		{hostname, smtp_util:guess_FQDN()},
 		{retries, 1} % how many retries per smtp host on temporary failure
 	]).
 
@@ -68,7 +65,7 @@ send(Email, Options) ->
 
 send_it(Email, Options, Parent) ->
 	RelayDomain = proplists:get_value(relay, Options),
-	MXRecords = mxlookup(RelayDomain),
+	MXRecords = smtp_util:mxlookup(RelayDomain),
 	%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
 	Hosts = case MXRecords of
 		[] ->
@@ -243,7 +240,7 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 		{ok, "334 "++Rest} ->
 			Seed64 = string:strip(string:strip(Rest, right, $\n), right, $\r),
 			Seed = base64:decode_to_string(Seed64),
-			Digest = compute_cram_digest(Password, Seed),
+			Digest = smtp_util:compute_cram_digest(Password, Seed),
 			String = binary_to_list(base64:encode(Username++" "++Digest)),
 			socket:send(Socket, String++"\r\n"),
 			case read_possible_multiline_reply(Socket) of

@@ -26,8 +26,6 @@
 -module(gen_smtp_server).
 -behaviour(gen_server).
 
--import(smtp_util, [guess_FQDN/0]).
-
 -define(PORT, 2525).
 
 %% External API
@@ -53,13 +51,16 @@
 		}).
 -type(state() :: #state{}).
 
+-type(options() :: [{'domain', string()} | {'address', {pos_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}} |
+		{'port', pos_integer()} | {'protocol', 'tcp' | 'ssl'} | {'sessionoptions', [any()]}]).
+
 %% @doc Start the listener with callback module `Module' on with options `Options' linked to the calling process.
--spec(start_link/2 :: (Module :: atom(), Options :: [{'domain' | 'address' | 'port', any()}]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec(start_link/2 :: (Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start_link(Module, Options) when is_list(Options) ->
 	gen_server:start_link(?MODULE, [Module, Options], []).
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
--spec(start/2 :: (Module :: atom(), Options :: [{'domain' | 'address' | 'port', any()}]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec(start/2 :: (Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start(Module, Options) when is_list(Options) ->
 	gen_server:start(?MODULE, [Module, Options], []).
 
@@ -92,7 +93,7 @@ sessions(Pid) ->
 %%   [ [{port,25},{protocol,tcp},{domain,"myserver.com"},{address,{0,0,0,0}}],
 %%     [{port,465},{protocol,ssl},{domain,"secure.myserver.com"},{address,{0.0.0.0}}]
 %%   ]
--spec(init/1 :: (Args :: list()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'ok', #state{}, 'hibernate'} | {'ok', #state{}, non_neg_integer() | 'infinity'} | 'ignore' | {'stop', any()}).
 init([Module, Configurations]) ->
 	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}],
 	try
