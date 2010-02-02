@@ -146,9 +146,10 @@ setopts(Socket, Options) when is_port(Socket) ->
 setopts(Socket, Options) ->
 	ssl:setopts(Socket, Options).
 
+-spec(get_proto/1 :: (Socket :: any()) -> 'tcp' | 'ssl').
 get_proto(Socket) when is_port(Socket) ->
 	tcp;
-get_proto(Socket) ->
+get_proto(_Socket) ->
 	ssl.
 
 %% @doc {inet_async,...} will be sent to current process when a client connects
@@ -186,7 +187,7 @@ to_ssl_server(Socket, Options) ->
 	to_ssl_server(Socket, Options, infinity).
 to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
-to_ssl_server(Socket, Options, Timeout) ->
+to_ssl_server(_Socket, _Options, _Timeout) ->
 	erlang:error(ssl_connected, "Socket is already using SSL").
 
 to_ssl_client(Socket) ->
@@ -195,7 +196,7 @@ to_ssl_client(Socket, Options) ->
 	to_ssl_client(Socket, Options, infinity).
 to_ssl_client(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:connect(Socket, ssl_connect_options(Options), Timeout);
-to_ssl_client(Socket, Options, Timeout) ->
+to_ssl_client(_Socket, _Options, _Timeout) ->
 	erlang:error(ssl_connected, "Socket is already using SSL").
 
 type(Socket) when is_port(Socket) ->

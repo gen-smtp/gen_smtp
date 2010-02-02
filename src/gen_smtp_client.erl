@@ -45,7 +45,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
 -else.
--export([send/2, send_it/3]).
+-export([send/2, send_it/2]).
 -endif.
 
 send(Email, Options) ->
@@ -53,9 +53,8 @@ send(Email, Options) ->
 		lists:sort(?DEFAULT_OPTIONS)),
 	case check_options(NewOptions) of
 		ok ->
-			Self = self(),
 			Pid = spawn_link(fun () ->
-						(?MODULE):send_it(Email, NewOptions, Self)
+						(?MODULE):send_it(Email, NewOptions)
 				end
 			),
 			{ok, Pid};
@@ -63,7 +62,7 @@ send(Email, Options) ->
 			{error, Reason}
 	end.
 
-send_it(Email, Options, Parent) ->
+send_it(Email, Options) ->
 	RelayDomain = proplists:get_value(relay, Options),
 	MXRecords = smtp_util:mxlookup(RelayDomain),
 	%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
@@ -75,7 +74,7 @@ send_it(Email, Options, Parent) ->
 	end,
 	try_smtp_sessions(Hosts, Email, Options, []).
 
-try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) ->
+try_smtp_sessions([{Distance, Host} | Tail], Email, Options, RetryList) ->
 	Retries = proplists:get_value(retries, Options),
 	try do_smtp_session(Host, Email, Options)
 	catch
@@ -87,16 +86,16 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
 					% out of chances
 					%io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
-					NewHosts = lists:keydelete(Host, 2, Hosts),
+					NewHosts = Tail,
 					NewRetryList = lists:keydelete(Host, 1, RetryList);
 				RetryCount when is_integer(RetryCount) ->
 					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
-					NewHosts = lists:keydelete(Host, 2, Hosts) ++ [{Distance, Host}],
+					NewHosts = Tail ++ [{Distance, Host}],
 					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, RetryCount + 1}];
 				_ ->
 					% otherwise...
 					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
-					NewHosts = lists:keydelete(Host, 2, Hosts) ++ [{Distance, Host}],
+					NewHosts = Tail ++ [{Distance, Host}],
 					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, 1}]
 			end,
 			case NewHosts of
@@ -108,14 +107,14 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 	end.
 
 do_smtp_session(Host, Email, Options) ->
-	{ok, Socket, Host, Banner} = connect(Host, Options),
+	{ok, Socket, Host, _Banner} = connect(Host, Options),
 	%io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
 	{ok, Extensions} = try_EHLO(Socket, Options),
 	%io:format("Extensions are ~p~n", [Extensions]),
 	{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
 		Extensions),
 	%io:format("Extensions are ~p~n", [Extensions2]),
-	Authed = try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
+	_Authed = try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
 	%io:format("Authentication status is ~p~n", [Authed]),
 	try_sending_it(Email, Socket2, Extensions2),
 	%io:format("Mail sending successful~n"),
@@ -126,7 +125,7 @@ try_sending_it({From, To, Body}, Socket, Extensions) ->
 	try_RCPT_TO(To, Socket, Extensions),
 	try_DATA(Body, Socket, Extensions).
 
-try_MAIL_FROM("<" ++ _ = From, Socket, Extensions) ->
+try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions) ->
 	% TODO do we need to bother with SIZE?
 	socket:send(Socket, "MAIL FROM: "++From++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
@@ -162,7 +161,7 @@ try_RCPT_TO([To | Tail], Socket, Extensions) ->
 	% someone was bad and didn't put in the angle brackets
 	try_RCPT_TO(["<"++To++">" | Tail], Socket, Extensions).
 
-try_DATA(Body, Socket, Extensions) ->
+try_DATA(Body, Socket, _Extensions) ->
 	socket:send(Socket, "DATA\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, "354"++_} ->
@@ -181,14 +180,14 @@ try_DATA(Body, Socket, Extensions) ->
 			throw({permanant_failure, Msg})
 	end.
 
-try_AUTH(Socket, Options, []) ->
+try_AUTH(_Socket, Options, []) ->
 	case proplists:get_value(auth, Options) of
 		always ->
 			erlang:error(no_auth);
 		_ ->
 			false
 	end;
-try_AUTH(Socket, Options, undefined) ->
+try_AUTH(_Socket, Options, undefined) ->
 	case proplists:get_value(auth, Options) of
 		always ->
 			erlang:error(no_auth);
@@ -232,7 +231,7 @@ do_AUTH(Socket, Username, Password, Types) ->
 	%	[AllowedTypes]),
 	do_AUTH_each(Socket, Username, Password, AllowedTypes).
 
-do_AUTH_each(Socket, Username, Password, []) ->
+do_AUTH_each(_Socket, _Username, _Password, []) ->
 	false;
 do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 	socket:send(Socket, "AUTH CRAM-MD5\r\n"),
@@ -247,11 +246,11 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 				{ok, "235"++_} ->
 					%io:format("authentication accepted~n"),
 					true;
-				{ok, Msg} ->
+				{ok, _Msg} ->
 					%io:format("authentication rejected: ~s~n", [Msg]),
 					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
-		{ok, Something} ->
+		{ok, _Something} ->
 			%io:format("got ~s~n", [Something]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
@@ -271,15 +270,15 @@ do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 						{ok, "235 "++_} ->
 							%io:format("authentication accepted~n"),
 							true;
-						{ok, Msg} ->
+						{ok, _Msg} ->
 							%io:format("password rejected: ~s", [Msg]),
 							do_AUTH_each(Socket, Username, Password, Tail)
 					end;
-				{ok, Msg2} ->
+				{ok, _Msg2} ->
 					%io:format("username rejected: ~s", [Msg2]),
 					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
-		{ok, Something} ->
+		{ok, _Something} ->
 			%io:format("got ~s~n", [Something]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
@@ -290,13 +289,13 @@ do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
 		{ok, "235"++_} ->
 			%io:format("authentication accepted~n"),
 			true;
-		Else ->
+		_Else ->
 			% TODO do we need to bother trying the multi-step PLAIN?
 			%io:format("authentication rejected~n"),
 			%io:format("~p~n", [Else]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
-do_AUTH_each(Socket, Username, Password, [Type | Tail]) ->
+do_AUTH_each(Socket, Username, Password, [_Type | Tail]) ->
 	%io:format("unsupported AUTH type ~s~n", [Type]),
 	do_AUTH_each(Socket, Username, Password, Tail).
 
@@ -357,7 +356,7 @@ do_STARTTLS(Socket, Options) ->
 					%NewSocket;
 					{ok, Extensions} = try_EHLO(NewSocket, Options),
 					{NewSocket, Extensions};
-				Else ->
+				_Else ->
 					%io:format("~p~n", [Else]),
 					false
 			end;

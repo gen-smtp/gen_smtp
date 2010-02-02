@@ -63,7 +63,7 @@ decode(OrigHeaders, Body, Options) ->
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
 		undefined ->
 			case parse_content_type(get_header_value(<<"Content-Type">>, Headers)) of
-				{<<"multipart">>, SubType, Parameters} ->
+				{<<"multipart">>, _SubType, _Parameters} ->
 					erlang:error(non_mime_multipart);
 				{Type, SubType, Parameters} ->
 					NewBody = decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
@@ -96,7 +96,7 @@ encode(_) ->
 
 decode_headers(Headers, _, none) ->
 	Headers;
-decode_headers([], Acc, Charset) ->
+decode_headers([], Acc, _Charset) ->
 	lists:reverse(Acc);
 decode_headers([{Key, Value} | Headers], Acc, Charset) ->
 	decode_headers(Headers, [{Key, decode_header(Value, Charset)} | Acc], Charset).
@@ -168,7 +168,7 @@ decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 			Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
 			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 	end;
-decode_component(Headers, Body, Other, Options) ->
+decode_component(_Headers, _Body, Other, _Options) ->
 	 io:format("Unknown mime version ~s~n", [Other]),
 	{error, mime_version}.
 
@@ -199,11 +199,11 @@ parse_with_comments(Value) ->
 	Value.
 
 -spec(parse_with_comments/4 :: (Value :: binary(), Acc :: list(), Depth :: non_neg_integer(), Quotes :: bool()) -> binary() | 'error').
-parse_with_comments(<<>>, Acc, Depth, Quotes) when Quotes ->
+parse_with_comments(<<>>, _Acc, _Depth, Quotes) when Quotes ->
 	{error, quotes};
-parse_with_comments(<<>>, Acc, Depth, Quotes) when Depth > 0 ->
+parse_with_comments(<<>>, _Acc, Depth, _Quotes) when Depth > 0 ->
 	{error, comments};
-parse_with_comments(<<>>, Acc, Depth, _Quotes) ->
+parse_with_comments(<<>>, Acc, _Depth, _Quotes) ->
 	binstr:strip(list_to_binary(lists:reverse(Acc)));
 parse_with_comments(<<$\\, H, Tail/binary>>, Acc, Depth, Quotes) when Depth > 0, H > 32, H < 127 ->
 	parse_with_comments(Tail, Acc, Depth, Quotes);
@@ -354,7 +354,7 @@ parse_headers(Body, Line, Headers) ->
 
 filter_non_ascii(C) when (C > 31 andalso C < 127); C == 9 ->
 	<<C>>;
-filter_non_ascii(C) ->
+filter_non_ascii(_C) ->
 	<<"?">>.
 
 decode_body(Type, Body, _InEncoding, none) ->
@@ -379,7 +379,7 @@ decode_body(Type, Body) ->
 			decode_quoted_printable(Body);
 		<<"base64">> ->
 			decode_base64(Body);
-		Other ->
+		_Other ->
 			Body
 	end.
 
@@ -477,7 +477,7 @@ check_headers([Header | Tail], Headers) ->
 						0 ->
 							% okay, tack on the reply-to to the end of References
 							check_headers(Tail, [{<<"References">>, list_to_binary([References, " ", ReplyID])} | proplists:delete(<<"References">>, Headers)]);
-						Index ->
+						_Index ->
 							check_headers(Tail, Headers) % nothing to do
 					end
 				end;
@@ -600,7 +600,7 @@ encode_folded_header(Header, HeaderLines) ->
 				encode_folded_header(TabbedRemainder, [])
 	end.
 
-encode_component(Type, SubType, Headers, Params, Body) ->
+encode_component(_Type, _SubType, Headers, Params, Body) ->
 	if
 		is_list(Body) -> % is this a multipart component?
 			Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Params)),
@@ -676,7 +676,7 @@ encode_quoted_printable(Body, Acc, L) when L >= 75 ->
 		Index ->
 			string:substr(Acc, 1, Index-1)
 	end,
-	Len = length(LastLine),
+	%Len = length(LastLine),
 	case string:str(LastLine, " ") of
 		0 when L =:= 75 ->
 			% uh-oh, no convienient whitespace, just cram a soft newline in
@@ -708,13 +708,13 @@ encode_quoted_printable(<<>>, Acc, _L) ->
 	list_to_binary(lists:reverse(Acc));
 encode_quoted_printable(<<$=, T/binary>> , Acc, L) ->
 	encode_quoted_printable(T, [$D, $3, $= | Acc], L+3);
-encode_quoted_printable(<<$\r, $\n, T/binary>> , Acc, L) ->
+encode_quoted_printable(<<$\r, $\n, T/binary>> , Acc, _L) ->
 	encode_quoted_printable(T, [$\n, $\r | Acc], 0);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $!, H =< $< ->
 	encode_quoted_printable(T, [H | Acc], L+1);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $>, H =< $~ ->
 	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, L) when H == $\s; H == $\t ->
+encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, _L) when H == $\s; H == $\t ->
 	[[A, B]] = io_lib:format("~2.16.0B", [H]),
 	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H == $\s; H == $\t ->

@@ -49,7 +49,6 @@
 		module :: atom(),
 		sessions = [] :: [pid()]
 		}).
--type(state() :: #state{}).
 
 -type(options() :: [{'domain', string()} | {'address', {pos_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}} |
 		{'port', pos_integer()} | {'protocol', 'tcp' | 'ssl'} | {'sessionoptions', [any()]}]).
@@ -178,7 +177,7 @@ handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 	io:format("Client terminated connection with econnaborted~n"),
 	socket:begin_inet_async(ListenSocket),
 	{noreply, State};
-handle_info({inet_async, ListenSocket,_, Error}, State) ->
+handle_info({inet_async, _ListenSocket,_, Error}, State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
 	{stop, Error, State};
 handle_info(_Info, State) ->

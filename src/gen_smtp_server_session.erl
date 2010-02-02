@@ -25,8 +25,6 @@
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
 
--import(smtp_util, [trim_crlf/1]).
-
 -ifdef(EUNIT).
 -import(smtp_util, [compute_cram_digest/2]).
 -include_lib("eunit/include/eunit.hrl").
@@ -124,11 +122,11 @@ handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 
-handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
+handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, readmessage = true} = State) ->
 	socket:send(Socket, "552 Message too large\r\n"),
 	socket:active_once(Socket),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
+handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readmessage = true} = State) ->
 	socket:send(Socket, "451 Bare newline detected\r\n"),
 	io:format("bare newline detected: ~p~n", [self()]),
 	socket:active_once(Socket),
@@ -210,7 +208,7 @@ handle_info(Info, State) ->
 
 %% @hidden
 -spec(terminate/2 :: (Reason :: any(), State :: #state{}) -> 'ok').
-terminate(Reason, State) ->
+terminate(_Reason, State) ->
 	% io:format("Session terminating due to ~p~n", [Reason]),
 	socket:close(State#state.socket),
 	ok.
@@ -348,7 +346,7 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 	end;
 
 % the client sends a response to auth-cram-md5
-handle_request({Username64, []}, #state{socket = Socket, waitingauth = "CRAM-MD5", envelope = #envelope{auth = {[],[]}}, authdata = AuthData} = State) ->
+handle_request({Username64, []}, #state{waitingauth = "CRAM-MD5", envelope = #envelope{auth = {[],[]}}, authdata = AuthData} = State) ->
 	case string:tokens(base64:decode_to_string(Username64), " ") of
 		[Username, Digest] ->
 			try_auth('cram-md5', Username, {Digest, AuthData}, State#state{authdata=undefined});
@@ -358,7 +356,7 @@ handle_request({Username64, []}, #state{socket = Socket, waitingauth = "CRAM-MD5
 	end;
 
 % the client sends a \0username\0password response to auth-plain
-handle_request({Username64, []}, #state{socket = Socket, waitingauth = "PLAIN", envelope = #envelope{auth = {[],[]}}} = State) ->
+handle_request({Username64, []}, #state{waitingauth = "PLAIN", envelope = #envelope{auth = {[],[]}}} = State) ->
 	case string:tokens(base64:decode_to_string(Username64), [0]) of
 		[_Identity, Username, Password] ->
 			try_auth('plain', Username, Password, State);
@@ -380,7 +378,7 @@ handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 	{ok, NewState};
 
 % the client sends a password response to auth-login
-handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", module = Module, envelope = #envelope{auth = {Username,[]}}} = State) ->
+handle_request({Password64, []}, #state{waitingauth = "LOGIN", envelope = #envelope{auth = {Username,[]}}} = State) ->
 	Password = base64:decode_to_string(Password64),
 	try_auth('login', Username, Password, State);
 
@@ -534,7 +532,7 @@ handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 handle_request({"VRFY", Address}, #state{module= Module, socket = Socket, callbackstate = OldCallbackState} = State) ->
 	case parse_encoded_address(Address) of
 		{ParsedAddress, []} ->
-			case Module:handle_VRFY(Address, OldCallbackState) of
+			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
 					socket:send(Socket, io_lib:format("250 ~s\r\n", [Reply])),
 					{ok, State#state{callbackstate = CallbackState}};
@@ -546,7 +544,7 @@ handle_request({"VRFY", Address}, #state{module= Module, socket = Socket, callba
 			socket:send(Socket, "501 Syntax: VRFY username/address\r\n"),
 			{ok, State}
 	end;
-handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=false, extensions = Extensions} = State) ->
+handle_request({"STARTTLS", []}, #state{socket = Socket, tls=false, extensions = Extensions} = State) ->
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			socket:send(Socket, "220 OK\r\n"),
@@ -568,10 +566,10 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=fa
 			socket:send(Socket, "500 Command unrecognized\r\n"),
 			{ok, State}
 	end;
-handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket} = State) ->
+handle_request({"STARTTLS", []}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "500 TLS already negotiated\r\n"),
 	{ok, State};
-handle_request({"STARTTLS", Args}, #state{module = Module, socket = Socket} = State) ->
+handle_request({"STARTTLS", _Args}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax error (no parameters allowed)\r\n"),
 	{ok, State};
 handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackstate = OldCallbackState} = State) ->
@@ -655,7 +653,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 					socket:send(Socket, "235 Authentication successful.\r\n"),
 					{ok, NewState#state{callbackstate = CallbackState,
 					                    envelope = Envelope#envelope{auth = {Username, Credential}}}};
-				Other ->
+				_Other ->
 					socket:send(Socket, "535 Authentication failed.\r\n"),
 					{ok, NewState}
 				end;
@@ -675,7 +673,7 @@ get_cram_string(Hostname) ->
 
 
 %% @doc a tight loop to receive the message body
-receive_data(Acc, Socket, _, Size, MaxSize, Session, Options) when Size > MaxSize ->
+receive_data(_Acc, _Socket, _, Size, MaxSize, Session, _Options) when Size > MaxSize ->
 	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
 receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Options) ->
@@ -713,8 +711,6 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 			end;
 		{ok, Packet} ->
 			[Last | _] = Acc,
-			Lastchar = binstr:substr(Last, -1),
-			<<Firstchar, _/binary>> = Packet,
 			case check_bare_crlf(Packet, Last, proplists:get_value(allow_bare_newlines, Options, false), 0) of
 				error ->
 					Session ! {receive_data, {error, bare_newline}};
@@ -761,13 +757,13 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 	end.
 
 
-adjust_receive_size_down(Size, RecvSize) when RecvSize > 262144 ->
+adjust_receive_size_down(_Size, RecvSize) when RecvSize > 262144 ->
 	262144;
-adjust_receive_size_down(Size, RecvSize) when RecvSize > 65536 ->
+adjust_receive_size_down(_Size, RecvSize) when RecvSize > 65536 ->
 	65536;
-adjust_receive_size_down(Size, RecvSize) when RecvSize > 8192 ->
+adjust_receive_size_down(_Size, RecvSize) when RecvSize > 8192 ->
 	8192;
-adjust_receive_size_down(Size, RecvSize) ->
+adjust_receive_size_down(_Size, _RecvSize) ->
 	0.
 
 check_for_bare_crlf(Bin, Offset) ->
@@ -787,7 +783,7 @@ strip_bare_crlf(Bin, Offset) ->
 
 check_bare_crlf(Binary, _, ignore, _) ->
 	Binary;
-check_bare_crlf(<<$\n,Rest/binary>> = Bin, Prev, Op, Offset) when byte_size(Prev) > 0, Offset == 0 ->
+check_bare_crlf(<<$\n, _Rest/binary>> = Bin, Prev, Op, Offset) when byte_size(Prev) > 0, Offset == 0 ->
 	% check if last character of previous was a CR
 	Lastchar = binstr:substr(Prev, -1),
 	case Lastchar of
@@ -1689,7 +1685,7 @@ smtp_session_auth_test_() ->
 								receive {tcp, CSock, Packet4} -> socket:active_once(CSock) end,
 								?assertMatch("334 "++_,  Packet4),
 
-								["334", Seed64] = string:tokens(trim_crlf(Packet4), " "),
+								["334", Seed64] = string:tokens(smtp_util:trim_crlf(Packet4), " "),
 								Seed = base64:decode_to_string(Seed64),
 								Digest = compute_cram_digest("PaSSw0rd", Seed),
 								String = binary_to_list(base64:encode("username "++Digest)),
@@ -1732,7 +1728,7 @@ smtp_session_auth_test_() ->
 								receive {tcp, CSock, Packet4} -> socket:active_once(CSock) end,
 								?assertMatch("334 "++_,  Packet4),
 
-								["334", Seed64] = string:tokens(trim_crlf(Packet4), " "),
+								["334", Seed64] = string:tokens(smtp_util:trim_crlf(Packet4), " "),
 								Seed = base64:decode_to_string(Seed64),
 								Digest = compute_cram_digest("Passw0rd", Seed),
 								String = binary_to_list(base64:encode("username "++Digest)),
