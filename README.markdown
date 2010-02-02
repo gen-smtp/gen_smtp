@@ -11,6 +11,10 @@ as STARTTLS and SSL (port 465).
 
 Also included is a MIME encoder/decoder, sorta according to RFC204{5,6,7}.
 
+I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
+copies of all my email for several months and its been able to handle over 100
+thousand emails without leaking any RAM or crashing the erlang virtual machine.
+
 Current Participants
 ====================
 
