@@ -235,13 +235,7 @@ to_upper(<<H, T/binary>>, Acc) ->
 all(_Fun, <<>>) ->
 	true;
 all(Fun, <<H, Tail/binary>>) ->
-	case Fun(H) of
-		true ->
-			all(Fun, Tail);
-		_ ->
-			false
-	end.
-
+	Fun(H) =:= true andalso all(Fun, Tail).
 
 %% this is a cool hack to very quickly reverse a binary
 reverse(Bin) ->

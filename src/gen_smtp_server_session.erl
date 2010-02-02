@@ -133,7 +133,8 @@ handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readm
 	io:format("bare newline detected: ~p~n", [self()]),
 	socket:active_once(Socket),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module} = State) ->
+handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module,
+		callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	% send the remainder of the data...
 	self() ! {socket:get_proto(Socket), Socket, Rest},
 	socket:setopts(Socket, [{packet, line}]),
@@ -144,7 +145,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	%io:format("done reading message~n"),
 	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
 	%Envelope = Env#envelope{data = list_to_binary(lists:reverse(Env#envelope.data))},
-	Valid = case has_extension(State#state.extensions, "SIZE") of
+	Valid = case has_extension(Extensions, "SIZE") of
 		{true, Value} ->
 			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
@@ -159,7 +160,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	end,
 	case Valid of
 		true ->
-			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, State#state.callbackstate) of
+			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
 				{ok, Reference, CallbackState} ->
 					socket:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
 					socket:active_once(Socket),
@@ -175,10 +176,8 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	end;
 handle_info({_SocketType, Socket, Packet}, State) ->
 	case handle_request(parse_request(binary_to_list(Packet)), State) of
-		{ok, NewState} when NewState#state.readmessage == true ->
-			Envelope = NewState#state.envelope,
-			Options = NewState#state.options,
-			MaxSize = case has_extension(NewState#state.extensions, "SIZE") of
+		{ok,  #state{envelope = Envelope, extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
+			MaxSize = case has_extension(Extensions, "SIZE") of
 				{true, Value} ->
 					list_to_integer(Value);
 				false ->
@@ -246,8 +245,8 @@ handle_request({[], _Any}, #state{socket = Socket} = State) ->
 handle_request({"HELO", []}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax: HELO hostname\r\n"),
 	{ok, State};
-handle_request({"HELO", Hostname}, #state{socket = Socket, options = Options, module = Module} = State) ->
-	case Module:handle_HELO(Hostname, State#state.callbackstate) of
+handle_request({"HELO", Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
+	case Module:handle_HELO(Hostname, OldCallbackState) of
 		{ok, CallbackState} ->
 			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
 			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
@@ -258,8 +257,8 @@ handle_request({"HELO", Hostname}, #state{socket = Socket, options = Options, mo
 handle_request({"EHLO", []}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, module = Module} = State) ->
-	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, State#state.callbackstate) of
+handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, Extensions, CallbackState} ->
 			case Extensions of
 				[] ->
@@ -276,7 +275,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, mo
 						({E, Value}, {Pos, Len, Acc}) ->
 							{Pos+1, Len, string:concat(Acc, io_lib:format("250-~s ~s\r\n", [E, Value]))}
 					end,
-					Extensions2 = case State#state.tls of
+					Extensions2 = case Tls of
 						true ->
 							Extensions -- [{"STARTTLS", true}];
 						false ->
@@ -294,7 +293,7 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, mo
 handle_request({"AUTH", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	socket:send(Socket, "503 Error: send EHLO first\r\n"),
 	{ok, State};
-handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, envelope = Envelope} = State) ->
+handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, envelope = Envelope, options = Options} = State) ->
 	case string:str(Args, " ") of
 		0 ->
 			AuthType = Args,
@@ -335,7 +334,7 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 							{ok, State#state{waitingauth = "PLAIN", envelope = Envelope#envelope{auth = {[], []}}}};
 						"CRAM-MD5" ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
-							String = get_cram_string(proplists:get_value(hostname, State#state.options, smtp_util:guess_FQDN())),
+							String = get_cram_string(proplists:get_value(hostname, Options, smtp_util:guess_FQDN())),
 							socket:send(Socket, "334 "++String++"\r\n"),
 							{ok, State#state{waitingauth = "CRAM-MD5", authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
@@ -349,10 +348,10 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 	end;
 
 % the client sends a response to auth-cram-md5
-handle_request({Username64, []}, #state{socket = Socket, waitingauth = "CRAM-MD5", envelope = #envelope{auth = {[],[]}}} = State) ->
+handle_request({Username64, []}, #state{socket = Socket, waitingauth = "CRAM-MD5", envelope = #envelope{auth = {[],[]}}, authdata = AuthData} = State) ->
 	case string:tokens(base64:decode_to_string(Username64), " ") of
 		[Username, Digest] ->
-			try_auth('cram-md5', Username, {Digest, State#state.authdata}, State#state{authdata=undefined});
+			try_auth('cram-md5', Username, {Digest, AuthData}, State#state{authdata=undefined});
 		_ ->
 			% TODO error
 			{ok, State#state{waitingauth=false, authdata=undefined}}
@@ -388,7 +387,7 @@ handle_request({Password64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	socket:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
-handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope = Envelope} = State) ->
+handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
 			case string:str(string:to_upper(Args), "FROM:") of
@@ -400,7 +399,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 							{ok, State};
 						{ParsedAddress, []} ->
 							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
-							case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
+							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
 									socket:send(Socket, "250 sender Ok\r\n"),
 									{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
@@ -410,12 +409,12 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 							end;
 						{ParsedAddress, ExtraInfo} ->
 							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-							Options = lists:map(fun(X) -> string:to_upper(X) end, string:tokens(ExtraInfo, " ")),
+							Options = [string:to_upper(X) || X <- string:tokens(ExtraInfo, " ")],
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
 								 ("SIZE="++Size, InnerState) ->
-									case has_extension(State#state.extensions, "SIZE") of
+									case has_extension(Extensions, "SIZE") of
 										{true, Value} ->
 											case list_to_integer(Size) > list_to_integer(Value) of
 												true ->
@@ -427,14 +426,14 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 											{error, "555 Unsupported option SIZE\r\n"}
 									end;
 								("BODY="++_BodyType, InnerState) ->
-									case has_extension(State#state.extensions, "8BITMIME") of
+									case has_extension(Extensions, "8BITMIME") of
 										{true, _} ->
 											InnerState;
 										false ->
 											{error, "555 Unsupported option BODY\r\n"}
 									end;
 								(X, InnerState) ->
-									case Module:handle_MAIL_extension(X, InnerState#state.callbackstate) of
+									case Module:handle_MAIL_extension(X, OldCallbackState) of
 										{ok, CallbackState} ->
 											InnerState#state{callbackstate = CallbackState};
 										error ->
@@ -469,7 +468,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 handle_request({"RCPT", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	socket:send(Socket, "503 Error: need MAIL command\r\n"),
 	{ok, State};
-handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
+handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
 	case string:str(string:to_upper(Args), "TO:") of
 		1 ->
 			Address = string:strip(string:substr(Args, 4), left, $\s),
@@ -483,10 +482,10 @@ handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, modu
 					{ok, State};
 				{ParsedAddress, []} ->
 					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
-					case Module:handle_RCPT(ParsedAddress, State#state.callbackstate) of
+					case Module:handle_RCPT(ParsedAddress, OldCallbackState) of
 						{ok, CallbackState} ->
 							socket:send(Socket, "250 recipient Ok\r\n"),
-							{ok, State#state{envelope = Envelope#envelope{to = lists:append(Envelope#envelope.to, [ParsedAddress])}, callbackstate = CallbackState}};
+							{ok, State#state{envelope = Envelope#envelope{to = Envelope#envelope.to ++ [ParsedAddress]}, callbackstate = CallbackState}};
 						{error, Message, CallbackState} ->
 							socket:send(Socket, Message++"\r\n"),
 							{ok, State#state{callbackstate = CallbackState}}
@@ -518,24 +517,24 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 
 			{ok, State#state{readmessage = true}}
 	end;
-handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module} = State) ->
+handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
 	socket:send(Socket, "250 Ok\r\n"),
 	% if the client sends a RSET before a HELO/EHLO don't give them a valid envelope
 	NewEnvelope = case Envelope of
 		undefined -> undefined;
 		_Something -> #envelope{}
 	end,
-	{ok, State#state{envelope = NewEnvelope, callbackstate = Module:handle_RSET(State#state.callbackstate)}};
+	{ok, State#state{envelope = NewEnvelope, callbackstate = Module:handle_RSET(OldCallbackState)}};
 handle_request({"NOOP", _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "250 Ok\r\n"),
 	{ok, State};
 handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "221 Bye\r\n"),
 	{stop, normal, State};
-handle_request({"VRFY", Address}, #state{module= Module, socket = Socket} = State) ->
+handle_request({"VRFY", Address}, #state{module= Module, socket = Socket, callbackstate = OldCallbackState} = State) ->
 	case parse_encoded_address(Address) of
 		{ParsedAddress, []} ->
-			case Module:handle_VRFY(Address, State#state.callbackstate) of
+			case Module:handle_VRFY(Address, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
 					socket:send(Socket, io_lib:format("250 ~s\r\n", [Reply])),
 					{ok, State#state{callbackstate = CallbackState}};
@@ -547,8 +546,8 @@ handle_request({"VRFY", Address}, #state{module= Module, socket = Socket} = Stat
 			socket:send(Socket, "501 Syntax: VRFY username/address\r\n"),
 			{ok, State}
 	end;
-handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=false} = State) ->
-	case has_extension(State#state.extensions, "STARTTLS") of
+handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket, tls=false, extensions = Extensions} = State) ->
+	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			socket:send(Socket, "220 OK\r\n"),
 			crypto:start(),
@@ -575,8 +574,8 @@ handle_request({"STARTTLS", []}, #state{module = Module, socket = Socket} = Stat
 handle_request({"STARTTLS", Args}, #state{module = Module, socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax error (no parameters allowed)\r\n"),
 	{ok, State};
-handle_request({Verb, Args}, #state{socket = Socket, module = Module} = State) ->
-	{Message, CallbackState} = Module:handle_other(Verb, Args, State#state.callbackstate),
+handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackstate = OldCallbackState} = State) ->
+	{Message, CallbackState} = Module:handle_other(Verb, Args, OldCallbackState),
 	socket:send(Socket, Message++"\r\n"),
 	{ok, State#state{callbackstate = CallbackState}}.
 
@@ -604,20 +603,20 @@ parse_encoded_address([], _Acc, {_Quotes, true}) ->
 	error; % began with angle brackets but didn't end with them
 parse_encoded_address(_, Acc, _) when length(Acc) > 129 ->
 	error; % too long
-parse_encoded_address([$\\ | Tail], Acc, Flags) ->
+parse_encoded_address("\\" ++ Tail, Acc, Flags) ->
 	[H | NewTail] = Tail,
 	parse_encoded_address(NewTail, [H | Acc], Flags);
-parse_encoded_address([$" | Tail], Acc, {false, AB}) ->
+parse_encoded_address("\"" ++ Tail, Acc, {false, AB}) ->
 	parse_encoded_address(Tail, Acc, {true, AB});
-parse_encoded_address([$" | Tail], Acc, {true, AB}) ->
+parse_encoded_address("\"" ++ Tail, Acc, {true, AB}) ->
 	parse_encoded_address(Tail, Acc, {false, AB});
-parse_encoded_address([$> | Tail], Acc, {false, true}) ->
+parse_encoded_address(">" ++ Tail, Acc, {false, true}) ->
 	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
-parse_encoded_address([$> | _Tail], _Acc, {false, false}) ->
+parse_encoded_address(">" ++ _Tail, _Acc, {false, false}) ->
 	error; % ended with angle brackets but didn't begin with them
-parse_encoded_address([$\s | Tail], Acc, {false, false}) ->
+parse_encoded_address(" " ++ Tail, Acc, {false, false}) ->
 	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
-parse_encoded_address([$\s | _Tail], _Acc, {false, true}) ->
+parse_encoded_address(" " ++ _Tail, _Acc, {false, true}) ->
 	error; % began with angle brackets but didn't end with them
 parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $0, H =< $9 ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % digits
@@ -635,7 +634,7 @@ parse_encoded_address([H | Tail], Acc, Quotes) ->
 -spec(has_extension/2 :: (Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false').
 has_extension(Exts, Ext) ->
 	Extension = string:to_upper(Ext),
-	Extensions = lists:map(fun({X, Y}) -> {string:to_upper(X), Y} end, Exts),
+	Extensions = [{string:to_upper(X), Y} || {X, Y} <- Exts],
 	%io:format("extensions ~p~n", [Extensions]),
 	case proplists:get_value(Extension, Extensions) of
 		undefined ->
@@ -646,12 +645,12 @@ has_extension(Exts, Ext) ->
 
 
 -spec(try_auth/4 :: (AuthType :: 'login' | 'plain' | 'cram-md5', Username :: string(), Credential :: string() | {string(), string()}, State :: #state{}) -> {'ok', #state{}}).
-try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope} = State) ->
+try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope, callbackstate = OldCallbackState} = State) ->
 	% clear out waiting auth
 	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
 	case erlang:function_exported(Module, handle_AUTH, 4) of
 		true ->
-			case Module:handle_AUTH(AuthType, Username, Credential, State#state.callbackstate) of
+			case Module:handle_AUTH(AuthType, Username, Credential, OldCallbackState) of
 				{ok, CallbackState} ->
 					socket:send(Socket, "235 Authentication successful.\r\n"),
 					{ok, NewState#state{callbackstate = CallbackState,

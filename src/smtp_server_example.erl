@@ -28,7 +28,7 @@ handle_EHLO("invalid", Extensions, State) ->
 	{error, "554 invalid hostname", State};
 handle_EHLO(Hostname, Extensions, State) ->
 	io:format("EHLO from ~s~n", [Hostname]),
-	MyExtensions = lists:append(Extensions, [{"WTF", true}]),
+	MyExtensions = Extensions ++ [{"WTF", true}],
 	{ok, MyExtensions, State}.
 
 handle_MAIL(From, State) ->

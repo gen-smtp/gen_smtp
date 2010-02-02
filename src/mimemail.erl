@@ -276,9 +276,8 @@ split_body_by_boundary(Body, Boundary, MimeVsn, Options) ->
 			NewBody = binstr:substr(Body, Start + byte_size(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), []),
-			Res = lists:filter(fun({Headers, Body2}) -> byte_size(Body2) =/= 0 end, Parts),
-			lists:map(fun({Headers, Body2}) -> decode_component(Headers, Body2, MimeVsn, Options) end, Res)
-	end.
+			[decode_component(Headers, Body2, MimeVsn, Options) || {Headers, Body2} <- [V || {_, Body3} = V <- Parts, byte_size(Body3) =/= 0]]
+		end.
 
 split_body_by_boundary_([], _Boundary, Acc) ->
 	list_to_binary(lists:reverse(Acc));
@@ -337,13 +336,8 @@ parse_headers(Body, Line, Headers) ->
 						true ->
 							FValue;
 						_ ->
-							% this is a little ugly, but binstr doesn't have a map()
-							list_to_binary(lists:map(fun(C) when (C > 31 andalso C < 127); C == 9 ->
-									C;
-								(C) ->
-									$? % sanitize any non-ascii values
-							end,
-							binary_to_list(FValue)))
+							% I couldn't figure out how to use a pure binary comprehension here :(
+							list_to_binary([ filter_non_ascii(C) || <<C:8>> <= FValue])
 					end,
 					case binstr:strpos(Body, "\r\n") of
 						0 ->
@@ -357,6 +351,11 @@ parse_headers(Body, Line, Headers) ->
 					{lists:reverse(Headers), list_to_binary([Line, "\r\n", Body])}
 			end
 	end.
+
+filter_non_ascii(C) when (C > 31 andalso C < 127); C == 9 ->
+	<<C>>;
+filter_non_ascii(C) ->
+	<<"?">>.
 
 decode_body(Type, Body, _InEncoding, none) ->
 	decode_body(Type, Body);
@@ -532,7 +531,7 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 			case Enc of
 				<<"7bit">> ->
 					ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel);
-				_ -> 
+				_ ->
 					ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Transfer-Encoding">>, Enc} | Headers], Body, Toplevel)
 			end;
 		undefined when Header == <<"Content-Disposition">>, Toplevel == false ->
@@ -573,14 +572,7 @@ guess_best_encoding(Body) ->
 encode_parameters([[]]) ->
 	[];
 encode_parameters(Parameters) ->
-	lists:map(fun({X, Y}) ->
-				case binstr:strchr(Y, $\s) of
-					0 ->
-						[X, "=", Y];
-					_ ->
-						[X, "=\"", Y, "\""]
-				end
-		end, Parameters).
+	[case binstr:strchr(Y, $\s) of 0 -> [X, "=", Y]; _ -> [X, "=\"", Y, "\""] end || {X, Y} <- Parameters].
 
 encode_headers(Headers) ->
 	encode_headers(Headers, []).

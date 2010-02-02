@@ -240,16 +240,7 @@ proplist_merge(PrimaryList, DefaultList) ->
 		lists:keysort(1, DefaultList)
 	),
 	%% remove all the values that don't belong here
-	lists:filter(
-		fun(Option) ->
-			case Option of
-				{Key,_} ->
-					proplists:is_defined(Key, DefaultList);
-				_ -> false
-			end
-		end,
-		Merged
-	).
+	[Option  || Option = {Key, _} <- Merged,  proplists:is_defined(Key, DefaultList)].
 
 extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
 	SSLPort;

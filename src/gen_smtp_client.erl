@@ -56,7 +56,11 @@ send(Email, Options) ->
 		lists:sort(?DEFAULT_OPTIONS)),
 	case check_options(NewOptions) of
 		ok ->
-			Pid = spawn_link(?MODULE, send_it, [Email, NewOptions, self()]),
+			Self = self(),
+			Pid = spawn_link(fun () ->
+						(?MODULE):send_it(Email, NewOptions, Self)
+				end
+			),
 			{ok, Pid};
 		{error, Reason} ->
 			{error, Reason}
@@ -76,9 +80,7 @@ send_it(Email, Options, Parent) ->
 
 try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) ->
 	Retries = proplists:get_value(retries, Options),
-	try do_smtp_session(Host, Email, Options) of
-		Result ->
-			Result
+	try do_smtp_session(Host, Email, Options)
 	catch
 		throw:{permanant_failure, Message} ->
 			% permanant failure means no retries, and don't even continue with other hosts
@@ -92,13 +94,13 @@ try_smtp_sessions([{Distance, Host} | Tail] = Hosts, Email, Options, RetryList) 
 					NewRetryList = lists:keydelete(Host, 1, RetryList);
 				RetryCount when is_integer(RetryCount) ->
 					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
-					NewHosts = lists:append(lists:keydelete(Host, 2, Hosts), [{Distance, Host}]),
-					NewRetryList = lists:append(lists:keydelete(Host, 1, RetryList), [{Host, RetryCount + 1}]);
+					NewHosts = lists:keydelete(Host, 2, Hosts) ++ [{Distance, Host}],
+					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, RetryCount + 1}];
 				_ ->
 					% otherwise...
 					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
-					NewHosts = lists:append(lists:keydelete(Host, 2, Hosts), [{Distance, Host}]),
-					NewRetryList = lists:append(lists:keydelete(Host, 1, RetryList), [{Host, 1}])
+					NewHosts = lists:keydelete(Host, 2, Hosts) ++ [{Distance, Host}],
+					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, 1}]
 			end,
 			case NewHosts of
 				[] ->
@@ -127,7 +129,7 @@ try_sending_it({From, To, Body}, Socket, Extensions) ->
 	try_RCPT_TO(To, Socket, Extensions),
 	try_DATA(Body, Socket, Extensions).
 
-try_MAIL_FROM([$< | _] = From, Socket, Extensions) ->
+try_MAIL_FROM("<" ++ _ = From, Socket, Extensions) ->
 	% TODO do we need to bother with SIZE?
 	socket:send(Socket, "MAIL FROM: "++From++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
@@ -147,7 +149,7 @@ try_MAIL_FROM(From, Socket, Extensions) ->
 
 try_RCPT_TO([], _Socket, _Extensions) ->
 	true;
-try_RCPT_TO([[$< | _] = To | Tail], Socket, Extensions) ->
+try_RCPT_TO(["<" ++ _ = To | Tail], Socket, Extensions) ->
 	socket:send(Socket, "RCPT TO: "++To++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, "250"++_} ->
@@ -226,10 +228,9 @@ try_AUTH(Socket, Options, AuthTypes) ->
 	end.
 
 do_AUTH(Socket, Username, Password, Types) ->
-	FixedTypes = lists:map(fun(X) -> string:to_upper(X) end, Types),
+	FixedTypes = [string:to_upper(X) || X <- Types],
 	%io:format("Fixed types: ~p~n", [FixedTypes]),
-	AllowedTypes = lists:filter(fun(X) -> lists:member(X, FixedTypes) end,
-		?AUTH_PREFERENCE),
+	AllowedTypes = [X  || X <- ?AUTH_PREFERENCE, lists:member(X, FixedTypes)],
 	%io:format("available authentication types, in order of preference: ~p~n",
 	%	[AllowedTypes]),
 	do_AUTH_each(Socket, Username, Password, AllowedTypes).
@@ -303,28 +304,26 @@ do_AUTH_each(Socket, Username, Password, [Type | Tail]) ->
 	do_AUTH_each(Socket, Username, Password, Tail).
 
 try_EHLO(Socket, Options) ->
-	case socket:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n") of
-		ok ->
-			{ok, Reply} = read_possible_multiline_reply(Socket),
-			[_ | Reply2] = re:split(Reply, "\r\n", [{return, list}, trim]),
-			Extensions = lists:map(fun(Entry) ->
-						Body = string:substr(Entry, 5),
-						case re:split(Body, " ", [{return, list}, trim,
-									{parts, 2}]) of
-							[Verb, Parameters] ->
-								{string:to_upper(Verb), Parameters};
-							[Body] ->
-								case string:str(Body, "=") of
-									0 ->
-										{string:to_upper(Body), true};
-									_ ->
-										%io:format("discarding option ~p~n", [Body]),
-										[]
-								end
+	ok = socket:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n"),
+	{ok, Reply} = read_possible_multiline_reply(Socket),
+	[_ | Reply2] = re:split(Reply, "\r\n", [{return, list}, trim]),
+	Extensions = [
+		begin
+				Body = string:substr(Entry, 5),
+				case re:split(Body, " ",  [{return, list}, trim, {parts, 2}]) of
+					[Verb, Parameters] ->
+						{string:to_upper(Verb), Parameters};
+					[Body] ->
+						case string:str(Body, "=") of
+							0 ->
+								{string:to_upper(Body), true};
+							_ ->
+								%io:format("discarding option ~p~n", [Body]),
+								[]
 						end
-				end, Reply2),
-			{ok, Extensions}
-		end.
+				end
+		end  || Entry <- Reply2],
+	{ok, Extensions}.
 
 % check if we should try to do TLS
 try_STARTTLS(Socket, Options, Extensions) ->
