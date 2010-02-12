@@ -521,6 +521,24 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 			CTH = binstr:join([CT | encode_parameters(CTP)], ";\r\n\t"),
 			NewParameters = [{<<"content-type-params">>, CTP} | proplists:delete(<<"content-type-params">>, Parameters)],
 			ensure_content_headers(Tail, Type, SubType, NewParameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel);
+		undefined when Header == <<"Content-Type">> ->
+			% no content-type header and its text/plain
+			Charset = case proplists:get_value(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
+				undefined ->
+					guess_charset(Body);
+				C ->
+					C
+			end,
+			case Charset of
+				<<"us-ascii">> ->
+					% the default
+					ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel);
+				_ ->
+					CTP = [{<<"charset">>, Charset} | proplists:delete(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, []))],
+					CTH = binstr:join([<<"text/plain">> | encode_parameters(CTP)], ";\r\n\t"),
+					NewParameters = [{<<"content-type-params">>, CTP} | proplists:delete(<<"content-type-params">>, Parameters)],
+					ensure_content_headers(Tail, Type, SubType, NewParameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel)
+			end;
 		undefined when Header == <<"Content-Transfer-Encoding">>, Type =/= <<"multipart">> ->
 			Enc = case proplists:get_value(<<"transfer-encoding">>, Parameters) of
 				undefined ->
@@ -1250,6 +1268,12 @@ encode_quoted_printable_test_() ->
 						encode_quoted_printable(<<"There's some n", 248, "n-", 225,"scii st", 252, "ff in here\r\n">>, "", 0))
 			end
 		},
+		{"input with invisible non-ascii characters",
+			fun() ->
+					?assertEqual(<<"There's some stuff=C2=A0in=C2=A0here\r\n">>,
+						encode_quoted_printable(<<"There's some stuff in here\r\n">>, "", 0))
+			end
+		},
 		{"add soft newlines",
 			fun() ->
 					?assertEqual(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.">>,
@@ -1529,7 +1553,55 @@ encoding_test_() ->
 						<<"This is a HTML message with no non-ascii characters\r\nso there">>},
 					Encoded2 = encode(Email2),
 					Result2 = decode(Encoded2),
-					?assertMatch(<<"text/html;charset=us-ascii">>, proplists:get_value(<<"Content-Type">>, element(3, Result2)))
+					?assertMatch(<<"text/html;charset=us-ascii">>, proplists:get_value(<<"Content-Type">>, element(3, Result2))),
+					Email3 = {<<"text">>, <<"html">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						<<"This is a text message with some invisible non-ascii characters\r\nso there">>},
+					Encoded3 = encode(Email3),
+					Result3 = decode(Encoded3),
+					?assertMatch(<<"text/html;charset=utf-8">>, proplists:get_value(<<"Content-Type">>, element(3, Result3)))
+			end
+		},
+		{"Content-Type header should be added for subparts too, if missing and appropriate",
+			fun() ->
+					Email4 = {<<"multipart">>, <<"alternative">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						[{<<"text">>, <<"plain">>, [], [], <<"This is a multipart message with some invisible non-ascii characters\r\nso there">>}]},
+					Encoded4 = encode(Email4),
+					Result4 = decode(Encoded4),
+					?assertMatch(<<"text/plain;charset=utf-8">>, proplists:get_value(<<"Content-Type">>, element(3, lists:nth(1,element(5, Result4)))))
+			end
+		},
+		{"Content-Type header should be not added for subparts if they're text/plain us-ascii",
+			fun() ->
+					Email4 = {<<"multipart">>, <<"alternative">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						[{<<"text">>, <<"plain">>, [], [], <<"This is a multipart message with no non-ascii characters\r\nso there">>}]},
+					Encoded4 = encode(Email4),
+					Result4 = decode(Encoded4),
+					?assertMatch(undefined, proplists:get_value(<<"Content-Type">>, element(3, lists:nth(1,element(5, Result4)))))
+			end
+		},
+		{"Content-Type header should be added for subparts if they're text/html us-ascii",
+			fun() ->
+					Email4 = {<<"multipart">>, <<"alternative">>, [
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Subject">>, <<"This is a test">>}],
+						[],
+						[{<<"text">>, <<"html">>, [], [], <<"This is a multipart message with no non-ascii characters\r\nso there">>}]},
+					Encoded4 = encode(Email4),
+					Result4 = decode(Encoded4),
+					?assertMatch(<<"text/html;charset=us-ascii">>, proplists:get_value(<<"Content-Type">>, element(3, lists:nth(1,element(5, Result4)))))
 			end
 		},
 		{"A boundary should be generated if applicable",
