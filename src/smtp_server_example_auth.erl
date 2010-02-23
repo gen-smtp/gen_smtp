@@ -42,7 +42,7 @@ handle_RCPT_extension(Extension, State) ->
 	io:format("Mail from extension ~s~n", [Extension]),
 	{ok, State}.
 
-handle_DATA(From, To, Data, State) ->
+handle_DATA(_From, _To, _Data, State) ->
 	% some kind of unique id
 	Reference = io_lib:format("~p", [make_ref()]),
 	{ok, Reference, State}.

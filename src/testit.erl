@@ -25,7 +25,7 @@ test2() ->
 
 test3() ->
 	{ok, Email} = file:read_file(?TFILE),
-	{Time, Value} = timer:tc(?MODULE, reverse, [Email]),
+	{Time, _Value} = timer:tc(?MODULE, reverse, [Email]),
 	io:format("test3 ran in ~B~n", [Time]),
 	case reverse(Email) of
 		Email ->
