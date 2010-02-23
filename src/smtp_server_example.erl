@@ -23,7 +23,7 @@ handle_HELO(Hostname, State) ->
 	io:format("HELO from ~s~n", [Hostname]),
 	{ok, State}.
 
-handle_EHLO("invalid", Extensions, State) ->
+handle_EHLO("invalid", _Extensions, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
 handle_EHLO(Hostname, Extensions, State) ->
