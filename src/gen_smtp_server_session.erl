@@ -55,7 +55,7 @@
 
 -record(state,
 	{
-		socket = erlang:error({undefined, socket}) :: port() | {'ssl', any()},
+		socket = erlang:error({undefined, socket}) :: port() | tuple(),
 		module = erlang:error({undefined, module}) :: atom(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
