@@ -23,7 +23,7 @@
 %%% @doc A module for decoding/encoding MIME 1.0 email
 -module(mimemail).
 
--ifdef(EUNIT).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -749,7 +749,7 @@ get_default_encoding() ->
 			<<"utf-8//IGNORE">>
 	end.
 
--ifdef(EUNIT).
+-ifdef(TEST).
 
 parse_with_comments_test_() ->
 	[

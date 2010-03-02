@@ -45,7 +45,7 @@
                               {packet, line},
                               {ssl_imp, new}]).
 
--ifdef(EUNIT).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -262,7 +262,7 @@ set_sockopt(ListenObject, ClientSocket) ->
 		Error -> socket:close(ClientSocket), Error
 	end.
 
--ifdef(EUNIT).
+-ifdef(TEST).
 -define(TEST_PORT, 7586).
 
 connect_test_() ->

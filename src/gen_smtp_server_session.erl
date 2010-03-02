@@ -25,7 +25,7 @@
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
 
--ifdef(EUNIT).
+-ifdef(TEST).
 -import(smtp_util, [compute_cram_digest/2]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -827,11 +827,7 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 	end.
 
 
-		
-			
-
-
--ifdef(EUNIT).
+-ifdef(TEST).
 parse_encoded_address_test_() ->
 	[
 		{"Valid addresses should parse",

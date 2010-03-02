@@ -41,7 +41,7 @@
 
 -define(TIMEOUT, 1200000).
 
--ifdef(EUNIT).
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
 -else.
@@ -459,7 +459,7 @@ check_options(Options) ->
 			end
 	end.
 
--ifdef(EUNIT).
+-ifdef(TEST).
 
 session_start_test_() ->
 	{foreach,
