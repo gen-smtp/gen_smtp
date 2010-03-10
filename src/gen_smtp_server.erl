@@ -29,7 +29,9 @@
 -define(PORT, 2525).
 
 %% External API
--export([start_link/2, start/2, start/1, start_link/1, stop/1, sessions/1]).
+-export([start_link/3, start_link/2, start_link/1,
+    start/3, start/2, start/1,
+    stop/1, sessions/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -53,10 +55,25 @@
 -type(options() :: [{'domain', string()} | {'address', {pos_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}} |
 		{'port', pos_integer()} | {'protocol', 'tcp' | 'ssl'} | {'sessionoptions', [any()]}]).
 
+%% @doc Start the listener as a registered process with callback module `Module' on with options `Options' linked to the calling process.
+-spec(start_link/3 :: (ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start_link(ServerName, Module, Options) when is_list(Options) ->
+	gen_server:start_link(ServerName, ?MODULE, [Module, Options], []).
+
 %% @doc Start the listener with callback module `Module' on with options `Options' linked to the calling process.
 -spec(start_link/2 :: (Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start_link(Module, Options) when is_list(Options) ->
 	gen_server:start_link(?MODULE, [Module, Options], []).
+
+%% @doc Start the listener with callback module `Module' with default options linked to the calling process.
+-spec(start_link/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start_link(Module) ->
+	start_link(Module, [[]]).
+
+%% @doc Start the listener as a registered process with callback module `Module' with options `Options' linked to no process.
+-spec(start/3 :: (ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+start(ServerName, Module, Options) when is_list(Options) ->
+	gen_server:start(ServerName, ?MODULE, [Module, Options], []).
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
 -spec(start/2 :: (Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
@@ -68,10 +85,6 @@ start(Module, Options) when is_list(Options) ->
 start(Module) ->
 	start(Module, [[]]).
 
-%% @doc Start the listener with callback module `Module' with default options linked to the calling process.
--spec(start_link/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
-start_link(Module) ->
-	start_link(Module, [[]]).
 
 %% @doc Stop the listener pid() `Pid' with reason `normal'.
 -spec(stop/1 :: (Pid :: pid()) -> 'ok').
