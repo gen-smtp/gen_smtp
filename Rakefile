@@ -51,7 +51,6 @@ end
 @maxwidth = SRC.map{|x| File.basename(x, 'erl').length}.max
 
 CLEAN.include("ebin/*.beam")
-CLEAN.include("ebin/*.app")
 CLEAN.include("ebin/*.script")
 CLEAN.include("ebin/*.boot")
 CLEAN.include("ebin/*.rel")
