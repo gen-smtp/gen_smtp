@@ -73,6 +73,7 @@ behaviour_info(callbacks) ->
 	  {terminate,2},
 	  {handle_HELO,2},
 	  {handle_EHLO,3},
+	  {handle_AUTH,4},
 	  {handle_MAIL,2},
 	  {handle_MAIL_extension,2},
 	  {handle_RCPT,2},
