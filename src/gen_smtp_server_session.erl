@@ -70,18 +70,17 @@
 
 behaviour_info(callbacks) ->
 	[{init,3},
-		{handle_HELO,2},
-		{handle_EHLO,3},
-		{handle_MAIL,2},
-		{handle_MAIL_extension,2},
-		{handle_RCPT,2},
-		{handle_RCPT_extension,2},
-		{handle_DATA,4},
-		{handle_RSET,1},
-		{handle_VRFY,2},
-		{handle_other,3},
-		{terminate,2},
-		{code_change,3}];
+         {terminate,2},
+         {handle_HELO,2},
+         {handle_EHLO,3},
+         {handle_MAIL,2},
+         {handle_MAIL_extension,2},
+         {handle_RCPT,2},
+         {handle_RCPT_extension,2},
+         {handle_DATA,4},
+         {handle_RSET,1},
+         {handle_VRFY,2},
+         {handle_other,3}];
 behaviour_info(_Other) ->
 	undefined.
 
