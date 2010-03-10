@@ -207,10 +207,9 @@ handle_info(Info, State) ->
 
 %% @hidden
 -spec(terminate/2 :: (Reason :: any(), State :: #state{}) -> 'ok').
-terminate(_Reason, State) ->
-	% io:format("Session terminating due to ~p~n", [Reason]),
+terminate(Reason, State) ->
 	socket:close(State#state.socket),
-	ok.
+        (State#state.module):terminate(Reason, State#state.callbackstate).
 
 %% @hidden
 code_change(_OldVsn, State, _Extra) ->
