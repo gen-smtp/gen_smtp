@@ -71,9 +71,9 @@
 behaviour_info(callbacks) ->
 	[{init,3},
 	  {terminate,2},
+	  {code_change,3},
 	  {handle_HELO,2},
 	  {handle_EHLO,3},
-	  {handle_AUTH,4},
 	  {handle_MAIL,2},
 	  {handle_MAIL_extension,2},
 	  {handle_RCPT,2},
@@ -213,8 +213,13 @@ terminate(Reason, State) ->
 	(State#state.module):terminate(Reason, State#state.callbackstate).
 
 %% @hidden
-code_change(_OldVsn, State, _Extra) ->
-	{ok, State}.
+code_change(_OldVsn, #state{module = Module} = State, _Extra) ->
+	% TODO - this should probably be the callback module's version or its checksum
+	CallbackState = case catch Module:code_change(OldVsn, State#state.callbackstate, Extra) of
+		{ok, NewCallbackState} -> NewCallbackState;
+		Else -> State#callbackstate
+	end,
+	{ok, State#state{callbackstate = CallbackState}.
 
 -spec(parse_request/1 :: (Packet :: string()) -> {string(), list()}).
 parse_request(Packet) ->
