@@ -213,13 +213,14 @@ terminate(Reason, State) ->
 	(State#state.module):terminate(Reason, State#state.callbackstate).
 
 %% @hidden
-code_change(_OldVsn, #state{module = Module} = State, _Extra) ->
+code_change(OldVsn, #state{module = Module} = State, Extra) ->
 	% TODO - this should probably be the callback module's version or its checksum
-	CallbackState = case catch Module:code_change(OldVsn, State#state.callbackstate, Extra) of
-		{ok, NewCallbackState} -> NewCallbackState;
-		Else -> State#callbackstate
-	end,
-	{ok, State#state{callbackstate = CallbackState}.
+	CallbackState =
+		case catch Module:code_change(OldVsn, State#state.callbackstate, Extra) of
+			{ok, NewCallbackState} -> NewCallbackState;
+			_                      -> State#state.callbackstate
+		end,
+        {ok, State#state{callbackstate = CallbackState}}.
 
 -spec(parse_request/1 :: (Packet :: string()) -> {string(), list()}).
 parse_request(Packet) ->
