@@ -169,8 +169,7 @@ decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 	end;
 decode_component(_Headers, _Body, Other, _Options) ->
-	 io:format("Unknown mime version ~s~n", [Other]),
-	{error, mime_version}.
+	erlang:error({mime_version, Other}).
 
 -spec(get_header_value/3 :: (Needle :: binary(), Headers :: [{binary(), binary()}], Default :: any()) -> binary() | any()).
 get_header_value(Needle, Headers, Default) ->
@@ -200,9 +199,9 @@ parse_with_comments(Value) ->
 
 -spec(parse_with_comments/4 :: (Value :: binary(), Acc :: list(), Depth :: non_neg_integer(), Quotes :: boolean()) -> binary() | 'error').
 parse_with_comments(<<>>, _Acc, _Depth, Quotes) when Quotes ->
-	{error, quotes};
+	erlang:error(unterminated_quotes);
 parse_with_comments(<<>>, _Acc, Depth, _Quotes) when Depth > 0 ->
-	{error, comments};
+	erlang:error(unterminated_comment);
 parse_with_comments(<<>>, Acc, _Depth, _Quotes) ->
 	binstr:strip(list_to_binary(lists:reverse(Acc)));
 parse_with_comments(<<$\\, H, Tail/binary>>, Acc, Depth, Quotes) when Depth > 0, H > 32, H < 127 ->
@@ -800,10 +799,10 @@ parse_with_comments_test_() ->
 		},
 		{"Unterminated quotes or comments",
 			fun() ->
-					?assertEqual({error, quotes}, parse_with_comments(<<"\"Hello there ">>)),
-					?assertEqual({error, quotes}, parse_with_comments(<<"\"Hello there \\\"">>)),
-					?assertEqual({error, comments}, parse_with_comments(<<"(Hello there ">>)),
-					?assertEqual({error, comments}, parse_with_comments(<<"(Hello there \\\)">>))
+					?assertError(unterminated_quotes, parse_with_comments(<<"\"Hello there ">>)),
+					?assertError(unterminated_quotes, parse_with_comments(<<"\"Hello there \\\"">>)),
+					?assertError(unterminated_comment, parse_with_comments(<<"(Hello there ">>)),
+					?assertError(unterminated_comment, parse_with_comments(<<"(Hello there \\\)">>))
 			end
 		}
 	].
