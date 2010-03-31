@@ -701,18 +701,23 @@ receive_data(Acc, Socket, {OldCount, OldRecvSize}, Size, MaxSize, Session, Optio
 	%socket:setopts(Socket, [{packet, raw}]),
 	case socket:recv(Socket, RecvSize, 1000) of
 		{ok, Packet} when Acc == [] ->
-			case binstr:strpos(Packet, "\r\n.\r\n") of
-				0 ->
-					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
-					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-					receive_data([Packet | Acc], Socket, {Count, RecvSize}, Size + byte_size(Packet), MaxSize, Session, Options);
-				Index ->
-					String = binstr:substr(Packet, 1, Index - 1),
-					Rest = binstr:substr(Packet, Index+5),
-					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
-					Result = list_to_binary(lists:reverse([String | Acc])),
-					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
-					Session ! {receive_data, Result, Rest}
+			case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
+				error ->
+					Session ! {receive_data, {error, bare_newline}};
+				FixedPacket ->
+					case binstr:strpos(FixedPacket, "\r\n.\r\n") of
+						0 ->
+							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+							receive_data([FixedPacket | Acc], Socket, {Count, RecvSize}, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+						Index ->
+							String = binstr:substr(FixedPacket, 1, Index - 1),
+							Rest = binstr:substr(FixedPacket, Index+5),
+							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							Result = list_to_binary(lists:reverse([String | Acc])),
+							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							Session ! {receive_data, Result, Rest}
+					end
 			end;
 		{ok, Packet} ->
 			[Last | _] = Acc,
