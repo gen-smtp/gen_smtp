@@ -102,13 +102,13 @@ decode_headers([{Key, Value} | Headers], Acc, Charset) ->
 	decode_headers(Headers, [{Key, decode_header(Value, Charset)} | Acc], Charset).
 
 decode_header(Value, Charset) ->
-	case re:run(Value, "=\\?([-A-Za-z0-9_]+)\\?([^/s])\\?([^\s]+)\\?=", [ungreedy]) of
+	case re:run(Value, "=\\?([-A-Za-z0-9_]+)\\?([qQbB])\\?([^\s]+)\\?=", [ungreedy]) of
 		nomatch ->
 			Value;
-		{match,[{AllStart, AllEnd},{EncodingStart, EncodingEnd},{TypeStart, _},{DataStart, DataEnd}]} ->
-			Encoding = binstr:substr(Value, EncodingStart+1, EncodingEnd),
+		{match,[{AllStart, AllLen},{EncodingStart, EncodingLen},{TypeStart, _},{DataStart, DataLen}]} ->
+			Encoding = binstr:substr(Value, EncodingStart+1, EncodingLen),
 			Type = binstr:to_lower(binstr:substr(Value, TypeStart+1, 1)),
-			Data = binstr:substr(Value, DataStart+1, DataEnd),
+			Data = binstr:substr(Value, DataStart+1, DataLen),
 
 			{ok, CD} = iconv:open(Charset, Encoding),
 
@@ -123,14 +123,17 @@ decode_header(Value, Charset) ->
 
 			iconv:close(CD),
 
-			Tail = case binstr:strpos(binstr:substr(Value, AllStart + 1 + AllEnd), "=?") of
-				0 ->
-					binstr:substr(Value, AllStart + 1 + AllEnd);
-				Index ->
-					binstr:substr(Value, AllStart + AllEnd + Index)
+
+			Offset = case re:run(binstr:substr(Value, AllStart + AllLen + 1), "^([\s\t\n\r]+)=\\?[-A-Za-z0-9_]+\\?[^\s]\\?[^\s]+\\?=", [ungreedy]) of
+				nomatch ->
+					% no 2047 block immediately following
+					1;
+				{match,[{_, _},{_, WhiteSpaceLen}]} ->
+					1+ WhiteSpaceLen
 			end,
 
-			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, Tail]),
+
+			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, binstr:substr(Value, AllStart + AllLen + Offset)]),
 			decode_header(NewValue, Charset)
 	end.
 
@@ -1331,6 +1334,11 @@ rfc2047_decode_test_() ->
 					?assertError({badmatch, {error, eilseq}}, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
 					?assertEqual(<<"this contains a copyright  symbol">>, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE")),
 					?assertEqual(<<"this contains a copyright © symbol">>, decode_header(<<"=?iso-8859-1?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE"))
+			end
+		},
+		{"multiple unicode email addresses",
+			fun() ->
+					?assertEqual(<<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>, Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>">>, decode_header(<<"=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>, =?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>">>, "utf8"))
 			end
 		}
 	].
