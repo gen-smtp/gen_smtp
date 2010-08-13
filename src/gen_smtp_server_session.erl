@@ -134,7 +134,10 @@ handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readm
 handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module,
 		callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	% send the remainder of the data...
-	self() ! {socket:get_proto(Socket), Socket, Rest},
+	case Rest of
+		<<>> -> ok; % no remaining data
+		_ -> self() ! {socket:get_proto(Socket), Socket, Rest}
+	end,
 	socket:setopts(Socket, [{packet, line}]),
 	Envelope = Env#envelope{data = Body},% size = length(Body)},
 	%io:format("received body from child process, remainder was ~p (~p)~n", [Rest, self()]),
