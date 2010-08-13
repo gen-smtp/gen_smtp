@@ -73,13 +73,13 @@ handle_DATA(From, To, Data, State) ->
 	case proplists:get_value(relay, State#state.options, false) of
 		true -> relay(From, To, Data);
 		false ->
-			io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
+			io:format("message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, byte_size(Data)]),
 			case proplists:get_value(parse, State#state.options, false) of
 				false -> ok;
 				true ->
 					try mimemail:decode(Data) of
 						Result ->
-							io:format("Message decoded successfully!")
+							io:format("Message decoded successfully!~n")
 					catch
 						What:Why ->
 							io:format("Message decode FAILED with ~p:~p~n", [What, Why]),
