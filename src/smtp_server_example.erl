@@ -1,7 +1,6 @@
 -module(smtp_server_example).
 -behaviour(gen_smtp_server_session).
 
-
 -export([init/4, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
 	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4, handle_RSET/1, handle_VRFY/2,
 	handle_other/3, handle_AUTH/4, code_change/3, terminate/2]).
@@ -76,6 +75,7 @@ handle_DATA(From, To, Data, State) ->
 		false ->
 			io:format("message from ~s to ~p queued as ~s, body follows:~n~s~nEOF~n", [From, To, Reference, Data]),
 			case proplists:get_value(parse, State#state.options, false) of
+				false -> ok;
 				true ->
 					try mimemail:decode(Data) of
 						Result ->

@@ -508,6 +508,8 @@ session_start_test_() ->
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
 								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								unlink(Pid),
+								Monitor = erlang:monitor(process, Pid),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -517,6 +519,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
 								socket:close(Y),
 								?assertEqual({error, timeout}, socket:accept(ListenSock, 1000)),
+								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, retries_exceeded, _}, Error) end,
 								ok
 						end
 					}
@@ -526,9 +529,12 @@ session_start_test_() ->
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
 								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								unlink(Pid),
+								Monitor = erlang:monitor(process, Pid),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "554 get lost, kid\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
+								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, no_more_hosts, _}, Error) end,
 								ok
 						end
 					}
@@ -553,6 +559,8 @@ session_start_test_() ->
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
 								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								unlink(Pid),
+								Monitor = erlang:monitor(process, Pid),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -564,6 +572,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
 								socket:send(Y, "250-server.example.com EHLO\r\n250-AUTH LOGIN PLAIN\r\n421 too busy\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, socket:recv(Y, 0, 1000)),
+								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, retries_exceeded, _}, Error) end,
 								ok
 						end
 					}
