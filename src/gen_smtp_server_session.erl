@@ -69,7 +69,7 @@
 ).
 
 behaviour_info(callbacks) ->
-	[{init,3},
+	[{init,4},
 	  {terminate,2},
 	  {code_change,3},
 	  {handle_HELO,2},
@@ -96,7 +96,7 @@ start(Socket, Module, Options) ->
 -spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()} | 'ignore').
 init([Socket, Module, Options]) ->
 	{ok, {PeerName, _Port}} = socket:peername(Socket),
-	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName) of
+	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, [])) of
 		{ok, Banner, CallbackState} ->
 			socket:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
 			socket:active_once(Socket),
