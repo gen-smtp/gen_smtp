@@ -415,7 +415,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 							end;
 						{ParsedAddress, ExtraInfo} ->
 							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-							Options = [binstr:to_upper(X) || X <- binstr:split(ExtraInfo, <<" ">>)],
+							Options = [binstr:to_upper(X) || X <- binstr:split(list_to_binary(ExtraInfo), <<" ">>)],
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
