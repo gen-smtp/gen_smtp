@@ -114,11 +114,11 @@ do_smtp_session(Host, Email, Options) ->
 	{Socket2, Extensions2} = try_STARTTLS(Socket, Options,
 		Extensions),
 	%io:format("Extensions are ~p~n", [Extensions2]),
-	_Authed = try_AUTH(Socket2, Options, proplists:get_value("AUTH", Extensions2)),
+	_Authed = try_AUTH(Socket2, Options, proplists:get_value(<<"AUTH">>, Extensions2)),
 	%io:format("Authentication status is ~p~n", [Authed]),
 	try_sending_it(Email, Socket2, Extensions2),
 	%io:format("Mail sending successful~n"),
-	quit(Socket).
+	quit(Socket2).
 
 try_sending_it({From, To, Body}, Socket, Extensions) ->
 	try_MAIL_FROM(From, Socket, Extensions),
@@ -129,9 +129,9 @@ try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions) ->
 	% TODO do we need to bother with SIZE?
 	socket:send(Socket, "MAIL FROM: "++From++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "250"++_} ->
+		{ok, <<"250", _Rest/binary>>} ->
 			true;
-		{ok, "4"++_ = Msg} ->
+		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
@@ -148,11 +148,11 @@ try_RCPT_TO([], _Socket, _Extensions) ->
 try_RCPT_TO(["<" ++ _ = To | Tail], Socket, Extensions) ->
 	socket:send(Socket, "RCPT TO: "++To++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "250"++_} ->
+		{ok, <<"250", _Rest/binary>>} ->
 			try_RCPT_TO(Tail, Socket, Extensions);
-		{ok, "251"++_} ->
+		{ok, <<"251", _Rest/binary>>} ->
 			try_RCPT_TO(Tail, Socket, Extensions);
-		{ok, "4"++_ = Msg} ->
+		{ok, <<"4", _Rest/binary>> = Msg} ->
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			throw({permanant_failure, Msg})
@@ -164,17 +164,17 @@ try_RCPT_TO([To | Tail], Socket, Extensions) ->
 try_DATA(Body, Socket, _Extensions) ->
 	socket:send(Socket, "DATA\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "354"++_} ->
+		{ok, <<"354", _Rest/binary>>} ->
 			socket:send(Socket, Body++"\r\n.\r\n"),
 			case read_possible_multiline_reply(Socket) of
-				{ok, "250"++_} ->
+				{ok, <<"250", _Rest/binary>>} ->
 					true;
-				{ok, "4"++_ = Msg} ->
+				{ok, <<"4", _Rest/binary>> = Msg} ->
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
 					throw({permanant_failure, Msg})
 			end;
-		{ok, "4"++_ = Msg} ->
+		{ok, <<"4", _Rest/binary>> = Msg} ->
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			throw({permanant_failure, Msg})
@@ -236,8 +236,8 @@ do_AUTH_each(_Socket, _Username, _Password, []) ->
 do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 	socket:send(Socket, "AUTH CRAM-MD5\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "334 "++Rest} ->
-			Seed64 = string:strip(string:strip(Rest, right, $\n), right, $\r),
+		{ok, <<"334 ", Rest/binary>>} ->
+			Seed64 = binstr:strip(binstr:strip(Rest, right, $\n), right, $\r),
 			Seed = base64:decode_to_string(Seed64),
 			Digest = smtp_util:compute_cram_digest(Password, Seed),
 			String = binary_to_list(base64:encode(Username++" "++Digest)),
@@ -257,17 +257,17 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 	socket:send(Socket, "AUTH LOGIN\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "334 VXNlcm5hbWU6\r\n"} ->
+		{ok, <<"334 VXNlcm5hbWU6\r\n">>} ->
 			%io:format("username prompt~n"),
 			U = binary_to_list(base64:encode(Username)),
 			socket:send(Socket, U++"\r\n"),
 			case read_possible_multiline_reply(Socket) of
-				{ok, "334 UGFzc3dvcmQ6\r\n"} ->
+				{ok, <<"334 UGFzc3dvcmQ6\r\n">>} ->
 					%io:format("password prompt~n"),
 					P = binary_to_list(base64:encode(Password)),
 					socket:send(Socket, P++"\r\n"),
 					case read_possible_multiline_reply(Socket) of
-						{ok, "235 "++_} ->
+						{ok, <<"235 ", _Rest/binary>>} ->
 							%io:format("authentication accepted~n"),
 							true;
 						{ok, _Msg} ->
@@ -286,7 +286,7 @@ do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
 	AuthString = binary_to_list(base64:encode("\0"++Username++"\0"++Password)),
 	socket:send(Socket, "AUTH PLAIN "++AuthString++"\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "235"++_} ->
+		{ok, <<"235", _Rest/binary>>} ->
 			%io:format("authentication accepted~n"),
 			true;
 		_Else ->
@@ -302,17 +302,17 @@ do_AUTH_each(Socket, Username, Password, [_Type | Tail]) ->
 try_EHLO(Socket, Options) ->
 	ok = socket:send(Socket, "EHLO "++proplists:get_value(hostname, Options)++"\r\n"),
 	{ok, Reply} = read_possible_multiline_reply(Socket),
-	[_ | Reply2] = re:split(Reply, "\r\n", [{return, list}, trim]),
+	[_ | Reply2] = re:split(Reply, "\r\n", [{return, binary}, trim]),
 	Extensions = [
 		begin
-				Body = string:substr(Entry, 5),
-				case re:split(Body, " ",  [{return, list}, trim, {parts, 2}]) of
+				Body = binstr:substr(Entry, 5),
+				case re:split(Body, " ",  [{return, binary}, trim, {parts, 2}]) of
 					[Verb, Parameters] ->
-						{string:to_upper(Verb), Parameters};
+						{binstr:to_upper(Verb), Parameters};
 					[Body] ->
-						case string:str(Body, "=") of
+						case binstr:strchr(Body, $=) of
 							0 ->
-								{string:to_upper(Body), true};
+								{binstr:to_upper(Body), true};
 							_ ->
 								%io:format("discarding option ~p~n", [Body]),
 								[]
@@ -324,7 +324,7 @@ try_EHLO(Socket, Options) ->
 % check if we should try to do TLS
 try_STARTTLS(Socket, Options, Extensions) ->
 		case {proplists:get_value(tls, Options),
-				proplists:get_value("STARTTLS", Extensions)} of
+				proplists:get_value(<<"STARTTLS">>, Extensions)} of
 			{Atom, true} when Atom =:= always; Atom =:= if_available ->
 			%io:format("Starting TLS~n"),
 			case {do_STARTTLS(Socket, Options), Atom} of
@@ -348,7 +348,7 @@ try_STARTTLS(Socket, Options, Extensions) ->
 do_STARTTLS(Socket, Options) ->
 	socket:send(Socket, "STARTTLS\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, "220"++_} ->
+		{ok, <<"220", _Rest/binary>>} ->
 			crypto:start(),
 			application:start(ssl),
 			case socket:to_ssl_client(Socket, [], 5000) of
@@ -360,7 +360,7 @@ do_STARTTLS(Socket, Options) ->
 					%io:format("~p~n", [Else]),
 					false
 			end;
-		{ok, "4"++_ = Msg} ->
+		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
@@ -370,7 +370,7 @@ do_STARTTLS(Socket, Options) ->
 
 %% try connecting to a host
 connect(Host, Options) ->
-	SockOpts = [list, {packet, line}, {keepalive, true}, {active, false}],
+	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false}],
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
 			crypto:start(),
@@ -390,9 +390,9 @@ connect(Host, Options) ->
 	case socket:connect(Proto, Host, Port, SockOpts, 5000) of
 		{ok, Socket} ->
 			case read_possible_multiline_reply(Socket) of
-				{ok, "220"++_ = Banner} ->
+				{ok, <<"220", Banner/binary>>} ->
 					{ok, Socket, Host, Banner};
-				{ok, "4"++_ = Msg} ->
+				{ok, <<"4", _Rest/binary>> = Msg} ->
 					quit(Socket),
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
@@ -407,11 +407,11 @@ connect(Host, Options) ->
 read_possible_multiline_reply(Socket) ->
 	case socket:recv(Socket, 0, ?TIMEOUT) of
 		{ok, Packet} ->
-			case string:substr(Packet, 4, 1) of
-				"-" ->
-					Code = string:substr(Packet, 1, 3),
+			case binstr:substr(Packet, 4, 1) of
+				<<"-">> ->
+					Code = binstr:substr(Packet, 1, 3),
 					read_multiline_reply(Socket, Code, [Packet]);
-				" " ->
+				<<" ">> ->
 					{ok, Packet}
 			end;
 		Error ->
@@ -421,10 +421,10 @@ read_possible_multiline_reply(Socket) ->
 read_multiline_reply(Socket, Code, Acc) ->
 	case socket:recv(Socket, 0, ?TIMEOUT) of
 		{ok, Packet} ->
-			case {string:substr(Packet, 1, 3), string:substr(Packet, 4, 1)} of
-				{Code, " "} ->
-					{ok, string:join(lists:reverse([Packet | Acc]), "")};
-				{Code, "-"} ->
+			case {binstr:substr(Packet, 1, 3), binstr:substr(Packet, 4, 1)} of
+				{Code, <<" ">>} ->
+					{ok, list_to_binary(lists:reverse([Packet | Acc]))};
+				{Code, <<"-">>} ->
 					read_multiline_reply(Socket, Code, [Packet | Acc]);
 				_ ->
 					quit(Socket),
@@ -576,7 +576,127 @@ session_start_test_() ->
 								ok
 						end
 					}
+			end,
+			fun({ListenSock}) ->
+					{"a valid complete transaction without TLS advertised should succeed",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 hostname\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "DATA\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "354 ok\r\n"),
+								?assertMatch({ok, "hello world\r\n"}, socket:recv(X, 0, 1000)),
+								?assertMatch({ok, ".\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"a valid complete transaction with TLS advertised should succeed",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
+								?assertMatch({ok, "STARTTLS\r\n"}, socket:recv(X, 0, 1000)),
+								application:start(crypto),
+								application:start(public_key),
+								application:start(ssl),
+								socket:send(X, "220 ok\r\n"),
+								{ok, Y} = socket:to_ssl_server(X, [], 5000),
+								?debugFmt("got ssl socket~n", []),
+								?assertMatch({ok, <<"EHLO testing\r\n">>}, socket:recv(Y, 0, 1000)),
+								socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
+								?assertMatch({ok, <<"MAIL FROM: <test@foo.com>\r\n">>}, socket:recv(Y, 0, 1000)),
+								socket:send(Y, "250 ok\r\n"),
+								?assertMatch({ok, <<"RCPT TO: <foo@bar.com>\r\n">>}, socket:recv(Y, 0, 1000)),
+								socket:send(Y, "250 ok\r\n"),
+								?assertMatch({ok, <<"DATA\r\n">>}, socket:recv(Y, 0, 1000)),
+								socket:send(Y, "354 ok\r\n"),
+								?assertMatch({ok, <<"hello world\r\n">>}, socket:recv(Y, 0, 1000)),
+								?assertMatch({ok, <<".\r\n">>}, socket:recv(Y, 0, 1000)),
+								socket:send(Y, "250 ok\r\n"),
+								?assertMatch({ok, <<"QUIT\r\n">>}, socket:recv(Y, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"AUTH PLAIN should work",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250-hostname\r\n250 AUTH PLAIN\r\n"),
+								AuthString = binary_to_list(base64:encode("\0user\0pass")),
+								AuthPacket = "AUTH PLAIN "++AuthString++"\r\n",
+								?assertEqual({ok, AuthPacket}, socket:recv(X, 0, 1000)),
+								socket:send(X, "235 ok\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"AUTH LOGIN should work",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250-hostname\r\n250 AUTH LOGIN\r\n"),
+								?assertEqual({ok, "AUTH LOGIN\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "334 VXNlcm5hbWU6\r\n"),
+								UserString = binary_to_list(base64:encode("user")),
+								?assertEqual({ok, UserString++"\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "334 UGFzc3dvcmQ6\r\n"),
+								PassString = binary_to_list(base64:encode("pass")),
+								?assertEqual({ok, PassString++"\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "235 ok\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"AUTH CRAM-MD5 should work",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
+								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250-hostname\r\n250 AUTH CRAM-MD5\r\n"),
+								?assertEqual({ok, "AUTH CRAM-MD5\r\n"}, socket:recv(X, 0, 1000)),
+								Seed = smtp_util:get_cram_string(smtp_util:guess_FQDN()),
+								DecodedSeed = base64:decode_to_string(Seed),
+								Digest = smtp_util:compute_cram_digest("pass", DecodedSeed),
+								String = binary_to_list(base64:encode("user "++Digest)),
+								socket:send(X, "334 "++Seed++"\r\n"),
+								{ok, Packet} = socket:recv(X, 0, 1000),
+								CramDigest = smtp_util:trim_crlf(Packet),
+								?assertEqual(String, CramDigest),
+								socket:send(X, "235 ok\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
 			end
+
 		]
 	}.
 

@@ -62,6 +62,10 @@ compute_cram_digest(Key, Data) ->
 	Bin = crypto:md5_mac(Key, Data),
 	lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
+-spec(get_cram_string/1 :: (Hostname :: string()) -> string()).
+get_cram_string(Hostname) ->
+	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
+
 %% @doc Trim \r\n from `String'
 -spec(trim_crlf/1 :: (String :: string()) -> string()).
 trim_crlf(String) ->
