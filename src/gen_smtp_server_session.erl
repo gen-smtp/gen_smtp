@@ -426,7 +426,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 												true ->
 													{error, io_lib:format("552 Estimated message length ~s exceeds limit of ~s\r\n", [Size, Value])};
 												false ->
-													InnerState#state{envelope = Envelope#envelope{expectedsize = list_to_integer(Size)}}
+													InnerState#state{envelope = Envelope#envelope{expectedsize = list_to_integer(binary_to_list(Size))}}
 											end;
 										false ->
 											{error, "555 Unsupported option SIZE\r\n"}
