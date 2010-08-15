@@ -24,14 +24,14 @@ init(Hostname, SessionCount, Address, Options) ->
 			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
 	end.
 
-handle_HELO("invalid", State) ->
+handle_HELO(<<"invalid">>, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
 handle_HELO(Hostname, State) ->
 	io:format("HELO from ~s~n", [Hostname]),
 	{ok, State}.
 
-handle_EHLO("invalid", _Extensions, State) ->
+handle_EHLO(<<"invalid">>, _Extensions, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
 handle_EHLO(Hostname, Extensions, State) ->

@@ -59,7 +59,7 @@
 		module = erlang:error({undefined, module}) :: atom(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
-		waitingauth = false :: boolean() | string(),
+		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
 		authdata :: 'undefined' | string(),
 		readmessage = false :: boolean(),
 		tls = false :: boolean(),
@@ -176,7 +176,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
 handle_info({_SocketType, Socket, Packet}, State) ->
-	case handle_request(parse_request(binary_to_list(Packet)), State) of
+	case handle_request(parse_request(Packet), State) of
 		{ok,  #state{envelope = Envelope, extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
 			MaxSize = case has_extension(Extensions, "SIZE") of
 				{true, Value} ->
@@ -225,33 +225,33 @@ code_change(OldVsn, #state{module = Module} = State, Extra) ->
 		end,
         {ok, State#state{callbackstate = CallbackState}}.
 
--spec(parse_request/1 :: (Packet :: string()) -> {string(), list()}).
+-spec(parse_request/1 :: (Packet :: binary()) -> {string(), list()}).
 parse_request(Packet) ->
-	Request = string:strip(string:strip(string:strip(string:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
-	case string:str(Request, " ") of
+	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
+	case binstr:strchr(Request, $\s) of
 		0 ->
 			% io:format("got a ~s request~n", [Request]),
-			case string:to_upper(Request) of
-				"QUIT" -> {"QUIT", []};
-				"DATA" -> {"DATA", []};
+			case binstr:to_upper(Request) of
+				<<"QUIT">> = Res -> {Res, <<>>};
+				<<"DATA">> = Res -> {Res, <<>>};
 				% likely a base64-encoded client reply
-				_      -> {Request, []}
+				_ -> {Request, <<>>}
 			end;
 		Index ->
-			Verb = string:substr(Request, 1, Index - 1),
-			Parameters = string:strip(string:substr(Request, Index + 1), left, $\s),
+			Verb = binstr:substr(Request, 1, Index - 1),
+			Parameters = binstr:strip(binstr:substr(Request, Index + 1), left, $\s),
 			%io:format("got a ~s request with parameters ~s~n", [Verb, Parameters]),
-			{string:to_upper(Verb), Parameters}
+			{binstr:to_upper(Verb), Parameters}
 	end.
 
 -spec(handle_request/2 :: ({Verb :: string(), Args :: string()}, State :: #state{}) -> {'ok', #state{}} | {'stop', any(), #state{}}).
-handle_request({[], _Any}, #state{socket = Socket} = State) ->
+handle_request({<<>>, _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "500 Error: bad syntax\r\n"),
 	{ok, State};
-handle_request({"HELO", []}, #state{socket = Socket} = State) ->
+handle_request({<<"HELO">>, <<>>}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax: HELO hostname\r\n"),
 	{ok, State};
-handle_request({"HELO", Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
+handle_request({<<"HELO">>, Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
 		{ok, CallbackState} ->
 			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
@@ -260,16 +260,16 @@ handle_request({"HELO", Hostname}, #state{socket = Socket, options = Options, mo
 			socket:send(Socket, Message ++ "\r\n"),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
-handle_request({"EHLO", []}, #state{socket = Socket} = State) ->
+handle_request({<<"EHLO">>, <<>>}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+handle_request({<<"EHLO">>, Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, Extensions, CallbackState} ->
 			case Extensions of
 				[] ->
 					socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
-					State#state{extensions = Extensions, callbackstate = CallbackState};
+					{ok, State#state{extensions = Extensions, callbackstate = CallbackState}};
 				_Else ->
 					F =
 					fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
@@ -296,17 +296,17 @@ handle_request({"EHLO", Hostname}, #state{socket = Socket, options = Options, mo
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
-handle_request({"AUTH", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
+handle_request({<<"AUTH">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	socket:send(Socket, "503 Error: send EHLO first\r\n"),
 	{ok, State};
-handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, envelope = Envelope, options = Options} = State) ->
-	case string:str(Args, " ") of
+handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensions, envelope = Envelope, options = Options} = State) ->
+	case binstr:strchr(Args, $\s) of
 		0 ->
 			AuthType = Args,
 			Parameters = false;
 		Index ->
-			AuthType = string:substr(Args, 1, Index - 1),
-			Parameters = string:strip(string:substr(Args, Index + 1), left, $\s)
+			AuthType = binstr:substr(Args, 1, Index - 1),
+			Parameters = binstr:strip(binstr:substr(Args, Index + 1), left, $\s)
 	end,
 
 	case has_extension(Extensions, "AUTH") of
@@ -314,17 +314,17 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 			socket:send(Socket, "502 Error: AUTH not implemented\r\n"),
 			{ok, State};
 		{true, AvailableTypes} ->
-			case lists:member(string:to_upper(AuthType), string:tokens(AvailableTypes, " ")) of
+			case lists:member(string:to_upper(binary_to_list(AuthType)), string:tokens(AvailableTypes, " ")) of
 				false ->
 					socket:send(Socket, "504 Unrecognized authentication type\r\n"),
 					{ok, State};
 				true ->
-					case string:to_upper(AuthType) of
-						"LOGIN" ->
+					case binstr:to_upper(AuthType) of
+						<<"LOGIN">> ->
 							% socket:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
 							socket:send(Socket, "334 VXNlcm5hbWU6\r\n"),
-							{ok, State#state{waitingauth = "LOGIN", envelope = Envelope#envelope{auth = {[], []}}}};
-						"PLAIN" when Parameters =/= false ->
+							{ok, State#state{waitingauth = 'login', envelope = Envelope#envelope{auth = {[], []}}}};
+						<<"PLAIN">> when Parameters =/= false ->
 							% TODO - duplicated below in handle_request waitingauth PLAIN
 							case string:tokens(base64:decode_to_string(Parameters), [0]) of
 								[_Identity, Username, Password] ->
@@ -335,14 +335,14 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 									% TODO error
 									{ok, State}
 							end;
-						"PLAIN" ->
+						<<"PLAIN">> ->
 							socket:send(Socket, "334\r\n"),
-							{ok, State#state{waitingauth = "PLAIN", envelope = Envelope#envelope{auth = {[], []}}}};
-						"CRAM-MD5" ->
+							{ok, State#state{waitingauth = 'plain', envelope = Envelope#envelope{auth = {[], []}}}};
+						<<"CRAM-MD5">> ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
-							String = get_cram_string(proplists:get_value(hostname, Options, smtp_util:guess_FQDN())),
+							String = smtp_util:get_cram_string(proplists:get_value(hostname, Options, smtp_util:guess_FQDN())),
 							socket:send(Socket, "334 "++String++"\r\n"),
-							{ok, State#state{waitingauth = "CRAM-MD5", authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
+							{ok, State#state{waitingauth = 'cram-md5', authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
 							%crypto:start(), % ensure crypto is started, we're gonna need it
 							%Nonce = get_digest_nonce(),
@@ -354,7 +354,7 @@ handle_request({"AUTH", Args}, #state{socket = Socket, extensions = Extensions, 
 	end;
 
 % the client sends a response to auth-cram-md5
-handle_request({Username64, []}, #state{waitingauth = "CRAM-MD5", envelope = #envelope{auth = {[],[]}}, authdata = AuthData} = State) ->
+handle_request({Username64, <<>>}, #state{waitingauth = 'cram-md5', envelope = #envelope{auth = {[],[]}}, authdata = AuthData} = State) ->
 	case string:tokens(base64:decode_to_string(Username64), " ") of
 		[Username, Digest] ->
 			try_auth('cram-md5', Username, {Digest, AuthData}, State#state{authdata=undefined});
@@ -364,7 +364,7 @@ handle_request({Username64, []}, #state{waitingauth = "CRAM-MD5", envelope = #en
 	end;
 
 % the client sends a \0username\0password response to auth-plain
-handle_request({Username64, []}, #state{waitingauth = "PLAIN", envelope = #envelope{auth = {[],[]}}} = State) ->
+handle_request({Username64, <<>>}, #state{waitingauth = 'plain', envelope = #envelope{auth = {[],[]}}} = State) ->
 	case string:tokens(base64:decode_to_string(Username64), [0]) of
 		[_Identity, Username, Password] ->
 			try_auth('plain', Username, Password, State);
@@ -376,7 +376,7 @@ handle_request({Username64, []}, #state{waitingauth = "PLAIN", envelope = #envel
 	end;
 
 % the client sends a username response to auth-login
-handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", envelope = #envelope{auth = {[],[]}}} = State) ->
+handle_request({Username64, <<>>}, #state{socket = Socket, waitingauth = 'login', envelope = #envelope{auth = {[],[]}}} = State) ->
 	Envelope = State#state.envelope,
 	Username = base64:decode_to_string(Username64),
 	% socket:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
@@ -386,20 +386,20 @@ handle_request({Username64, []}, #state{socket = Socket, waitingauth = "LOGIN", 
 	{ok, NewState};
 
 % the client sends a password response to auth-login
-handle_request({Password64, []}, #state{waitingauth = "LOGIN", envelope = #envelope{auth = {Username,[]}}} = State) ->
+handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {Username,[]}}} = State) ->
 	Password = base64:decode_to_string(Password64),
 	try_auth('login', Username, Password, State);
 
-handle_request({"MAIL", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
+handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	socket:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
-handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
-			case string:str(string:to_upper(Args), "FROM:") of
+			case binstr:strpos(binstr:to_upper(Args), "FROM:") of
 				1 ->
-					Address = string:strip(string:substr(Args, 6), left, $\s),
-					case parse_encoded_address(Address) of
+					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
+					case parse_encoded_address(binary_to_list(Address)) of
 						error ->
 							socket:send(Socket, "501 Bad sender address syntax\r\n"),
 							{ok, State};
@@ -415,7 +415,7 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 							end;
 						{ParsedAddress, ExtraInfo} ->
 							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-							Options = [string:to_upper(X) || X <- string:tokens(ExtraInfo, " ")],
+							Options = [binstr:to_upper(X) || X <- binstr:split(ExtraInfo, <<" ">>)],
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
@@ -471,14 +471,14 @@ handle_request({"MAIL", Args}, #state{socket = Socket, module = Module, envelope
 			socket:send(Socket, "503 Error: Nested MAIL command\r\n"),
 			{ok, State}
 	end;
-handle_request({"RCPT", _Args}, #state{envelope = undefined, socket = Socket} = State) ->
+handle_request({<<"RCPT">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
 	socket:send(Socket, "503 Error: need MAIL command\r\n"),
 	{ok, State};
-handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
-	case string:str(string:to_upper(Args), "TO:") of
+handle_request({<<"RCPT">>, Args}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
+	case binstr:strpos(binstr:to_upper(Args), "TO:") of
 		1 ->
-			Address = string:strip(string:substr(Args, 4), left, $\s),
-			case parse_encoded_address(Address) of
+			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
+			case parse_encoded_address(binary_to_list(Address)) of
 				error ->
 					socket:send(Socket, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
@@ -506,10 +506,10 @@ handle_request({"RCPT", Args}, #state{socket = Socket, envelope = Envelope, modu
 			socket:send(Socket, "501 Syntax: RCPT TO:<address>\r\n"),
 			{ok, State}
 	end;
-handle_request({"DATA", []}, #state{socket = Socket, envelope = undefined} = State) ->
+handle_request({<<"DATA">>, <<>>}, #state{socket = Socket, envelope = undefined} = State) ->
 	socket:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
-handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = State) ->
+handle_request({<<"DATA">>, <<>>}, #state{socket = Socket, envelope = Envelope} = State) ->
 	case {Envelope#envelope.from, Envelope#envelope.to} of
 		{undefined, _} ->
 			socket:send(Socket, "503 Error: need MAIL command\r\n"),
@@ -523,7 +523,7 @@ handle_request({"DATA", []}, #state{socket = Socket, envelope = Envelope} = Stat
 
 			{ok, State#state{readmessage = true}}
 	end;
-handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
+handle_request({<<"RSET">>, _Any}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
 	socket:send(Socket, "250 Ok\r\n"),
 	% if the client sends a RSET before a HELO/EHLO don't give them a valid envelope
 	NewEnvelope = case Envelope of
@@ -531,14 +531,14 @@ handle_request({"RSET", _Any}, #state{socket = Socket, envelope = Envelope, modu
 		_Something -> #envelope{}
 	end,
 	{ok, State#state{envelope = NewEnvelope, callbackstate = Module:handle_RSET(OldCallbackState)}};
-handle_request({"NOOP", _Any}, #state{socket = Socket} = State) ->
+handle_request({<<"NOOP">>, _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "250 Ok\r\n"),
 	{ok, State};
-handle_request({"QUIT", _Any}, #state{socket = Socket} = State) ->
+handle_request({<<"QUIT">>, _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "221 Bye\r\n"),
 	{stop, normal, State};
-handle_request({"VRFY", Address}, #state{module= Module, socket = Socket, callbackstate = OldCallbackState} = State) ->
-	case parse_encoded_address(Address) of
+handle_request({<<"VRFY">>, Address}, #state{module= Module, socket = Socket, callbackstate = OldCallbackState} = State) ->
+	case parse_encoded_address(binary_to_list(Address)) of
 		{ParsedAddress, []} ->
 			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
@@ -552,7 +552,7 @@ handle_request({"VRFY", Address}, #state{module= Module, socket = Socket, callba
 			socket:send(Socket, "501 Syntax: VRFY username/address\r\n"),
 			{ok, State}
 	end;
-handle_request({"STARTTLS", []}, #state{socket = Socket, tls=false, extensions = Extensions} = State) ->
+handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, tls=false, extensions = Extensions} = State) ->
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			socket:send(Socket, "220 OK\r\n"),
@@ -575,10 +575,10 @@ handle_request({"STARTTLS", []}, #state{socket = Socket, tls=false, extensions =
 			socket:send(Socket, "500 Command unrecognized\r\n"),
 			{ok, State}
 	end;
-handle_request({"STARTTLS", []}, #state{socket = Socket} = State) ->
+handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "500 TLS already negotiated\r\n"),
 	{ok, State};
-handle_request({"STARTTLS", _Args}, #state{socket = Socket} = State) ->
+handle_request({<<"STARTTLS">>, _Args}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "501 Syntax error (no parameters allowed)\r\n"),
 	{ok, State};
 handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackstate = OldCallbackState} = State) ->
@@ -672,9 +672,6 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 			{ok, NewState}
 	end.
 
--spec(get_cram_string/1 :: (Hostname :: string()) -> string()).
-get_cram_string(Hostname) ->
-	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
 %get_digest_nonce() ->
 	%A = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
 	%B = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
@@ -912,24 +909,24 @@ parse_request_test_() ->
 	[
 		{"Parsing normal SMTP requests",
 			fun() ->
-					?assertEqual({"HELO", []}, parse_request("HELO")),
-					?assertEqual({"EHLO", "hell.af.mil"}, parse_request("EHLO hell.af.mil")),
-					?assertEqual({"MAIL", "FROM:God@heaven.af.mil"}, parse_request("MAIL FROM:God@heaven.af.mil"))
+					?assertEqual({<<"HELO">>, <<>>}, parse_request(<<"HELO\r\n">>)),
+					?assertEqual({<<"EHLO">>, <<"hell.af.mil">>}, parse_request(<<"EHLO hell.af.mil\r\n">>)),
+					?assertEqual({<<"MAIL">>, <<"FROM:God@heaven.af.mil">>}, parse_request(<<"MAIL FROM:God@heaven.af.mil">>))
 			end
 		},
 		{"Verbs should be uppercased",
 			fun() ->
-					?assertEqual({"HELO", "hell.af.mil"}, parse_request("helo hell.af.mil"))
+					?assertEqual({<<"HELO">>, <<"hell.af.mil">>}, parse_request(<<"helo hell.af.mil">>))
 			end
 		},
 		{"Leading and trailing spaces are removed",
 			fun() ->
-					?assertEqual({"HELO", "hell.af.mil"}, parse_request(" helo   hell.af.mil           "))
+					?assertEqual({<<"HELO">>, <<"hell.af.mil">>}, parse_request(<<" helo   hell.af.mil           ">>))
 			end
 		},
 		{"Blank lines are blank",
 			fun() ->
-					?assertEqual({[], []}, parse_request(""))
+					?assertEqual({<<>>, <<>>}, parse_request(<<"">>))
 			end
 		}
 	].
