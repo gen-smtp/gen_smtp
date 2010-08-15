@@ -419,10 +419,10 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
-								 ("SIZE="++Size, InnerState) ->
+								 (<<"SIZE=", Size/binary>>, InnerState) ->
 									case has_extension(Extensions, "SIZE") of
 										{true, Value} ->
-											case list_to_integer(Size) > list_to_integer(Value) of
+											case list_to_integer(binary_to_list(Size)) > list_to_integer(Value) of
 												true ->
 													{error, io_lib:format("552 Estimated message length ~s exceeds limit of ~s\r\n", [Size, Value])};
 												false ->
@@ -431,7 +431,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 										false ->
 											{error, "555 Unsupported option SIZE\r\n"}
 									end;
-								("BODY="++_BodyType, InnerState) ->
+								(<<"BODY=", _BodyType/binary>>, InnerState) ->
 									case has_extension(Extensions, "8BITMIME") of
 										{true, _} ->
 											InnerState;
