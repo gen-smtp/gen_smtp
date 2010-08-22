@@ -1891,19 +1891,19 @@ smtp_session_tls_test_() ->
 										socket:active_once(Socket),
 										socket:send(Socket, "EHLO somehost.com\r\n"),
 										receive {ssl, Socket, Packet5} -> socket:active_once(Socket) end,
-										?assertMatch(<<"250-localhost\r\n">>,  Packet5),
+										?assertMatch("250-localhost\r\n",  Packet5),
 										Bar = fun(F, Acc) ->
 												receive
-													{ssl, Socket, <<"250-STARTTLS", _Rest/binary>>} ->
+													{ssl, Socket, "250-STARTTLS"++_} ->
 														socket:active_once(Socket),
 														F(F, true);
-													{ssl, Socket, <<"250-", _Rest/binary>>} ->
+													{ssl, Socket, "250-"++_} ->
 														socket:active_once(Socket),
 														F(F, Acc);
-													{ssl, Socket, <<"250 STARTTLS", _Rest/binary>>} ->
+													{ssl, Socket, "250 STARTTLS"++_} ->
 														socket:active_once(Socket),
 														true;
-													{ssl, Socket, <<"250 ", _Rest/binary>>} ->
+													{ssl, Socket, "250 "++_} ->
 														socket:active_once(Socket),
 														Acc;
 													{ssl, Socket, _} ->
@@ -1954,19 +1954,19 @@ smtp_session_tls_test_() ->
 										socket:active_once(Socket),
 										socket:send(Socket, "EHLO somehost.com\r\n"),
 										receive {ssl, Socket, Packet5} -> socket:active_once(Socket) end,
-										?assertMatch(<<"250-localhost\r\n">>,  Packet5),
+										?assertMatch("250-localhost\r\n",  Packet5),
 										Bar = fun(F, Acc) ->
 												receive
-													{ssl, Socket, <<"250-STARTTLS", _Rest/binary>>} ->
+													{ssl, Socket, "250-STARTTLS"++_} ->
 														socket:active_once(Socket),
 														F(F, true);
-													{ssl, Socket, <<"250-", _Rest/binary>>} ->
+													{ssl, Socket, "250-"++_} ->
 														socket:active_once(Socket),
 														F(F, Acc);
-													{ssl, Socket, <<"250 STARTTLS", _Rest/binary>>} ->
+													{ssl, Socket, "250 STARTTLS"++_} ->
 														socket:active_once(Socket),
 														true;
-													{ssl, Socket, <<"250 ", _Rest/binary>>} ->
+													{ssl, Socket, "250 "++_} ->
 														socket:active_once(Socket),
 														Acc;
 													{ssl, Socket, _} ->
@@ -1977,7 +1977,7 @@ smtp_session_tls_test_() ->
 										?assertEqual(false, Bar(Bar, false)),
 										socket:send(Socket, "STARTTLS\r\n"),
 										receive {ssl, Socket, Packet6} -> socket:active_once(Socket) end,
-										?assertMatch(<<"500 ", _Rest/binary>>, Packet6)
+										?assertMatch("500 "++_, Packet6)
 								end
 							}
 					end,
@@ -2050,19 +2050,19 @@ smtp_session_tls_test_() ->
 								socket:active_once(Socket),
 								socket:send(Socket, "EHLO somehost.com\r\n"),
 								receive {ssl, Socket, PacketN} -> socket:active_once(Socket) end,
-								?assertMatch(<<"250-localhost\r\n">>,  PacketN),
+								?assertMatch("250-localhost\r\n",  PacketN),
 								Bar = fun(F, Acc) ->
 										receive
-											{ssl, Socket, <<"250-STARTTLS", _Rest/binary>>} ->
+											{ssl, Socket, "250-STARTTLS"++_} ->
 												socket:active_once(Socket),
 												F(F, true);
-											{ssl, Socket, <<"250-", _Rest/binary>>} ->
+											{ssl, Socket, "250-"++_} ->
 												socket:active_once(Socket),
 												F(F, Acc);
-											{ssl, Socket, <<"250 STARTTLS", _Rest/binary>>} ->
+											{ssl, Socket, "250 STARTTLS"++_} ->
 												socket:active_once(Socket),
 												true;
-											{ssl, Socket, <<"250 ", _Rest/binary>>} ->
+											{ssl, Socket, "250 "++_} ->
 												socket:active_once(Socket),
 												Acc;
 											{tcp, Socket, _} ->
@@ -2073,7 +2073,7 @@ smtp_session_tls_test_() ->
 								?assertEqual(false, Bar(Bar, false)),
 								socket:send(Socket, "STARTTLS\r\n"),
 								receive {ssl, Socket, Packet6} -> socket:active_once(Socket) end,
-								?assertMatch(<<"500 ", _Rest/binary>>,  Packet6)
+								?assertMatch("500 "++_,  Packet6)
 						end
 					}
 			end,
@@ -2147,11 +2147,11 @@ smtp_session_tls_test_() ->
 								socket:send(Socket, "EHLO somehost.com\r\n"),
 								ReadSSLExtensions = fun(F, Acc) ->
 										receive
-											{ssl, Socket, <<"250-", _Rest/binary>>} ->
+											{ssl, Socket, "250-"++_Rest} ->
 												?debugFmt("2~n", []),
 												socket:active_once(Socket),
 												F(F, Acc);
-											{ssl, Socket, <<"250 ", _Rest/binary>>} ->
+											{ssl, Socket, "250 "++_} ->
 												?debugFmt("4~n", []),
 												socket:active_once(Socket),
 												true;
@@ -2164,13 +2164,13 @@ smtp_session_tls_test_() ->
 								?assertEqual(true, ReadSSLExtensions(ReadSSLExtensions, false)),
 								socket:send(Socket, "MAIL FROM: <user@somehost.com>\r\n"),
 								receive {ssl, Socket, Packet4} -> socket:active_once(Socket) end,
-								?assertMatch(<<"250 ", _Rest/binary>>, Packet4),
+								?assertMatch("250 "++_, Packet4),
 								socket:send(Socket, "RCPT TO: <user@otherhost.com>\r\n"),
 								receive {ssl, Socket, Packet5} -> socket:active_once(Socket) end,
-								?assertMatch(<<"250 ", _Rest/binary>>, Packet5),
+								?assertMatch("250 "++_, Packet5),
 								socket:send(Socket, "DATA\r\n"),
 								receive {ssl, Socket, Packet6} -> socket:active_once(Socket) end,
-								?assertMatch(<<"354 ", _Rest/binary>>, Packet6),
+								?assertMatch("354 "++_, Packet6),
 								socket:send(Socket, "Subject: tls message\r\n"),
 								socket:send(Socket, "To: <user@otherhost>\r\n"),
 								socket:send(Socket, "From: <user@somehost.com>\r\n"),
@@ -2178,7 +2178,7 @@ smtp_session_tls_test_() ->
 								socket:send(Socket, "message body"),
 								socket:send(Socket, "\r\n.\r\n"),
 								receive {ssl, Socket, Packet7} -> socket:active_once(Socket) end,
-								?assertMatch(<<"250 ", _Rest/binary>>, Packet7),
+								?assertMatch("250 "++_, Packet7),
 								?debugFmt("Message send, received: ~p~n", [Packet7])
 						end
 					}
