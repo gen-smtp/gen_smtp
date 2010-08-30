@@ -27,7 +27,8 @@
                               {backlog, 30},
                               {keepalive, true},
                               {packet, line},
-                              {reuseaddr, true}]).
+                              {reuseaddr, true},
+															{ip,{0,0,0,0}}]).
 -define(TCP_CONNECT_OPTIONS,[ {active, false},
                               {packet, line}]).
 -define(SSL_LISTEN_OPTIONS, [ {active, false},
