@@ -25,10 +25,10 @@
 
 -define(TCP_LISTEN_OPTIONS,[  {active, false},
                               {backlog, 30},
+                              {ip,{0,0,0,0}},
                               {keepalive, true},
                               {packet, line},
-                              {reuseaddr, true},
-															{ip,{0,0,0,0}}]).
+                              {reuseaddr, true}]).
 -define(TCP_CONNECT_OPTIONS,[ {active, false},
                               {packet, line}]).
 -define(SSL_LISTEN_OPTIONS, [ {active, false},
@@ -508,6 +508,7 @@ option_test_() ->
 		fun() ->
 			?assertMatch([list,{active, true},
 			                   {backlog, 30},
+			                   {ip,{0,0,0,0}},
 			                   {keepalive, true},
 			                   {packet, 2},
 			                   {reuseaddr, true}],
