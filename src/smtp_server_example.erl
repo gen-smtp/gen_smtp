@@ -78,7 +78,7 @@ handle_DATA(From, To, Data, State) ->
 				false -> ok;
 				true ->
 					try mimemail:decode(Data) of
-						Result ->
+						_Result ->
 							io:format("Message decoded successfully!~n")
 					catch
 						What:Why ->
