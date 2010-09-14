@@ -13,8 +13,7 @@
     mimemail,
     smtp_util,
     socket,
-    smtp_server_example,
-    smtp_server_example_auth
+    smtp_server_example
    ]
   },
   {applications, [kernel, stdlib]}
