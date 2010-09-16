@@ -107,7 +107,7 @@ sessions(Pid) ->
 %%   ]
 -spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'ok', #state{}, 'hibernate'} | {'ok', #state{}, non_neg_integer() | 'infinity'} | 'ignore' | {'stop', any()}).
 init([Module, Configurations]) ->
-	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}],
+	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}, {family, inet}],
 	try
 		case Configurations of
 			[FirstConfig|_] when is_list(FirstConfig) -> ok;
@@ -118,13 +118,14 @@ init([Module, Configurations]) ->
 					NewConfig = lists:ukeymerge(1, lists:sort(Config), lists:sort(DefaultConfig)),
 					Port = proplists:get_value(port, NewConfig),
 					IP = proplists:get_value(address, NewConfig),
+					Family = proplists:get_value(family, NewConfig),
 					Hostname = proplists:get_value(domain, NewConfig),
 					Protocol = proplists:get_value(protocol, NewConfig),
 					SessionOptions = proplists:get_value(sessionoptions, NewConfig, []),
 					io:format("~p starting at ~p~n", [?MODULE, node()]),
 					io:format("listening on ~p:~p via ~p~n", [IP, Port, Protocol]),
 					process_flag(trap_exit, true),
-					case socket:listen(Protocol, Port, [binary, {ip, IP}]) of
+					case socket:listen(Protocol, Port, [binary, {ip, IP}, Family]) of
 						{ok, ListenSocket} -> %%Create first accepting process
 							socket:begin_inet_async(ListenSocket),
 							#listener{port = socket:extract_port_from_socket(ListenSocket),

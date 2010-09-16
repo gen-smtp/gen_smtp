@@ -220,36 +220,53 @@ tcp_listen_options([Format|Options]) when Format =:= list; Format =:= binary ->
 tcp_listen_options(Options) ->
 	tcp_listen_options(Options, list).
 tcp_listen_options(Options, Format) ->
-	[Format|proplist_merge(Options, ?TCP_LISTEN_OPTIONS)].
+	parse_address([Format|proplist_merge(Options, ?TCP_LISTEN_OPTIONS)]).
 
 ssl_listen_options([Format|Options]) when Format =:= list; Format =:= binary ->
 	ssl_listen_options(Options, Format);
 ssl_listen_options(Options) ->
 	ssl_listen_options(Options, list).
 ssl_listen_options(Options, Format) ->
-	[Format|proplist_merge(Options, ?SSL_LISTEN_OPTIONS)].
+	parse_address([Format|proplist_merge(Options, ?SSL_LISTEN_OPTIONS)]).
 
 tcp_connect_options([Format|Options]) when Format =:= list; Format =:= binary ->
 	tcp_connect_options(Options, Format);
 tcp_connect_options(Options) ->
 	tcp_connect_options(Options, list).
 tcp_connect_options(Options, Format) ->
-	[Format|proplist_merge(Options, ?TCP_CONNECT_OPTIONS)].
+	parse_address([Format|proplist_merge(Options, ?TCP_CONNECT_OPTIONS)]).
 
 ssl_connect_options([Format|Options]) when Format =:= list; Format =:= binary ->
 	ssl_connect_options(Options, Format);
 ssl_connect_options(Options) ->
 	ssl_connect_options(Options, list).
 ssl_connect_options(Options, Format) ->
-	[Format|proplist_merge(Options, ?SSL_CONNECT_OPTIONS)].
+	parse_address([Format|proplist_merge(Options, ?SSL_CONNECT_OPTIONS)]).
 
 proplist_merge(PrimaryList, DefaultList) ->
-	Merged = lists:ukeymerge(1,
-		lists:keysort(1, PrimaryList),
-		lists:keysort(1, DefaultList)
+	{PrimaryTuples, PrimaryOther} = lists:partition(fun(X) -> is_tuple(X) end, PrimaryList),
+	{DefaultTuples, DefaultOther} = lists:partition(fun(X) -> is_tuple(X) end, DefaultList),
+	MergedTuples = lists:ukeymerge(1,
+		lists:keysort(1, PrimaryTuples),
+		lists:keysort(1, DefaultTuples)
 	),
+	MergedOther = lists:merge(lists:sort(PrimaryOther), lists:sort(DefaultOther)),
+
 	%% remove all the values that don't belong here
-	[Option  || Option = {Key, _} <- Merged,  proplists:is_defined(Key, DefaultList)].
+	[Option  || Option = {Key, _} <- MergedTuples, proplists:is_defined(Key, DefaultList)] ++ [Option || Option <- MergedOther, Option == inet6 ].
+
+parse_address(Options) ->
+	case proplists:get_value(ip, Options) of
+		X when is_tuple(X) ->
+			Options;
+		X when is_list(X) ->
+			case inet_parse:address(X) of
+				{error, _} = Error ->
+					erlang:error(Error);
+				{ok, IP} ->
+					NewOptions = proplists:delete(ip, Options) ++ [{ip, IP}]
+			end
+	end.
 
 extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
 	SSLPort;
