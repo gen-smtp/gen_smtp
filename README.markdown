@@ -11,6 +11,8 @@ as STARTTLS and SSL (port 465).
 
 Also included is a MIME encoder/decoder, sorta according to RFC204{5,6,7}.
 
+IPv6 is also supported (at least serverside).
+
 I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
 copies of all my email for several months and its been able to handle over 100
 thousand emails without leaking any RAM or crashing the erlang virtual machine.
@@ -88,7 +90,7 @@ You can configure the server in general, each SMTP session, and the callback mod
 gen_smtp_server:start(smtp_server_example, [[{sessionoptions, [{allow_bare_newlines, fix}, {callbackoptions, [{parse, true}]}]}]]).
 </pre>
 
-This configures the session to fix bare newlines (other options are 'strip', 'true' and 'false', false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options; relay - whether to relay email on, auth - whether to do SMTP authentication. These are included mainly as an example and are not intended for serious usage.
+This configures the session to fix bare newlines (other options are 'strip', 'true' and 'false', false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options; relay - whether to relay email on, auth - whether to do SMTP authentication and parse - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own session options.
 
 You can also start multiple SMTP listeners at once by passing more than 1 configuration:
 
@@ -103,3 +105,10 @@ You can connect and test this using the gen_smtp_client via something like:
 <pre>
 gen_smtp_client:send({"whatever@test.com", ["andrew@hijacked.us"], "Subject: testing\r\nFrom: Andrew Thompson \r\nTo: Some Dude \r\n\r\nThis is the email body"}, [{relay, "localhost"}, {port, 1465}, {ssl, true}]).
 </pre>
+
+If you want to listen on IPv6, you can use the {family, inet6} and {ip, "::"} options to enable listening on IPv6.
+
+Live Instance
+=============
+
+If you want, you can connect to a live instance at mail.cataclysm-software.net (its also the MX record for cataclysm-software.net). Its listening on both IPv4 and v6.
