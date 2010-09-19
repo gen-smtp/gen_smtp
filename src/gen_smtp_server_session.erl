@@ -253,6 +253,9 @@ handle_request({<<"HELO">>, <<>>}, #state{socket = Socket} = State) ->
 	{ok, State};
 handle_request({<<"HELO">>, Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
+		{ok, MaxSize, CallbackState} when is_integer(MaxSize) ->
+			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
+			{ok, State#state{extensions = [{"SIZE", integer_to_list(MaxSize)}], envelope = #envelope{}, callbackstate = CallbackState}};
 		{ok, CallbackState} ->
 			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
 			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};

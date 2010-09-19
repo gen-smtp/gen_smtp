@@ -29,7 +29,8 @@ handle_HELO(<<"invalid">>, State) ->
 	{error, "554 invalid hostname", State};
 handle_HELO(Hostname, State) ->
 	io:format("HELO from ~s~n", [Hostname]),
-	{ok, State}.
+	{ok, 655360, State}. % 640kb of HELO should be enough for anyone.
+	%If {ok, State} was returned here, we'd use the default 10mb limit
 
 handle_EHLO(<<"invalid">>, _Extensions, State) ->
 	% contrived example
