@@ -402,11 +402,11 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 			case binstr:strpos(binstr:to_upper(Args), "FROM:") of
 				1 ->
 					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
-					case parse_encoded_address(binary_to_list(Address)) of
+					case parse_encoded_address(Address) of
 						error ->
 							socket:send(Socket, "501 Bad sender address syntax\r\n"),
 							{ok, State};
-						{ParsedAddress, []} ->
+						{ParsedAddress, <<>>} ->
 							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
@@ -418,7 +418,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 							end;
 						{ParsedAddress, ExtraInfo} ->
 							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-							Options = [binstr:to_upper(X) || X <- binstr:split(list_to_binary(ExtraInfo), <<" ">>)],
+							Options = [binstr:to_upper(X) || X <- binstr:split(ExtraInfo, <<" ">>)],
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
@@ -481,15 +481,15 @@ handle_request({<<"RCPT">>, Args}, #state{socket = Socket, envelope = Envelope, 
 	case binstr:strpos(binstr:to_upper(Args), "TO:") of
 		1 ->
 			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
-			case parse_encoded_address(binary_to_list(Address)) of
+			case parse_encoded_address(Address) of
 				error ->
 					socket:send(Socket, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
-				{[], _} ->
+				{<<>>, _} ->
 					% empty rcpt to addresses aren't cool
 					socket:send(Socket, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
-				{ParsedAddress, []} ->
+				{ParsedAddress, <<>>} ->
 					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, OldCallbackState) of
 						{ok, CallbackState} ->
@@ -541,8 +541,8 @@ handle_request({<<"QUIT">>, _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "221 Bye\r\n"),
 	{stop, normal, State};
 handle_request({<<"VRFY">>, Address}, #state{module= Module, socket = Socket, callbackstate = OldCallbackState} = State) ->
-	case parse_encoded_address(binary_to_list(Address)) of
-		{ParsedAddress, []} ->
+	case parse_encoded_address(Address) of
+		{ParsedAddress, <<>>} ->
 			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
 					socket:send(Socket, io_lib:format("250 ~s\r\n", [Reply])),
@@ -590,55 +590,55 @@ handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackst
 	{ok, State#state{callbackstate = CallbackState}}.
 
 -spec(parse_encoded_address/1 :: (Address :: string()) -> {string(), string()} | 'error').
-parse_encoded_address([]) ->
+parse_encoded_address(<<>>) ->
 	error; % empty
-parse_encoded_address("<@" ++ Address) ->
-	case string:str(Address, ":") of
+parse_encoded_address(<<"<@", Address/binary>>) ->
+	case binstr:strchr(Address, $:) of
 		0 ->
 			error; % invalid address
 		Index ->
-			parse_encoded_address(string:substr(Address, Index + 1), "", {false, true})
+			parse_encoded_address(binstr:substr(Address, Index + 1), [], {false, true})
 	end;
-parse_encoded_address("<" ++ Address) ->
-	parse_encoded_address(Address, "", {false, true});
-parse_encoded_address(" " ++ Address) ->
+parse_encoded_address(<<"<", Address/binary>>) ->
+	parse_encoded_address(Address, [], {false, true});
+parse_encoded_address(<<" ", Address/binary>>) ->
 	parse_encoded_address(Address);
 parse_encoded_address(Address) ->
-	parse_encoded_address(Address, "", {false, false}).
+	parse_encoded_address(Address, [], {false, false}).
 
 -spec(parse_encoded_address/3 :: (Address :: string(), Acc :: string(), Flags :: {boolean(), boolean()}) -> {string(), string()}).
-parse_encoded_address([], Acc, {_Quotes, false}) ->
-	{lists:reverse(Acc), []};
-parse_encoded_address([], _Acc, {_Quotes, true}) ->
+parse_encoded_address(<<>>, Acc, {_Quotes, false}) ->
+	{list_to_binary(lists:reverse(Acc)), <<>>};
+parse_encoded_address(<<>>, _Acc, {_Quotes, true}) ->
 	error; % began with angle brackets but didn't end with them
 parse_encoded_address(_, Acc, _) when length(Acc) > 129 ->
 	error; % too long
-parse_encoded_address("\\" ++ Tail, Acc, Flags) ->
-	[H | NewTail] = Tail,
+parse_encoded_address(<<"\\", Tail/binary>>, Acc, Flags) ->
+	<<H, NewTail/binary>> = Tail,
 	parse_encoded_address(NewTail, [H | Acc], Flags);
-parse_encoded_address("\"" ++ Tail, Acc, {false, AB}) ->
+parse_encoded_address(<<"\"", Tail/binary>>, Acc, {false, AB}) ->
 	parse_encoded_address(Tail, Acc, {true, AB});
-parse_encoded_address("\"" ++ Tail, Acc, {true, AB}) ->
+parse_encoded_address(<<"\"", Tail/binary>>, Acc, {true, AB}) ->
 	parse_encoded_address(Tail, Acc, {false, AB});
-parse_encoded_address(">" ++ Tail, Acc, {false, true}) ->
-	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
-parse_encoded_address(">" ++ _Tail, _Acc, {false, false}) ->
+parse_encoded_address(<<">", Tail/binary>>, Acc, {false, true}) ->
+	{list_to_binary(lists:reverse(Acc)), binstr:strip(Tail, left, $\s)};
+parse_encoded_address(<<">", _Tail/binary>>, _Acc, {false, false}) ->
 	error; % ended with angle brackets but didn't begin with them
-parse_encoded_address(" " ++ Tail, Acc, {false, false}) ->
-	{lists:reverse(Acc), string:strip(Tail, left, $\s)};
-parse_encoded_address(" " ++ _Tail, _Acc, {false, true}) ->
+parse_encoded_address(<<" ", Tail/binary>>, Acc, {false, false}) ->
+	{list_to_binary(lists:reverse(Acc)), binstr:strip(Tail, left, $\s)};
+parse_encoded_address(<<" ", _Tail/binary>>, _Acc, {false, true}) ->
 	error; % began with angle brackets but didn't end with them
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $0, H =< $9 ->
+parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $0, H =< $9 ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % digits
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $@, H =< $Z ->
+parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $@, H =< $Z ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % @ symbol and uppercase letters
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H >= $a, H =< $z ->
+parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $a, H =< $z ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % lowercase letters
-parse_encoded_address([H | Tail], Acc, {false, AB}) when H =:= $-; H =:= $.; H =:= $_ ->
+parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H =:= $-; H =:= $.; H =:= $_ ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % dash, dot, underscore
-parse_encoded_address([_H | _Tail], _Acc, {false, _AB}) ->
+parse_encoded_address(_, _Acc, {false, _AB}) ->
 	error;
-parse_encoded_address([H | Tail], Acc, Quotes) ->
+parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
 	parse_encoded_address(Tail, [H | Acc], Quotes).
 
 -spec(has_extension/2 :: (Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false').
@@ -846,64 +846,64 @@ parse_encoded_address_test_() ->
 	[
 		{"Valid addresses should parse",
 			fun() ->
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<God@heaven.af.mil>")),
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<\\God@heaven.af.mil>")),
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<\"God\"@heaven.af.mil>")),
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("<@gateway.af.mil,@uucp.local:\"\\G\\o\\d\"@heaven.af.mil>")),
-					?assertEqual({"God2@heaven.af.mil", []}, parse_encoded_address("<God2@heaven.af.mil>"))
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God@heaven.af.mil>">>)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\\God@heaven.af.mil>">>)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\"God\"@heaven.af.mil>">>)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<@gateway.af.mil,@uucp.local:\"\\G\\o\\d\"@heaven.af.mil>">>)),
+					?assertEqual({<<"God2@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God2@heaven.af.mil>">>))
 			end
 		},
 		{"Addresses that are sorta valid should parse",
 			fun() ->
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("God@heaven.af.mil")),
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address("God@heaven.af.mil ")),
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address(" God@heaven.af.mil ")),
-					?assertEqual({"God@heaven.af.mil", []}, parse_encoded_address(" <God@heaven.af.mil> "))
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"God@heaven.af.mil">>)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"God@heaven.af.mil ">>)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<" God@heaven.af.mil ">>)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<" <God@heaven.af.mil> ">>))
 			end
 		},
 		{"Addresses containing unescaped <> that aren't at start/end should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address("<<")),
-					?assertEqual(error, parse_encoded_address("<God<@heaven.af.mil>"))
+					?assertEqual(error, parse_encoded_address(<<"<<">>)),
+					?assertEqual(error, parse_encoded_address(<<"<God<@heaven.af.mil>">>))
 			end
 		},
 		{"Address that begins with < but doesn't end with a > should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address("<God@heaven.af.mil")),
-					?assertEqual(error, parse_encoded_address("<God@heaven.af.mil "))
+					?assertEqual(error, parse_encoded_address(<<"<God@heaven.af.mil">>)),
+					?assertEqual(error, parse_encoded_address(<<"<God@heaven.af.mil ">>))
 			end
 		},
 		{"Address that begins without < but ends with a > should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address("God@heaven.af.mil>"))
+					?assertEqual(error, parse_encoded_address(<<"God@heaven.af.mil>">>))
 			end
 		},
 		{"Address longer than 129 character should fail",
 			fun() ->
-					MegaAddress = lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ "@" ++ lists:seq(97, 122) ++ lists:seq(97, 122),
+					MegaAddress = list_to_binary(lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ "@" ++ lists:seq(97, 122) ++ lists:seq(97, 122)),
 					?assertEqual(error, parse_encoded_address(MegaAddress))
 			end
 		},
 		{"Address with an invalid route should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address("<@gateway.af.mil God@heaven.af.mil>"))
+					?assertEqual(error, parse_encoded_address(<<"<@gateway.af.mil God@heaven.af.mil>">>))
 			end
 		},
 		{"Empty addresses should parse OK",
 			fun() ->
-					?assertEqual({[], []}, parse_encoded_address("<>")),
-					?assertEqual({[], []}, parse_encoded_address(" <> "))
+					?assertEqual({<<>>, <<>>}, parse_encoded_address(<<"<>">>)),
+					?assertEqual({<<>>, <<>>}, parse_encoded_address(<<" <> ">>))
 			end
 		},
 		{"Completely empty addresses are an error",
 			fun() ->
-					?assertEqual(error, parse_encoded_address("")),
-					?assertEqual(error, parse_encoded_address(" "))
+					?assertEqual(error, parse_encoded_address(<<"">>)),
+					?assertEqual(error, parse_encoded_address(<<" ">>))
 			end
 		},
 		{"addresses with trailing parameters should return the trailing parameters",
 			fun() ->
-					?assertEqual({"God@heaven.af.mil", "SIZE=100 BODY=8BITMIME"}, parse_encoded_address("<God@heaven.af.mil> SIZE=100 BODY=8BITMIME"))
+					?assertEqual({<<"God@heaven.af.mil">>, <<"SIZE=100 BODY=8BITMIME">>}, parse_encoded_address(<<"<God@heaven.af.mil> SIZE=100 BODY=8BITMIME">>))
 			end
 		}
 	].
