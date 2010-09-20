@@ -265,7 +265,9 @@ parse_address(Options) ->
 					erlang:error(Error);
 				{ok, IP} ->
 					NewOptions = proplists:delete(ip, Options) ++ [{ip, IP}]
-			end
+			end;
+		_ ->
+			Options
 	end.
 
 extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
