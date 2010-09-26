@@ -69,7 +69,7 @@ handle_RCPT_extension(Extension, State) ->
 
 handle_DATA(From, To, Data, State) ->
 	% some kind of unique id
-	Reference = io_lib:format("~p", [make_ref()]),
+	Reference = lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(erlang:now()))]),
 	% if RELAY is true, then relay email to email address, else send email data to console
 	case proplists:get_value(relay, State#state.options, false) of
 		true -> relay(From, To, Data);
@@ -84,8 +84,18 @@ handle_DATA(From, To, Data, State) ->
 					catch
 						What:Why ->
 							io:format("Message decode FAILED with ~p:~p~n", [What, Why]),
-							%% TODO - optionally dump the failed email somewhere for analysis
-							ok
+							case proplists:get_value(dump, State#state.options, false) of
+							false -> ok;
+							true ->
+								%% optionally dump the failed email somewhere for analysis
+								File = "dump/"++Reference,
+								case filelib:ensure_dir(File) of
+									ok ->
+										file:write_file(File, Data);
+									_ ->
+										ok
+								end
+							end
 					end
 			end
 	end,
