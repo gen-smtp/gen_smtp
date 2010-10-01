@@ -167,9 +167,9 @@ try_DATA(Body, Socket, _Extensions) ->
 		{ok, <<"354", _Rest/binary>>} ->
 			socket:send(Socket, Body++"\r\n.\r\n"),
 			case read_possible_multiline_reply(Socket) of
-				{ok, <<"250", _Rest/binary>>} ->
+				{ok, <<"250", _Rest2/binary>>} ->
 					true;
-				{ok, <<"4", _Rest/binary>> = Msg} ->
+				{ok, <<"4", _Rest2/binary>> = Msg} ->
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
 					throw({permanant_failure, Msg})
@@ -243,7 +243,7 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 			String = binary_to_list(base64:encode(Username++" "++Digest)),
 			socket:send(Socket, String++"\r\n"),
 			case read_possible_multiline_reply(Socket) of
-				{ok, "235"++_} ->
+				{ok, <<"235", _Rest/binary>>} ->
 					%io:format("authentication accepted~n"),
 					true;
 				{ok, _Msg} ->
