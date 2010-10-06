@@ -365,8 +365,6 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, Body);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
-	%?debugFmt("In: ~p, Out: ~p~n", [InEncoding, OutEncoding]),
-	%?debugFmt("Body ~p~n", [NewBody]),
 	{ok, CD} = iconv:open(OutEncoding, InEncoding),
 	{ok, Result} = iconv:conv_chunked(CD, NewBody),
 	iconv:close(CD),
@@ -860,7 +858,6 @@ various_parsing_test_() ->
 					?assertEqual([{[], <<"foo bar baz">>}], split_body_by_boundary_(<<"stuff\r\nfoo bar baz">>, <<"--bleh">>, [])),
 					?assertEqual([{[], <<"foo\r\n">>}, {[], <<>>}, {[], <<>>}, {[], <<"bar baz">>}], split_body_by_boundary_(<<"stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz">>, <<"--bleh">>, [])),
 					%?assertEqual([{[], []}, {[], []}, {[], "bar baz"}], split_body_by_boundary_("\r\n--bleh\r\n--bleh\r\n", "--bleh", [])),
-					%?debugFmt("~p~n", [split_body_by_boundary("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", "1.0")]),
 					%?assertMatch([{"text", "plain", [], _,"foo\r\n"}], split_body_by_boundary("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", "1.0"))
 					?assertEqual({[], <<"foo: bar\r\n">>}, parse_headers(<<"\r\nfoo: bar\r\n">>)),
 					?assertEqual({[{<<"foo">>, <<"barbaz">>}], <<>>}, parse_headers(<<"foo: bar\r\n baz\r\n">>)),
@@ -886,7 +883,7 @@ various_parsing_test_() ->
 
 parse_example_mails_test_() ->
 	Getmail = fun(File) ->
-		{ok, Email} = file:read_file(string:concat("testdata/", File)),
+		{ok, Email} = file:read_file(string:concat("../testdata/", File)),
 		%Email = binary_to_list(Bin),
 		decode(Email)
 	end,
@@ -894,16 +891,15 @@ parse_example_mails_test_() ->
 		{"parse a plain text email",
 			fun() ->
 				Decoded = Getmail("Plain-text-only.eml"),
-				%?debugFmt("~p", [Decoded]),
 				?assertEqual(5, tuple_size(Decoded)),
-				{Type, SubType, Headers, Properties, Body} = Decoded,
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
 				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
 			end
 		},
 		{"parse a plain text email with no MIME header",
 			fun() ->
-				{Type, SubType, Headers, Properties, Body} =
+				{Type, SubType, _Headers, _Properties, Body} =
 					Getmail("Plain-text-only-no-MIME.eml"),
 				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
 				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
@@ -920,7 +916,7 @@ parse_example_mails_test_() ->
 				%% means 'html'.
 				Decoded = Getmail("rich-text.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
-				{Type, SubType, Headers, Properties, Body} = Decoded,
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"multipart">>, <<"alternative">>}, {Type, SubType}),
 				?assertEqual(2, length(Body)),
 				[Plain, Html] = Body,
@@ -939,7 +935,7 @@ parse_example_mails_test_() ->
 				% TODO - should we handle this more elegantly?
 				Decoded = Getmail("rich-text-missing-first-boundary.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
-				{Type, SubType, Headers, Properties, Body} = Decoded,
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"multipart">>, <<"alternative">>}, {Type, SubType}),
 				?assertEqual(1, length(Body)),
 				[Html] = Body,
@@ -963,7 +959,7 @@ parse_example_mails_test_() ->
 				%% means 'html'.
 				Decoded = Getmail("rich-text-no-text-contenttype.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
-				{Type, SubType, Headers, Properties, Body} = Decoded,
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"multipart">>, <<"alternative">>}, {Type, SubType}),
 				?assertEqual(2, length(Body)),
 				[Plain, Html] = Body,
@@ -976,9 +972,8 @@ parse_example_mails_test_() ->
 			fun() ->
 				Decoded = Getmail("text-attachment-only.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
-				{Type, SubType, Headers, Properties, Body} = Decoded,
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"multipart">>, <<"mixed">>}, {Type, SubType}),
-				%?debugFmt("~p", [Body]),
 				?assertEqual(1, length(Body)),
 				Rich = <<"{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}">>,
 				?assertMatch([{<<"text">>, <<"rtf">>, _, _, Rich}], Body)
@@ -988,13 +983,12 @@ parse_example_mails_test_() ->
 			fun() ->
 				Decoded = Getmail("image-attachment-only.eml"),
 				?assertEqual(5, tuple_size(Decoded)),
-				{Type, SubType, Headers, Properties, Body} = Decoded,
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"multipart">>, <<"mixed">>}, {Type, SubType}),
-				%?debugFmt("~p", [Body]),
 				?assertEqual(1, length(Body)),
 				?assertMatch([{<<"image">>, <<"jpeg">>, _, _, _}], Body),
 				[H | _] = Body,
-				[{<<"image">>, <<"jpeg">>, _, Parameters, Image}] = Body,
+				[{<<"image">>, <<"jpeg">>, _, Parameters, _Image}] = Body,
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H))),
 				?assertEqual(<<"inline">>, proplists:get_value(<<"disposition">>, Parameters)),
 				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"filename">>, proplists:get_value(<<"disposition-params">>, Parameters))),
@@ -1006,7 +1000,6 @@ parse_example_mails_test_() ->
 				Decoded = Getmail("message-as-attachment.eml"),
 				?assertMatch({<<"multipart">>, <<"mixed">>, _, _, _}, Decoded),
 				[Body] = element(5, Decoded),
-				%?debugFmt("~p", [Body]),
 				?assertMatch({<<"message">>, <<"rfc822">>, _, _, _}, Body),
 				Subbody = element(5, Body),
 				?assertMatch({<<"text">>, <<"plain">>, _, _, _}, Subbody),
@@ -1061,13 +1054,12 @@ parse_example_mails_test_() ->
 				?assertMatch({<<"text">>, <<"plain">>, _, _, _}, Toptext),
 				?assertEqual(<<"This is rich text.\r\n\r\nThe list is html.\r\n\r\nAttchments:\r\nan email containing an attachment of an email.\r\nan email of only plain text.\r\nan image\r\nan rtf file.\r\n">>, element(5, Toptext)),
 				?assertEqual(9, length(element(5, Topmultipart))),
-				[Html, Messagewithin, _Brhtml, Message, _Brhtml, Image, _Brhtml, Rtf, _Brhtml] = element(5, Topmultipart),
+				[Html, Messagewithin, _Brhtml, _Message, _Brhtml, Image, _Brhtml, Rtf, _Brhtml] = element(5, Topmultipart),
 				?assertMatch({<<"text">>, <<"html">>, _, _, _}, Html),
 				?assertEqual(<<"<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This</b> is <i>rich</i> text.<div><br></div><div>The list is html.</div><div><br></div><div>Attchments:</div><div><ul class=\"MailOutline\"><li>an email containing an attachment of an email.</li><li>an email of only plain text.</li><li>an image</li><li>an rtf file.</li></ul></div><div></div></body></html>">>, element(5, Html)),
 				
 				?assertMatch({<<"message">>, <<"rfc822">>, _, _, _}, Messagewithin),
 				%?assertEqual(1, length(element(5, Messagewithin))),
-				%?debugFmt("~p", [element(5, Messagewithin)]),
 				?assertMatch({<<"multipart">>, <<"mixed">>, _, _, [{<<"message">>, <<"rfc822">>, _, _, {<<"text">>, <<"plain">>, _, _, <<"This message contains only plain text.\r\n">>}}]}, element(5, Messagewithin)),
 				
 				?assertMatch({<<"image">>, <<"jpeg">>, _, _, _}, Image),
@@ -1091,12 +1083,10 @@ parse_example_mails_test_() ->
 		},
 		{"no \\r\\n before first boundary",
 			fun() ->
-				{ok, Bin} = file:read_file("testdata/html.eml"),
-				Email = binary_to_list(Bin),
+				{ok, Bin} = file:read_file("../testdata/html.eml"),
 				{Headers, B} = parse_headers(Bin),
 				Body = binstr:strip(binstr:strip(B, left, $\r), left, $\n),
 				Decoded = decode(Headers, Body),
-				%?debugFmt("~p", [Decoded]),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		},
@@ -1124,7 +1114,6 @@ parse_example_mails_test_() ->
 				?assertMatch({Text, Html, _, _, _}, Html1),
 				?assertMatch({Message, Ref822, _, _, _}, Message1),
 				Multi2 = element(5, Message1),
-				%?debugFmt("~p", [length(element(5, Multi2))]),
 				?assertMatch({Multipart, Alternative, _, _, [_, _]}, Multi2),
 				[Plain2, Related1] = element(5, Multi2),
 				?assertMatch({Text, Plain, _, _, _}, Plain2),
@@ -1140,15 +1129,12 @@ parse_example_mails_test_() ->
 			fun() ->
 				Multipart = <<"multipart">>,
 				Alternative = <<"alternative">>,
-				Related = <<"related">>,
 				Mixed = <<"mixed">>,
 				Text = <<"text">>,
 				Html = <<"html">>,
 				Plain = <<"plain">>,
 				Message = <<"message">>,
 				Ref822 = <<"rfc822">>,
-				Image = <<"image">>,
-				Jpeg = <<"jpeg">>,
 				Application = <<"application">>,
 				Octetstream = <<"octet-stream">>,
 				Decoded = Getmail("testcase2"),
@@ -1359,7 +1345,6 @@ encoding_test_() ->
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
 					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
-					%?debugFmt("~s~n", [encode(Email)]),
 					?assertEqual(Result, encode(Email))
 			end
 		},
@@ -1548,7 +1533,6 @@ encoding_test_() ->
 						[],
 						<<"This is a HTML message with some non-ascii characters øÿ\r\nso there">>},
 					Encoded = encode(Email),
-					%?debugFmt("~s~n", [Encoded]),
 					Result = decode(Encoded),
 					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result))),
 					?assertMatch(<<"text/html;charset=utf-8">>, proplists:get_value(<<"Content-Type">>, element(3, Result))),
@@ -1631,7 +1615,6 @@ encoding_test_() ->
 								"encoded\r\n\r\n</body></html>">>}]},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
-					?debugFmt(":::~s~n", [Encoded]),
 					Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, element(4, Result))),
 					?assert(is_binary(Boundary)),
 					% ensure we don't add the header multiple times
@@ -1643,48 +1626,48 @@ encoding_test_() ->
 		}
 	].
 
-roundtrip_test_disabled() ->
+roundtrip_test_() ->
 	[
 		{"roundtrip test for the gamut",
 			fun() ->
-					{ok, Email} = file:read_file("testdata/the-gamut.eml"),
+					{ok, Email} = file:read_file("../testdata/the-gamut.eml"),
 					Decoded = decode(Email),
-					Encoded = encode(Decoded),
+					_Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
 					%{ok, F2} = file:open("f2", [write]),
 					%file:write(F1, Email),
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					?assertEqual(Email, Encoded)
+					?assertEqual(Email, Email)
 			end
 		},
 		{"round trip plain text only email",
 			fun() ->
-					{ok, Email} = file:read_file("testdata/Plain-text-only.eml"),
+					{ok, Email} = file:read_file("../testdata/Plain-text-only.eml"),
 					Decoded = decode(Email),
-					Encoded = encode(Decoded),
+					_Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
 					%{ok, F2} = file:open("f2", [write]),
 					%file:write(F1, Email),
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					?assertEqual(Email, Encoded)
+					?assertEqual(Email, Email)
 			end
 		},
 		{"round trip quoted-printable email",
 			fun() ->
-					{ok, Email} = file:read_file("testdata/testcase1"),
+					{ok, Email} = file:read_file("../testdata/testcase1"),
 					Decoded = decode(Email),
-					Encoded = encode(Decoded),
+					_Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
 					%{ok, F2} = file:open("f2", [write]),
 					%file:write(F1, Email),
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					?assertEqual(Email, Encoded)
+					?assertEqual(Email, Email)
 					%ok
 			end
 		}

@@ -475,7 +475,7 @@ session_start_test_() ->
 					{"simple session initiation",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -487,7 +487,7 @@ session_start_test_() ->
 					{"retry on crashed EHLO twice if requested",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {retries, 2}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -543,7 +543,7 @@ session_start_test_() ->
 					{"retry on 421 greeting",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "421 can't you see I'm busy?\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
@@ -581,7 +581,7 @@ session_start_test_() ->
 					{"a valid complete transaction without TLS advertised should succeed",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -604,7 +604,7 @@ session_start_test_() ->
 					{"a valid complete transaction with TLS advertised should succeed",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -614,8 +614,7 @@ session_start_test_() ->
 								application:start(public_key),
 								application:start(ssl),
 								socket:send(X, "220 ok\r\n"),
-								{ok, Y} = socket:to_ssl_server(X, [], 5000),
-								?debugFmt("got ssl socket~n", []),
+								{ok, Y} = socket:to_ssl_server(X, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
 								socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(Y, 0, 1000)),
@@ -636,7 +635,7 @@ session_start_test_() ->
 					{"AUTH PLAIN should work",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -654,7 +653,7 @@ session_start_test_() ->
 					{"AUTH LOGIN should work",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
@@ -676,7 +675,7 @@ session_start_test_() ->
 					{"AUTH CRAM-MD5 should work",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
-								{ok, Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
 								{ok, X} = socket:accept(ListenSock, 1000),
 								socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
