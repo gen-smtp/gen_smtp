@@ -45,8 +45,8 @@
 
 -record(envelope,
 	{
-		from :: string() | 'undefined',
-		to = [] :: [string()],
+		from :: binary() | 'undefined',
+		to = [] :: [binary()],
 		data = <<>> :: binary(),
 		expectedsize = 0 :: pos_integer() | 0,
 		auth = {[], []} :: {string() | [], string() | []} % {"username", "password"}
@@ -93,7 +93,7 @@ start_link(Socket, Module, Options) ->
 start(Socket, Module, Options) ->
 	gen_server:start(?MODULE, [Socket, Module, Options], []).
 
--spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()} | 'ignore').
+-spec(init/1 :: (Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore').
 init([Socket, Module, Options]) ->
 	{ok, {PeerName, _Port}} = socket:peername(Socket),
 	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, [])) of
@@ -225,7 +225,7 @@ code_change(OldVsn, #state{module = Module} = State, Extra) ->
 		end,
         {ok, State#state{callbackstate = CallbackState}}.
 
--spec(parse_request/1 :: (Packet :: binary()) -> {string(), list()}).
+-spec(parse_request/1 :: (Packet :: binary()) -> {binary(), binary()}).
 parse_request(Packet) ->
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case binstr:strchr(Request, $\s) of
@@ -244,7 +244,7 @@ parse_request(Packet) ->
 			{binstr:to_upper(Verb), Parameters}
 	end.
 
--spec(handle_request/2 :: ({Verb :: string(), Args :: string()}, State :: #state{}) -> {'ok', #state{}} | {'stop', any(), #state{}}).
+-spec(handle_request/2 :: ({Verb :: binary(), Args :: binary()}, State :: #state{}) -> {'ok', #state{}} | {'stop', any(), #state{}}).
 handle_request({<<>>, _Any}, #state{socket = Socket} = State) ->
 	socket:send(Socket, "500 Error: bad syntax\r\n"),
 	{ok, State};
@@ -601,7 +601,7 @@ handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackst
 	socket:send(Socket, Message++"\r\n"),
 	{ok, State#state{callbackstate = CallbackState}}.
 
--spec(parse_encoded_address/1 :: (Address :: string()) -> {string(), string()} | 'error').
+-spec(parse_encoded_address/1 :: (Address :: binary()) -> {binary(), binary()} | 'error').
 parse_encoded_address(<<>>) ->
 	error; % empty
 parse_encoded_address(<<"<@", Address/binary>>) ->
@@ -618,7 +618,7 @@ parse_encoded_address(<<" ", Address/binary>>) ->
 parse_encoded_address(Address) ->
 	parse_encoded_address(Address, [], {false, false}).
 
--spec(parse_encoded_address/3 :: (Address :: string(), Acc :: string(), Flags :: {boolean(), boolean()}) -> {string(), string()}).
+-spec(parse_encoded_address/3 :: (Address :: binary(), Acc :: list(), Flags :: {boolean(), boolean()}) -> {binary(), binary()} | 'error').
 parse_encoded_address(<<>>, Acc, {_Quotes, false}) ->
 	{list_to_binary(lists:reverse(Acc)), <<>>};
 parse_encoded_address(<<>>, _Acc, {_Quotes, true}) ->

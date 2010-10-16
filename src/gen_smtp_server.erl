@@ -106,7 +106,7 @@ sessions(Pid) ->
 %%   [ [{port,25},{protocol,tcp},{domain,"myserver.com"},{address,{0,0,0,0}}],
 %%     [{port,465},{protocol,ssl},{domain,"secure.myserver.com"},{address,{0.0.0.0}}]
 %%   ]
--spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'ok', #state{}, 'hibernate'} | {'ok', #state{}, non_neg_integer() | 'infinity'} | 'ignore' | {'stop', any()}).
+-spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()}).
 init([Module, Configurations]) ->
 	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}}, {port, ?PORT}, {protocol, tcp}, {family, inet}],
 	try
