@@ -46,7 +46,16 @@
 ]).
 
 strchr(Bin, C) when is_binary(Bin) ->
-	strchr(Bin, C, 0).
+	% try to use the R14B binary module
+	try binary:match(Bin, C) of
+		{Index, _Length} ->
+			Index + 1;
+		nomatch ->
+			0
+	catch
+		_:_ ->
+			strchr(Bin, C, 0)
+	end.
 
 strchr(Bin, C, I) ->
 	case Bin of
@@ -76,7 +85,17 @@ strrchr(Bin, C, I) ->
 strpos(Bin, C) when is_binary(Bin), is_list(C) ->
 	strpos(Bin, list_to_binary(C));
 strpos(Bin, C) when is_binary(Bin) ->
-	strpos(Bin, C, 0, byte_size(C)).
+	% try to use the R14B binary module
+	try binary:match(Bin, C) of
+			{Index, _Length} ->
+				Index+1;
+			nomatch ->
+				0
+	catch
+		_:_ ->
+			strpos(Bin, C, 0, byte_size(C))
+	end.
+
 
 strpos(Bin, C, I, S) ->
 	case Bin of
@@ -150,7 +169,19 @@ split_(Bin, Separator, SplitCount, Acc) ->
 
 
 split(Bin, Separator) ->
-	split_(Bin, Separator, []).
+	% try to use the R14B binary module
+	try binary:split(Bin, Separator, [global]) of
+		Result ->
+			case lists:last(Result) of
+				<<>> ->
+					lists:sublist(Result, length(Result) - 1);
+				_ ->
+					Result
+			end
+	catch
+		_:_ ->
+			split_(Bin, Separator, [])
+	end.
 
 split_(<<>>, _Separator, Acc) ->
 	lists:reverse(Acc);
@@ -234,8 +265,11 @@ to_upper(<<H, T/binary>>, Acc) ->
 
 all(_Fun, <<>>) ->
 	true;
-all(Fun, <<H, Tail/binary>>) ->
-	Fun(H) =:= true andalso all(Fun, Tail).
+all(Fun, Binary) ->
+	Res = << <<X/integer>> || <<X>> <= Binary, Fun(X) >>,
+	Binary == Res.
+%all(Fun, <<H, Tail/binary>>) ->
+%	Fun(H) =:= true andalso all(Fun, Tail).
 
 %% this is a cool hack to very quickly reverse a binary
 reverse(Bin) ->
