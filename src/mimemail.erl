@@ -360,9 +360,9 @@ filter_non_ascii(_C) ->
 	<<"?">>.
 
 decode_body(Type, Body, _InEncoding, none) ->
-	decode_body(Type, Body);
+	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, undefined, _OutEncoding) ->
-	decode_body(Type, Body);
+	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	{ok, CD} = iconv:open(OutEncoding, InEncoding),
@@ -442,7 +442,9 @@ decode_quoted_printable_line(<<H, T/binary>>, Acc) when H =:= $\s; H =:= $\t ->
 			lists:reverse(Acc);
 		false ->
 			decode_quoted_printable_line(T, [H | Acc])
-	end.
+	end;
+decode_quoted_printable_line(<<H, T/binary>>, Acc) ->
+	decode_quoted_printable_line(T, [H| Acc]).
 
 check_headers(Headers) ->
 	Checked = [<<"MIME-Version">>, <<"Date">>, <<"From">>, <<"Message-ID">>, <<"References">>, <<"Subject">>],
@@ -1217,6 +1219,30 @@ decode_quoted_printable_test_() ->
 			fun() ->
 					?assertThrow(badchar, decode_quoted_printable_line(<<"=21=G1">>, "")),
 					?assertThrow(badchar, decode_quoted_printable(<<"=21=D1 = g ">>))
+			end
+		},
+		{"out of range characters should be stripped",
+			fun() ->
+				% character 150 is en-dash in windows 1252
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ", 150, " bar">>, "US-ASCII", "UTF-8//IGNORE"))
+			end
+		},
+		{"out of range character in alternate charset should be converted",
+			fun() ->
+				% character 150 is en-dash in windows 1252
+				?assertEqual(<<"Foo ", 226, 128, 147, " bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, "Windows-1252", "UTF-8//IGNORE"))
+			end
+		},
+		{"out of range character in alternate charset with no destination encoding should be stripped",
+			fun() ->
+				% character 150 is en-dash in windows 1252
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, "Windows-1252", none))
+			end
+		},
+		{"out of range character in alternate charset with no source encoding should be stripped",
+			fun() ->
+				% character 150 is en-dash in windows 1252
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, undefined, "UTF-8"))
 			end
 		}
 	].
