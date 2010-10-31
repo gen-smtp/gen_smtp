@@ -240,8 +240,8 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 			Seed64 = binstr:strip(binstr:strip(Rest, right, $\n), right, $\r),
 			Seed = base64:decode_to_string(Seed64),
 			Digest = smtp_util:compute_cram_digest(Password, Seed),
-			String = binary_to_list(base64:encode(Username++" "++Digest)),
-			socket:send(Socket, String++"\r\n"),
+			String = base64:encode(list_to_binary([Username, " ", Digest])),
+			socket:send(Socket, [String, "\r\n"]),
 			case read_possible_multiline_reply(Socket) of
 				{ok, <<"235", _Rest/binary>>} ->
 					%io:format("authentication accepted~n"),
@@ -259,13 +259,13 @@ do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"334 VXNlcm5hbWU6\r\n">>} ->
 			%io:format("username prompt~n"),
-			U = binary_to_list(base64:encode(Username)),
-			socket:send(Socket, U++"\r\n"),
+			U = base64:encode(Username),
+			socket:send(Socket, [U,"\r\n"]),
 			case read_possible_multiline_reply(Socket) of
 				{ok, <<"334 UGFzc3dvcmQ6\r\n">>} ->
 					%io:format("password prompt~n"),
-					P = binary_to_list(base64:encode(Password)),
-					socket:send(Socket, P++"\r\n"),
+					P = base64:encode(Password),
+					socket:send(Socket, [P,"\r\n"]),
 					case read_possible_multiline_reply(Socket) of
 						{ok, <<"235 ", _Rest/binary>>} ->
 							%io:format("authentication accepted~n"),
@@ -283,8 +283,8 @@ do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
-	AuthString = binary_to_list(base64:encode("\0"++Username++"\0"++Password)),
-	socket:send(Socket, "AUTH PLAIN "++AuthString++"\r\n"),
+	AuthString = base64:encode("\0"++Username++"\0"++Password),
+	socket:send(Socket, ["AUTH PLAIN ", AuthString, "\r\n"]),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"235", _Rest/binary>>} ->
 			%io:format("authentication accepted~n"),
@@ -684,7 +684,7 @@ session_start_test_() ->
 								Seed = smtp_util:get_cram_string(smtp_util:guess_FQDN()),
 								DecodedSeed = base64:decode_to_string(Seed),
 								Digest = smtp_util:compute_cram_digest("pass", DecodedSeed),
-								String = binary_to_list(base64:encode("user "++Digest)),
+								String = binary_to_list(base64:encode(list_to_binary(["user ", Digest]))),
 								socket:send(X, "334 "++Seed++"\r\n"),
 								{ok, Packet} = socket:recv(X, 0, 1000),
 								CramDigest = smtp_util:trim_crlf(Packet),

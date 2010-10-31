@@ -49,7 +49,7 @@
 		to = [] :: [binary()],
 		data = <<>> :: binary(),
 		expectedsize = 0 :: pos_integer() | 0,
-		auth = {[], []} :: {string() | [], string() | []} % {"username", "password"}
+		auth = {<<>>, <<>>} :: {binary(), binary()} % {"username", "password"}
 	}
 ).
 
@@ -60,7 +60,7 @@
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
 		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
-		authdata :: 'undefined' | string(),
+		authdata :: 'undefined' | binary(),
 		readmessage = false :: boolean(),
 		tls = false :: boolean(),
 		callbackstate :: any(),
@@ -326,10 +326,10 @@ handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensio
 						<<"LOGIN">> ->
 							% socket:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
 							socket:send(Socket, "334 VXNlcm5hbWU6\r\n"),
-							{ok, State#state{waitingauth = 'login', envelope = Envelope#envelope{auth = {[], []}}}};
+							{ok, State#state{waitingauth = 'login', envelope = Envelope#envelope{auth = {<<>>, <<>>}}}};
 						<<"PLAIN">> when Parameters =/= false ->
 							% TODO - duplicated below in handle_request waitingauth PLAIN
-							case string:tokens(base64:decode_to_string(Parameters), [0]) of
+							case binstr:split(base64:decode(Parameters), <<0>>) of
 								[_Identity, Username, Password] ->
 									try_auth('plain', Username, Password, State);
 								[Username, Password] ->
@@ -340,12 +340,12 @@ handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensio
 							end;
 						<<"PLAIN">> ->
 							socket:send(Socket, "334\r\n"),
-							{ok, State#state{waitingauth = 'plain', envelope = Envelope#envelope{auth = {[], []}}}};
+							{ok, State#state{waitingauth = 'plain', envelope = Envelope#envelope{auth = {<<>>, <<>>}}}};
 						<<"CRAM-MD5">> ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
 							String = smtp_util:get_cram_string(proplists:get_value(hostname, Options, smtp_util:guess_FQDN())),
 							socket:send(Socket, "334 "++String++"\r\n"),
-							{ok, State#state{waitingauth = 'cram-md5', authdata=base64:decode_to_string(String), envelope = Envelope#envelope{auth = {[], []}}}}
+							{ok, State#state{waitingauth = 'cram-md5', authdata=base64:decode(String), envelope = Envelope#envelope{auth = {<<>>, <<>>}}}}
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
 							%crypto:start(), % ensure crypto is started, we're gonna need it
 							%Nonce = get_digest_nonce(),
@@ -357,8 +357,8 @@ handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensio
 	end;
 
 % the client sends a response to auth-cram-md5
-handle_request({Username64, <<>>}, #state{waitingauth = 'cram-md5', envelope = #envelope{auth = {[],[]}}, authdata = AuthData} = State) ->
-	case string:tokens(base64:decode_to_string(Username64), " ") of
+handle_request({Username64, <<>>}, #state{waitingauth = 'cram-md5', envelope = #envelope{auth = {<<>>, <<>>}}, authdata = AuthData} = State) ->
+	case binstr:split(base64:decode(Username64), <<" ">>) of
 		[Username, Digest] ->
 			try_auth('cram-md5', Username, {Digest, AuthData}, State#state{authdata=undefined});
 		_ ->
@@ -367,8 +367,8 @@ handle_request({Username64, <<>>}, #state{waitingauth = 'cram-md5', envelope = #
 	end;
 
 % the client sends a \0username\0password response to auth-plain
-handle_request({Username64, <<>>}, #state{waitingauth = 'plain', envelope = #envelope{auth = {[],[]}}} = State) ->
-	case string:tokens(base64:decode_to_string(Username64), [0]) of
+handle_request({Username64, <<>>}, #state{waitingauth = 'plain', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
+	case binstr:split(base64:decode(Username64), <<0>>) of
 		[_Identity, Username, Password] ->
 			try_auth('plain', Username, Password, State);
 		[Username, Password] ->
@@ -379,18 +379,18 @@ handle_request({Username64, <<>>}, #state{waitingauth = 'plain', envelope = #env
 	end;
 
 % the client sends a username response to auth-login
-handle_request({Username64, <<>>}, #state{socket = Socket, waitingauth = 'login', envelope = #envelope{auth = {[],[]}}} = State) ->
+handle_request({Username64, <<>>}, #state{socket = Socket, waitingauth = 'login', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
 	Envelope = State#state.envelope,
-	Username = base64:decode_to_string(Username64),
+	Username = base64:decode(Username64),
 	% socket:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
 	socket:send(Socket, "334 UGFzc3dvcmQ6\r\n"),
 	% store the provided username in envelope.auth
-	NewState = State#state{envelope = Envelope#envelope{auth = {Username, []}}},
+	NewState = State#state{envelope = Envelope#envelope{auth = {Username, <<>>}}},
 	{ok, NewState};
 
 % the client sends a password response to auth-login
-handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {Username,[]}}} = State) ->
-	Password = base64:decode_to_string(Password64),
+handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {Username,<<>>}}} = State) ->
+	Password = base64:decode(Password64),
 	try_auth('login', Username, Password, State);
 
 handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
@@ -666,10 +666,10 @@ has_extension(Exts, Ext) ->
 	end.
 
 
--spec(try_auth/4 :: (AuthType :: 'login' | 'plain' | 'cram-md5', Username :: string(), Credential :: string() | {string(), string()}, State :: #state{}) -> {'ok', #state{}}).
+-spec(try_auth/4 :: (AuthType :: 'login' | 'plain' | 'cram-md5', Username :: binary(), Credential :: binary() | {binary(), binary()}, State :: #state{}) -> {'ok', #state{}}).
 try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope, callbackstate = OldCallbackState} = State) ->
 	% clear out waiting auth
-	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {[], []}}},
+	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {<<>>, <<>>}}},
 	case erlang:function_exported(Module, handle_AUTH, 4) of
 		true ->
 			case Module:handle_AUTH(AuthType, Username, Credential, OldCallbackState) of
@@ -1704,7 +1704,7 @@ smtp_session_auth_test_() ->
 								["334", Seed64] = string:tokens(smtp_util:trim_crlf(Packet4), " "),
 								Seed = base64:decode_to_string(Seed64),
 								Digest = compute_cram_digest("PaSSw0rd", Seed),
-								String = binary_to_list(base64:encode("username "++Digest)),
+								String = binary_to_list(base64:encode(list_to_binary(["username ", Digest]))),
 								socket:send(CSock, String++"\r\n"),
 								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
 								?assertMatch("235 Authentication successful.\r\n",  Packet5)
@@ -1747,7 +1747,7 @@ smtp_session_auth_test_() ->
 								["334", Seed64] = string:tokens(smtp_util:trim_crlf(Packet4), " "),
 								Seed = base64:decode_to_string(Seed64),
 								Digest = compute_cram_digest("Passw0rd", Seed),
-								String = binary_to_list(base64:encode("username "++Digest)),
+								String = binary_to_list(base64:encode(list_to_binary(["username ", Digest]))),
 								socket:send(CSock, String++"\r\n"),
 								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
 								?assertMatch("535 Authentication failed.\r\n",  Packet5)

@@ -57,10 +57,10 @@ guess_FQDN() ->
 	FQDN.
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
--spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> string()).
+-spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> binary()).
 compute_cram_digest(Key, Data) ->
 	Bin = crypto:md5_mac(Key, Data),
-	lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
+	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 -spec(get_cram_string/1 :: (Hostname :: string()) -> string()).
 get_cram_string(Hostname) ->

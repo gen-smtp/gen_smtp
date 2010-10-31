@@ -115,9 +115,10 @@ handle_other(Verb, _Args, State) ->
 
 %% this callback is OPTIONAL
 %% it only gets called if you add AUTH to your ESMTP extensions
-handle_AUTH(Type, "username", "PaSSw0rd", State) when Type =:= login; Type =:= plain ->
+-spec handle_AUTH(Type :: 'login' | 'plain' | 'cram-md5', Username :: binary(), Password :: binary() | {binary(), binary()}, #state{}) -> {'ok', #state{}} | 'error'.
+handle_AUTH(Type, <<"username">>, <<"PaSSw0rd">>, State) when Type =:= login; Type =:= plain ->
 	{ok, State};
-handle_AUTH('cram-md5', "username", {Digest, Seed}, State) ->
+handle_AUTH('cram-md5', <<"username">>, {Digest, Seed}, State) ->
 	case smtp_util:compute_cram_digest(<<"PaSSw0rd">>, Seed) of
 		Digest ->
 			{ok, State};
