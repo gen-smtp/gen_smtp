@@ -48,6 +48,7 @@
 -export([send/2, send_it/2]).
 -endif.
 
+-spec send(Email :: {string(), [string(), ...], string()}, Options :: list()) -> {'ok', pid()} | {'error', any()}.
 send(Email, Options) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),
@@ -62,6 +63,7 @@ send(Email, Options) ->
 			{error, Reason}
 	end.
 
+-spec send_it(Email :: {string(), [string(), ...], string()}, Options :: list()) -> 'ok'.
 send_it(Email, Options) ->
 	RelayDomain = proplists:get_value(relay, Options),
 	MXRecords = smtp_util:mxlookup(RelayDomain),

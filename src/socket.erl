@@ -67,13 +67,22 @@
 -export([to_ssl_client/1,to_ssl_client/2,to_ssl_client/3]).
 -export([type/1]).
 
+-type protocol() :: 'tcp' | 'ssl'.
+-type address() :: inet:ip_address() | string() | binary().
+-type socket() :: ssl:sslsocket() | gen_tcp:socket().
+
 %%%-----------------------------------------------------------------
 %%% API
 %%%-----------------------------------------------------------------
+-spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer()) -> socket().
 connect(Protocol, Address, Port) ->
 	connect(Protocol, Address, Port, [], infinity).
+
+-spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer(), Options :: list()) -> socket().
 connect(Protocol, Address, Port, Opts) ->
 	connect(Protocol, Address, Port, Opts, infinity).
+
+-spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer(), Options :: list(), Time :: non_neg_integer() | 'infinity') -> socket().
 connect(tcp, Address, Port, Opts, Time) ->
 	gen_tcp:connect(Address, Port, tcp_connect_options(Opts), Time);
 connect(ssl, Address, Port, Opts, Time) ->
@@ -82,8 +91,12 @@ connect(ssl, Address, Port, Opts, Time) ->
 	application:start(ssl),
 	ssl:connect(Address, Port, ssl_connect_options(Opts), Time).
 
+
+-spec listen(Protocol :: protocol(), Port :: pos_integer()) -> socket().
 listen(Protocol, Port) ->
 	listen(Protocol, Port, []).
+
+-spec listen(Protocol :: protocol(), Port :: pos_integer(), Options :: list()) -> socket().
 listen(ssl, Port, Options) ->
 	application:start(crypto),
 	application:start(public_key),
@@ -92,8 +105,12 @@ listen(ssl, Port, Options) ->
 listen(tcp, Port, Options) ->
 	gen_tcp:listen(Port, tcp_listen_options(Options)).
 
+
+-spec accept(Socket :: socket()) -> {'ok', socket()} | {'error', any()}.
 accept(Socket) ->
 	accept(Socket, infinity).
+
+-spec accept(Socket :: socket(), Timeout :: pos_integer() | 'infinity') -> {'ok', socket()} | {'error', any()}.
 accept(Socket, Timeout) when is_port(Socket) ->
 	case gen_tcp:accept(Socket, Timeout) of
 		{ok, NewSocket} ->
@@ -111,43 +128,53 @@ accept(Socket, Timeout) ->
 		Error -> Error
 	end.
 
+-spec send(Socket :: socket(), Data :: binary() | string()) -> 'ok' | {'error', any()}.
 send(Socket, Data) when is_port(Socket) ->
 	gen_tcp:send(Socket, Data);
 send(Socket, Data) ->
 	ssl:send(Socket, Data).
 
+-spec recv(Socket :: socket(), Length :: non_neg_integer()) -> {'ok', any()} | {'error', any()}.
 recv(Socket, Length) ->
 	recv(Socket, Length, infinity).
+
+-spec recv(Socket :: socket(), Length :: non_neg_integer(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', any()} | {'error', any()}.
 recv(Socket, Length, Timeout) when is_port(Socket) ->
 	gen_tcp:recv(Socket, Length, Timeout);
 recv(Socket, Length, Timeout) ->
 	ssl:recv(Socket, Length, Timeout).
 
+-spec controlling_process(Socket :: socket(), NewOwner :: pid()) -> 'ok' | {'error', any()}.
 controlling_process(Socket, NewOwner) when is_port(Socket) ->
 	gen_tcp:controlling_process(Socket, NewOwner);
 controlling_process(Socket, NewOwner) ->
 	ssl:controlling_process(Socket, NewOwner).
 
+-spec peername(Socket :: socket()) -> {ok, {inet:ip_address(), non_neg_integer()}} | {'error', any()}.
 peername(Socket) when is_port(Socket) ->
 	inet:peername(Socket);
 peername(Socket) ->
 	ssl:peername(Socket).
 
+-spec close(Socket :: socket()) -> 'ok'.
 close(Socket) when is_port(Socket) ->
 	gen_tcp:close(Socket);
 close(Socket) ->
 	ssl:close(Socket).
 
+-spec shutdown(Socket :: socket(), How :: 'read' | 'write' | 'read_write') -> 'ok' | {'error', any()}.
 shutdown(Socket, How) when is_port(Socket) ->
 	gen_tcp:shutdown(Socket, How);
 shutdown(Socket, How) ->
 	ssl:shutdown(Socket, How).
 
+-spec active_once(Socket :: socket()) -> 'ok' | {'error', any()}.
 active_once(Socket) when is_port(Socket) ->
 	inet:setopts(Socket, [{active, once}]);
 active_once(Socket) ->
 	ssl:setopts(Socket, [{active, once}]).
 
+-spec setopts(Socket :: socket(), Options :: list()) -> 'ok' | {'error', any()}.
 setopts(Socket, Options) when is_port(Socket) ->
 	inet:setopts(Socket, Options);
 setopts(Socket, Options) ->
@@ -160,6 +187,7 @@ get_proto(_Socket) ->
 	ssl.
 
 %% @doc {inet_async,...} will be sent to current process when a client connects
+-spec begin_inet_async(Socket :: socket()) -> any().
 begin_inet_async(Socket) when is_port(Socket) ->
 	prim_inet:async_accept(Socket, -1);
 begin_inet_async(Socket) ->
@@ -167,12 +195,15 @@ begin_inet_async(Socket) ->
 	begin_inet_async(Port).
 
 %% @doc handle the {inet_async,...} message
+-spec handle_inet_async(Message :: {'inet_async', socket(), any(), {'ok', socket()}}) -> {'ok', socket()}.
 handle_inet_async({inet_async, ListenSocket, _, {ok,ClientSocket}}) ->
 	handle_inet_async(ListenSocket, ClientSocket, []).
 
+-spec handle_inet_async(ListenSocket :: socket(), ClientSocket :: socket()) -> {'ok', socket()}.
 handle_inet_async(ListenObject, ClientSocket) ->
 	handle_inet_async(ListenObject, ClientSocket, []).
 
+-spec handle_inet_async(ListenSocket :: socket(), ClientSocket :: socket(), Options :: list()) -> {'ok', socket()}.
 handle_inet_async(ListenObject, ClientSocket, Options) ->
 	ListenSocket = extract_port_from_socket(ListenObject),
 	case set_sockopt(ListenSocket, ClientSocket) of
@@ -191,24 +222,35 @@ handle_inet_async(ListenObject, ClientSocket, Options) ->
 	end.
 
 %% @doc Upgrade a TCP connection to SSL
+-spec to_ssl_server(Socket :: socket()) -> {'ok', ssl:socket()} | {'error', any()}.
 to_ssl_server(Socket) ->
 	to_ssl_server(Socket, []).
+
+-spec to_ssl_server(Socket :: socket(), Options :: list()) -> {'ok', ssl:socket()} | {'error', any()}.
 to_ssl_server(Socket, Options) ->
 	to_ssl_server(Socket, Options, infinity).
+
+-spec to_ssl_server(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:socket()} | {'error', any()}.
 to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
 to_ssl_server(_Socket, _Options, _Timeout) ->
 	erlang:error(ssl_connected, "Socket is already using SSL").
 
+-spec to_ssl_client(Socket :: socket()) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_client(Socket) ->
 	to_ssl_client(Socket, []).
+
+-spec to_ssl_client(Socket :: socket(), Options :: list()) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_client(Socket, Options) ->
 	to_ssl_client(Socket, Options, infinity).
+
+-spec to_ssl_client(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_client(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:connect(Socket, ssl_connect_options(Options), Timeout);
 to_ssl_client(_Socket, _Options, _Timeout) ->
 	erlang:error(ssl_connected, "Socket is already using SSL").
 
+-spec type(Socket :: socket()) -> protocol().
 type(Socket) when is_port(Socket) ->
 	tcp;
 type(_Socket) ->
@@ -273,6 +315,7 @@ parse_address(Options) ->
 			Options
 	end.
 
+-spec extract_port_from_socket(Socket :: socket()) -> port().
 extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
 	SSLPort;
 extract_port_from_socket(Socket) ->

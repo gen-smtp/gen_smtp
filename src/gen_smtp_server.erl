@@ -92,6 +92,7 @@ start(Module) ->
 stop(Pid) ->
 	gen_server:call(Pid, stop).
 
+-spec sessions(Pid :: pid()) -> [pid()].
 sessions(Pid) ->
 	gen_server:call(Pid, sessions).
 
@@ -143,6 +144,7 @@ init([Module, Configurations]) ->
   end.
 
 %% @hidden
+-spec handle_call(Message :: any(), From :: {pid(), reference()}, State :: #state{}) -> {'stop', 'normal', 'ok', #state{}} | {'reply', any(), #state{}}.
 handle_call(stop, _From, State) ->
 	{stop, normal, ok, State};
 
@@ -153,10 +155,12 @@ handle_call(Request, _From, State) ->
 	{reply, {unknown_call, Request}, State}.
 
 %% @hidden
+-spec handle_cast(Message :: any(), State :: #state{}) -> {'noreply', #state{}}.
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 %% @hidden
+-spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}},
 	#state{module = Module, listeners = Listeners, sessions = CurSessions} = State) ->
 	try
@@ -200,11 +204,13 @@ handle_info(_Info, State) ->
 	{noreply, State}.
 
 %% @hidden
+-spec terminate(Reason :: any(), State :: #state{}) -> 'ok'.
 terminate(Reason, State) ->
 	io:format("Terminating due to ~p~n", [Reason]),
 	lists:foreach(fun(#listener{socket=S}) -> catch socket:close(S) end, State#state.listeners),
 	ok.
 
 %% @hidden
+-spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {'ok', #state{}}.
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.

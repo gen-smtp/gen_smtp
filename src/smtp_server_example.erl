@@ -9,9 +9,10 @@
 
 -record(state,
 	{
-		options = []
+		options = [] :: list()
 	}).
 
+-spec init(Hostname :: binary(), SessionCount :: non_neg_integer(), Address :: tuple(), Options :: list()) -> {'ok', string(), #state{}} | {'stop', any(), string()}.
 init(Hostname, SessionCount, Address, Options) ->
 	io:format("peer: ~p~n", [Address]),
 	case SessionCount > 20 of
@@ -24,14 +25,18 @@ init(Hostname, SessionCount, Address, Options) ->
 			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
 	end.
 
+-spec handle_HELO(Hostname :: binary(), State :: #state{}) -> {'error', string(), #state{}} | {'ok', pos_integer(), #state{}} | {'ok', #state{}}.
 handle_HELO(<<"invalid">>, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
+handle_HELO(<<"trusted_host">>, State) ->
+	{ok, State};
 handle_HELO(Hostname, State) ->
 	io:format("HELO from ~s~n", [Hostname]),
 	{ok, 655360, State}. % 640kb of HELO should be enough for anyone.
 	%If {ok, State} was returned here, we'd use the default 10mb limit
 
+-spec handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: #state{}) -> {'error', string(), #state{}} | {'ok', list(), #state{}}.
 handle_EHLO(<<"invalid">>, _Extensions, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
@@ -47,26 +52,31 @@ handle_EHLO(Hostname, Extensions, State) ->
 	end,
 	{ok, MyExtensions, State}.
 
+-spec handle_MAIL(From :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
 handle_MAIL(From, State) ->
 	io:format("Mail from ~s~n", [From]),
 	% you can accept or reject the FROM address here
 	{ok, State}.
 
+-spec handle_MAIL_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_MAIL_extension(Extension, State) ->
-	io:format("Mail to extension ~s~n", [Extension]),
+	io:format("Mail from extension ~s~n", [Extension]),
 	% any MAIL extensions can be handled here
 	{ok, State}.
 
+-spec handle_RCPT(To :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
 handle_RCPT(To, State) ->
 	io:format("Mail to ~s~n", [To]),
 	% you can accept or reject RCPT TO addesses here, one per call
 	{ok, State}.
 
+-spec handle_RCPT_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_RCPT_extension(Extension, State) ->
 	% any RCPT TO extensions can be handled here
-	io:format("Mail from extension ~s~n", [Extension]),
+	io:format("Mail to extension ~s~n", [Extension]),
 	{ok, State}.
 
+-spec handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: #state{}) -> {'ok', string(), #state{}} | {'error', string(), #state{}}.
 handle_DATA(From, To, Data, State) ->
 	% some kind of unique id
 	Reference = lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(erlang:now()))]),
@@ -102,13 +112,16 @@ handle_DATA(From, To, Data, State) ->
 	% At this point, if we return ok, we've accepted responsibility for the email
 	{ok, Reference, State}.
 
+-spec handle_RSET(State :: #state{}) -> #state{}.
 handle_RSET(State) ->
 	% reset any relevant internal state
 	State.
 
+-spec handle_VRFY(Address :: binary(), State :: #state{}) -> {'ok', string(), #state{}} | {'error', string(), #state{}}.
 handle_VRFY(_Address, State) ->
 	{error, "252 VRFY disabled by policy, just send some mail", State}.
 
+-spec handle_other(Verb :: binary(), Args :: binary(), #state{}) -> {string(), #state{}}.
 handle_other(Verb, _Args, State) ->
 	% You can implement other SMTP verbs here, if you need to
 	{lists:flatten(io_lib:format("500 Error: command not recognized : '~s'", [Verb])), State}.
@@ -128,9 +141,11 @@ handle_AUTH('cram-md5', <<"username">>, {Digest, Seed}, State) ->
 handle_AUTH(_Type, _Username, _Password, _State) ->
 	error.
 
+-spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
 	{ok, State}.
 
+-spec terminate(Reason :: any(), State :: #state{}) -> {'ok', any(), #state{}}.
 terminate(Reason, State) ->
 	{ok, Reason, State}.
 

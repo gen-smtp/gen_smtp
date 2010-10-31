@@ -68,6 +68,7 @@
 	}
 ).
 
+-spec behaviour_info(atom()) -> [{atom(), non_neg_integer()}] | 'undefined'.
 behaviour_info(callbacks) ->
 	[{init,4},
 	  {terminate,2},
@@ -111,6 +112,7 @@ init([Socket, Module, Options]) ->
 	end.
 
 %% @hidden
+-spec handle_call(Message :: any(), From :: {pid(), reference()}, #state{}) -> {'stop', 'normal', 'ok', #state{}} | {'reply', {'unknown_call', any()}, #state{}}.
 handle_call(stop, _From, State) ->
 	{stop, normal, ok, State};
 
@@ -118,10 +120,11 @@ handle_call(Request, _From, State) ->
 	{reply, {unknown_call, Request}, State}.
 
 %% @hidden
+-spec handle_cast(Message :: any(), State :: #state{}) -> {'noreply', #state{}}.
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-
+-spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, readmessage = true} = State) ->
 	socket:send(Socket, "552 Message too large\r\n"),
 	socket:active_once(Socket),
@@ -216,6 +219,7 @@ terminate(Reason, State) ->
 	(State#state.module):terminate(Reason, State#state.callbackstate).
 
 %% @hidden
+-spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) ->  {'ok', #state{}}.
 code_change(OldVsn, #state{module = Module} = State, Extra) ->
 	% TODO - this should probably be the callback module's version or its checksum
 	CallbackState =

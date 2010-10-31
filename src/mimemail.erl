@@ -193,14 +193,14 @@ get_header_value(Needle, Headers, Default) ->
 get_header_value(Needle, Headers) ->
 	get_header_value(Needle, Headers, undefined).
 
--spec(parse_with_comments/1 :: (Value :: binary()) -> binary() | 'error';
-	(Value :: atom()) -> atom()).
+-spec parse_with_comments(Value :: binary()) -> binary() | no_return();
+	(Value :: atom()) -> atom().
 parse_with_comments(Value) when is_binary(Value) ->
 	parse_with_comments(Value, [], 0, false);
 parse_with_comments(Value) ->
 	Value.
 
--spec(parse_with_comments/4 :: (Value :: binary(), Acc :: list(), Depth :: non_neg_integer(), Quotes :: boolean()) -> binary() | 'error').
+-spec parse_with_comments(Value :: binary(), Acc :: list(), Depth :: non_neg_integer(), Quotes :: boolean()) -> binary() | no_return().
 parse_with_comments(<<>>, _Acc, _Depth, Quotes) when Quotes ->
 	erlang:error(unterminated_quotes);
 parse_with_comments(<<>>, _Acc, Depth, _Quotes) when Depth > 0 ->
