@@ -752,7 +752,7 @@ get_default_encoding() ->
 	end.
 
 % convert some common invalid character names into the correct ones
-fix_encoding(<<"UTF8">>) ->
+fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->
 	io:format("fixing bad encoding UTF8~n"),
 	<<"UTF-8">>;
 fix_encoding(Encoding) ->
@@ -1251,6 +1251,13 @@ decode_quoted_printable_test_() ->
 			fun() ->
 				% character 150 is en-dash in windows 1252
 				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, undefined, "UTF-8"))
+			end
+		},
+		{"almost correct chatsets should work, eg. 'UTF8' instead of 'UTF-8'",
+			fun() ->
+				% character 150 is en-dash in windows 1252
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"UTF8">>, "UTF-8")),
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"utf8">>, "UTF-8"))
 			end
 		}
 	].
