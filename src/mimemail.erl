@@ -604,7 +604,7 @@ encode_headers([{Key, Value}|T] = _Headers, EncodedHeaders) ->
 			EncodedHeaders)).
 
 encode_folded_header(Header, HeaderLines) ->
-	case binstr:strchr(Header, ";") of
+	case binstr:strchr(Header, $;) of
 		0 ->
 			HeaderLines ++ [Header];
 		Index ->

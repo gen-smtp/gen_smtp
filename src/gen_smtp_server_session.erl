@@ -223,7 +223,7 @@ code_change(OldVsn, #state{module = Module} = State, Extra) ->
 			{ok, NewCallbackState} -> NewCallbackState;
 			_                      -> State#state.callbackstate
 		end,
-        {ok, State#state{callbackstate = CallbackState}}.
+	{ok, State#state{callbackstate = CallbackState}}.
 
 -spec(parse_request/1 :: (Packet :: binary()) -> {binary(), binary()}).
 parse_request(Packet) ->
