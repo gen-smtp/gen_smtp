@@ -47,7 +47,7 @@
 
 strchr(Bin, C) when is_binary(Bin) ->
 	% try to use the R14B binary module
-	try binary:match(Bin, C) of
+	try binary:match(Bin, <<C>>) of
 		{Index, _Length} ->
 			Index + 1;
 		nomatch ->
