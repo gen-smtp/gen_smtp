@@ -110,7 +110,7 @@ decode_header(Value, Charset) ->
 			Type = binstr:to_lower(binstr:substr(Value, TypeStart+1, 1)),
 			Data = binstr:substr(Value, DataStart+1, DataLen),
 
-			{ok, CD} = iconv:open(Charset, Encoding),
+			{ok, CD} = iconv:open(Charset, fix_encoding(Encoding)),
 
 			DecodedData = case Type of
 				<<"q">> ->
@@ -365,7 +365,7 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
-	{ok, CD} = iconv:open(OutEncoding, InEncoding),
+	{ok, CD} = iconv:open(OutEncoding, fix_encoding(InEncoding)),
 	{ok, Result} = iconv:conv_chunked(CD, NewBody),
 	iconv:close(CD),
 	Result.
@@ -750,6 +750,14 @@ get_default_encoding() ->
 		{module, iconv} ->
 			<<"utf-8//IGNORE">>
 	end.
+
+% convert some common invalid character names into the correct ones
+fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->
+	io:format("fixing bad encoding UTF8~n"),
+	<<"UTF-8">>;
+fix_encoding(Encoding) ->
+	io:format("Not fixing encoding ~s~n", [Encoding]),
+	Encoding.
 
 -ifdef(TEST).
 
@@ -1252,6 +1260,13 @@ decode_quoted_printable_test_() ->
 			fun() ->
 				% character 150 is en-dash in windows 1252
 				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, undefined, "UTF-8"))
+			end
+		},
+		{"almost correct chatsets should work, eg. 'UTF8' instead of 'UTF-8'",
+			fun() ->
+				% character 150 is en-dash in windows 1252
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"UTF8">>, "UTF-8")),
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"utf8">>, "UTF-8"))
 			end
 		}
 	].
