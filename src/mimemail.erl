@@ -905,6 +905,15 @@ parse_example_mails_test_() ->
 				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
 			end
 		},
+		{"parse a plain text email with no content type",
+			fun() ->
+				Decoded = Getmail("Plain-text-only-no-content-type.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
+				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
+				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
+			end
+		},
 		{"parse a plain text email with no MIME header",
 			fun() ->
 				{Type, SubType, _Headers, _Properties, Body} =
