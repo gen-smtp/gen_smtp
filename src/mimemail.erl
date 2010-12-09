@@ -366,7 +366,12 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	{ok, CD} = iconv:open(OutEncoding, fix_encoding(InEncoding)),
-	{ok, Result} = iconv:conv_chunked(CD, NewBody),
+	{ok, Result} = try iconv:conv_chunked(CD, NewBody) of
+		{ok, _} = Res -> Res
+	catch
+		_:_ ->
+			iconv:conv(CD, NewBody)
+	end,
 	iconv:close(CD),
 	Result.
 
