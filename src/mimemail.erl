@@ -758,10 +758,8 @@ get_default_encoding() ->
 
 % convert some common invalid character names into the correct ones
 fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->
-	io:format("fixing bad encoding UTF8~n"),
 	<<"UTF-8">>;
 fix_encoding(Encoding) ->
-	io:format("Not fixing encoding ~s~n", [Encoding]),
 	Encoding.
 
 -ifdef(TEST).
