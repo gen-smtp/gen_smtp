@@ -66,7 +66,12 @@ send(Email, Options) ->
 -spec send_it(Email :: {string(), [string(), ...], string()}, Options :: list()) -> 'ok'.
 send_it(Email, Options) ->
 	RelayDomain = proplists:get_value(relay, Options),
-	MXRecords = smtp_util:mxlookup(RelayDomain),
+	MXRecords = case proplists:get_value(no_mx_lookups, Options) of
+		true ->
+			[];
+		_ ->
+			smtp_util:mxlookup(RelayDomain)
+	end,
 	%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
 	Hosts = case MXRecords of
 		[] ->
