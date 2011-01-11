@@ -343,7 +343,8 @@ do_STARTTLS(Socket, Options) ->
 	socket:send(Socket, "STARTTLS\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"220", _Rest/binary>>} ->
-			crypto:start(),
+			application:start(crypto),
+			application:start(public_key),
 			application:start(ssl),
 			case socket:to_ssl_client(Socket, [], 5000) of
 				{ok, NewSocket} ->
@@ -369,7 +370,8 @@ connect(Host, Options) ->
 	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false}],
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
-			crypto:start(),
+			application:start(crypto),
+			application:start(public_key),
 			application:start(ssl),
 			ssl;
 		false ->
