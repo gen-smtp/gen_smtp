@@ -313,24 +313,7 @@ do_AUTH_each(Socket, Username, Password, [_Type | Tail]) ->
 try_EHLO(Socket, Options) ->
 	ok = socket:send(Socket, ["EHLO ", proplists:get_value(hostname, Options), "\r\n"]),
 	{ok, Reply} = read_possible_multiline_reply(Socket),
-	[_ | Reply2] = re:split(Reply, "\r\n", [{return, binary}, trim]),
-	Extensions = [
-		begin
-				Body = binstr:substr(Entry, 5),
-				case re:split(Body, " ",  [{return, binary}, trim, {parts, 2}]) of
-					[Verb, Parameters] ->
-						{binstr:to_upper(Verb), Parameters};
-					[Body] ->
-						case binstr:strchr(Body, $=) of
-							0 ->
-								{binstr:to_upper(Body), true};
-							_ ->
-								%io:format("discarding option ~p~n", [Body]),
-								[]
-						end
-				end
-		end  || Entry <- Reply2],
-	{ok, Extensions}.
+	{ok, parse_extensions(Reply)}.
 
 % check if we should try to do TLS
 try_STARTTLS(Socket, Options, Extensions) ->
@@ -471,6 +454,25 @@ check_options(Options) ->
 					ok
 			end
 	end.
+
+parse_extensions(Reply) ->
+	[_ | Reply2] = re:split(Reply, "\r\n", [{return, binary}, trim]),
+	[
+		begin
+				Body = binstr:substr(Entry, 5),
+				case re:split(Body, " ",  [{return, binary}, trim, {parts, 2}]) of
+					[Verb, Parameters] ->
+						{binstr:to_upper(Verb), Parameters};
+					[Body] ->
+						case binstr:strchr(Body, $=) of
+							0 ->
+								{binstr:to_upper(Body), true};
+							_ ->
+								%io:format("discarding option ~p~n", [Body]),
+								[]
+						end
+				end
+		end  || Entry <- Reply2].
 
 -ifdef(TEST).
 
@@ -821,5 +823,24 @@ session_start_test_() ->
 		]
 	}.
 
+extension_parse_test_() ->
+	[
+		{"parse extensions",
+			fun() ->
+					Res = parse_extensions(<<"250-smtp.example.com\r\n250-PIPELINING\r\n250-SIZE 20971520\r\n250-VRFY\r\n250-ETRN\r\n250-STARTTLS\r\n250-AUTH CRAM-MD5 PLAIN DIGEST-MD5 LOGIN\r\n250-AUTH=CRAM-MD5 PLAIN DIGEST-MD5 LOGIN\r\n250-ENHANCEDSTATUSCODES\r\n250-8BITMIME\r\n250 DSN">>),
+					?assertEqual(true, proplists:get_value(<<"PIPELINING">>, Res)),
+					?assertEqual(<<"20971520">>, proplists:get_value(<<"SIZE">>, Res)),
+					?assertEqual(true, proplists:get_value(<<"VRFY">>, Res)),
+					?assertEqual(true, proplists:get_value(<<"ETRN">>, Res)),
+					?assertEqual(true, proplists:get_value(<<"STARTTLS">>, Res)),
+					?assertEqual(<<"CRAM-MD5 PLAIN DIGEST-MD5 LOGIN">>, proplists:get_value(<<"AUTH">>, Res)),
+					?assertEqual(true, proplists:get_value(<<"ENHANCEDSTATUSCODES">>, Res)),
+					?assertEqual(true, proplists:get_value(<<"8BITMIME">>, Res)),
+					?assertEqual(true, proplists:get_value(<<"DSN">>, Res)),
+					?assertEqual(10, length(Res)),
+					ok
+			end
+		}
+	].
 
 -endif.
