@@ -20,8 +20,17 @@ thousand emails without leaking any RAM or crashing the erlang virtual machine.
 Current Participants
 ====================
 
-+ Andrew Thompson (andrew@hijacked.us)
-+ Jack Danger Canty (code@jackcanty.com)a
++ Andrew Thompson (andrew AT hijacked.us)
++ Jack Danger Canty (code AT jackcanty.com)
++ Micah Warren (micahw AT lordnull.com)
+
+Who is using it?
+================
+
++ gen_smtp is used to provide the email functionality of [OpenACD](http://github.com/Vagabond/OpenACD)
++ gen_smtp will be used as both the SMTP server and SMTP client for [Zontonic](http://zotonic.com) as of version 0.7
+
+If you'd like to share your usage of gen_smtp, please contact me.
 
 Client Example
 ==============
