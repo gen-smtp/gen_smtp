@@ -115,7 +115,7 @@ You can connect and test this using the gen_smtp_client via something like:
 gen_smtp_client:send({"whatever@test.com", ["andrew@hijacked.us"], "Subject: testing\r\nFrom: Andrew Thompson \r\nTo: Some Dude \r\n\r\nThis is the email body"}, [{relay, "localhost"}, {port, 1465}, {ssl, true}]).
 </pre>
 
-If you want to listen on IPv6, you can use the {family, inet6} and {ip, "::"} options to enable listening on IPv6.
+If you want to listen on IPv6, you can use the {family, inet6} and {address, "::"} options to enable listening on IPv6.
 
 Live Instance
 =============
