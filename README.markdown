@@ -99,7 +99,7 @@ You can configure the server in general, each SMTP session, and the callback mod
 gen_smtp_server:start(smtp_server_example, [[{sessionoptions, [{allow_bare_newlines, fix}, {callbackoptions, [{parse, true}]}]}]]).
 </pre>
 
-This configures the session to fix bare newlines (other options are 'strip', 'true' and 'false', false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options; relay - whether to relay email on, auth - whether to do SMTP authentication and parse - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own session options.
+This configures the session to fix bare newlines (other options are 'strip', 'true' and 'false', false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options; relay - whether to relay email on, auth - whether to do SMTP authentication and parse - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own callback options.
 
 You can also start multiple SMTP listeners at once by passing more than 1 configuration:
 
