@@ -99,6 +99,10 @@ try_smtp_sessions([{Distance, Host} | Tail], Email, Options, RetryList) ->
 					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
 					NewHosts = Tail ++ [{Distance, Host}],
 					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, RetryCount + 1}];
+				_ when Retries == 0 ->
+					% done retrying completely
+					NewHosts = Tail,
+					NewRetryList = lists:keydelete(Host, 1, RetryList);
 				_ ->
 					% otherwise...
 					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
