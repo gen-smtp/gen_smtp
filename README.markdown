@@ -1,10 +1,11 @@
 Mission
 =======
 
-Provide a generic Erlang SMTP server and client framework that can be extended via
-callback modules in the OTP style. The goal is to make it easy to send and
-receive email in Erlang without the hassle of POP/IMAP. This is *not* a true
-mailserver - although you could build one with it.
+Provide a generic Erlang SMTP server framework that can be extended via
+callback modules in the OTP style. A pure Erlang SMTP client is also included.
+The goal is to make it easy to send and receive email in Erlang without the
+hassle of POP/IMAP. This is *not* a complete mailserver - although it includes
+most of the parts you'd need to build one.
 
 The SMTP server/client supports PLAIN, LOGIN, CRAM-MD5 authentication as well
 as STARTTLS and SSL (port 465).
@@ -28,7 +29,7 @@ Who is using it?
 ================
 
 + gen_smtp is used to provide the email functionality of [OpenACD](http://github.com/Vagabond/OpenACD)
-+ gen_smtp will be used as both the SMTP server and SMTP client for [Zontonic](http://zotonic.com) as of version 0.7
++ gen_smtp will be used as both the SMTP server and SMTP client for [Zotonic](http://zotonic.com) as of version 0.7
 
 If you'd like to share your usage of gen_smtp, please contact me.
 
