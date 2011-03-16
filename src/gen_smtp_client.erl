@@ -63,6 +63,7 @@ send(Email, Options) ->
 			{error, Reason}
 	end.
 
+-spec send_blocking(Email :: {string() | binary(), [string() | binary(), ...], string() | binary()}, Options :: list()) -> binary() | {'error', atom(), any()}.
 send_blocking(Email, Options) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),

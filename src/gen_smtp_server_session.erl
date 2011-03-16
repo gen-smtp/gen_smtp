@@ -20,7 +20,11 @@
 %%% (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 %%% SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-%% @doc A Per-connection SMTP server, extensible via a callback module.
+%% @doc A Per-connection SMTP server, extensible via a callback module. This
+%% module is implemented as a behaviour that the callback module should
+%% implement. To see the details of the required callback functions to provide,
+%% please see `smtp_server_example'.
+%% @see smtp_server_example
 
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
@@ -68,6 +72,7 @@
 	}
 ).
 
+%% @hidden
 -spec behaviour_info(atom()) -> [{atom(), non_neg_integer()}] | 'undefined'.
 behaviour_info(callbacks) ->
 	[{init,4},
@@ -86,10 +91,17 @@ behaviour_info(callbacks) ->
 behaviour_info(_Other) ->
 	undefined.
 
+%% @doc Start a SMTP session linked to the calling process.
+%% @see start/3
 -spec(start_link/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start_link(Socket, Module, Options) ->
 	gen_server:start_link(?MODULE, [Socket, Module, Options], []).
 
+%% @doc Start a SMTP session. Arguments are `Socket' (probably opened via
+%% `gen_smtp_server' or an analogue), which is an abstract socket implemented
+%% via the `socket' module, `Module' is the name of the callback module
+%% implementing the SMTP session behaviour that you'd like to use and `Options'
+%% is the optional arguments provided by the accept server.
 -spec(start/3 :: (Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
 start(Socket, Module, Options) ->
 	gen_server:start(?MODULE, [Socket, Module, Options], []).
@@ -124,6 +136,7 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
+%% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, readmessage = true} = State) ->
 	socket:send(Socket, "552 Message too large\r\n"),
@@ -143,12 +156,6 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	end,
 	socket:setopts(Socket, [{packet, line}]),
 	Envelope = Env#envelope{data = Body},% size = length(Body)},
-	%io:format("received body from child process, remainder was ~p (~p)~n", [Rest, self()]),
-
-%handle_info({_Proto, Socket, <<".\r\n">>}, #state{readmessage = true, envelope = Env, module = Module} = State) ->
-	%io:format("done reading message~n"),
-	%io:format("entire message~n~s~n", [Envelope#envelope.data]),
-	%Envelope = Env#envelope{data = list_to_binary(lists:reverse(Env#envelope.data))},
 	Valid = case has_extension(Extensions, "SIZE") of
 		{true, Value} ->
 			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
