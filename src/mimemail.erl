@@ -1151,9 +1151,7 @@ parse_example_mails_test_() ->
 		{"no \\r\\n before first boundary",
 			fun() ->
 				{ok, Bin} = file:read_file("../testdata/html.eml"),
-				{Headers, B} = parse_headers(Bin),
-				Body = binstr:strip(binstr:strip(B, left, $\r), left, $\n),
-				Decoded = decode(Headers, Body),
+				Decoded = decode(Bin),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		},

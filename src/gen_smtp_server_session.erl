@@ -30,7 +30,6 @@
 -behaviour(gen_server).
 
 -ifdef(TEST).
--import(smtp_util, [compute_cram_digest/2]).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
@@ -1715,7 +1714,7 @@ smtp_session_auth_test_() ->
 
 								["334", Seed64] = string:tokens(smtp_util:trim_crlf(Packet4), " "),
 								Seed = base64:decode_to_string(Seed64),
-								Digest = compute_cram_digest("PaSSw0rd", Seed),
+								Digest = smtp_util:compute_cram_digest("PaSSw0rd", Seed),
 								String = binary_to_list(base64:encode(list_to_binary(["username ", Digest]))),
 								socket:send(CSock, String++"\r\n"),
 								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
@@ -1758,7 +1757,7 @@ smtp_session_auth_test_() ->
 
 								["334", Seed64] = string:tokens(smtp_util:trim_crlf(Packet4), " "),
 								Seed = base64:decode_to_string(Seed64),
-								Digest = compute_cram_digest("Passw0rd", Seed),
+								Digest = smtp_util:compute_cram_digest("Passw0rd", Seed),
 								String = binary_to_list(base64:encode(list_to_binary(["username ", Digest]))),
 								socket:send(CSock, String++"\r\n"),
 								receive {tcp, CSock, Packet5} -> socket:active_once(CSock) end,
