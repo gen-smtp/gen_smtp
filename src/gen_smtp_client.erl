@@ -56,11 +56,29 @@ send(Email, Options) ->
 
 -spec send(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list(), Callback :: function() | 'undefined') -> {'ok', pid()} | {'error', any()}.
 %% @doc Send an email nonblocking and invoke a callback with the result of the send.
-%% The callback will receive either `ok' or an  `{error, Type, Message}' as the single argument.
+%% The callback will receive either `ok',  `{error, Type, Message}' or `{exit, ExitReason}'
+%% as the single argument.
 send(Email, Options, Callback) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),
 	case check_options(NewOptions) of
+		ok when is_function(Callback) ->
+			spawn(fun() ->
+						process_flag(trap_exit, true),
+						Pid = spawn_link(fun() ->
+									send_it_nonblock(Email, NewOptions, Callback)
+							end
+						),
+						receive
+							{'EXIT', Pid, Reason} ->
+								case Reason of
+									X when X == normal; X == shutdown ->
+										ok;
+									Error ->
+										Callback({exit, Error})
+								end
+						end
+				end);
 		ok ->
 			Pid = spawn_link(fun () ->
 						send_it_nonblock(Email, NewOptions, Callback)
