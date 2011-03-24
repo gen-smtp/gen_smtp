@@ -54,10 +54,10 @@
 send(Email, Options) ->
 	send(Email, Options, undefined).
 
--spec send(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list(), Callback :: function() | 'undefined') -> {'ok', pid()} | {'error', any()}.
 %% @doc Send an email nonblocking and invoke a callback with the result of the send.
 %% The callback will receive either `ok',  `{error, Type, Message}' or `{exit, ExitReason}'
 %% as the single argument.
+-spec send(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list(), Callback :: function() | 'undefined') -> {'ok', pid()} | {'error', any()}.
 send(Email, Options, Callback) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),
