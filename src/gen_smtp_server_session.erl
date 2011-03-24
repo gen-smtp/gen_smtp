@@ -20,7 +20,7 @@
 %%% (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 %%% SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-%% @doc A Per-connection SMTP server, extensible via a callback module. This
+%% @doc Process representing a SMTP session, extensible via a callback module. This
 %% module is implemented as a behaviour that the callback module should
 %% implement. To see the details of the required callback functions to provide,
 %% please see `smtp_server_example'.
@@ -106,6 +106,7 @@ start_link(Socket, Module, Options) ->
 start(Socket, Module, Options) ->
 	gen_server:start(?MODULE, [Socket, Module, Options], []).
 
+%% @private
 -spec(init/1 :: (Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore').
 init([Socket, Module, Options]) ->
 	{ok, {PeerName, _Port}} = socket:peername(Socket),
