@@ -1,5 +1,9 @@
+%% @doc A simple example callback module for `gen_smtp_server_session' that also serves as
+%% documentation for the required callback API.
+
 -module(smtp_server_example).
 -behaviour(gen_smtp_server_session).
+
 
 -export([init/4, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
 	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4, handle_RSET/1, handle_VRFY/2,
@@ -12,6 +16,20 @@
 		options = [] :: list()
 	}).
 
+-type(error_message() :: {'error', string(), #state{}}).
+
+%% @doc Initialize the callback module's state for a new session.
+%% The arguments to the function are the SMTP server's hostname (for use in the SMTP anner),
+%% The number of current sessions (eg. so you can do session limiting), the IP address of the
+%% connecting client, and a freeform list of options for the module. The Options are extracted
+%% from the `callbackoptions' parameter passed into the `gen_smtp_server_session' when it was
+%% started.
+%%
+%% If you want to continue the session, return `{ok, Banner, State}' where Banner is the SMTP
+%% banner to send to the client and State is the callback module's state. The State will be passed
+%% to ALL subsequent calls to the callback module, so it can be used to keep track of the SMTP
+%% session. You can also return `{stop, Reason, Message}' where the session will exit with Reason
+%% and send Message to the client.
 -spec init(Hostname :: binary(), SessionCount :: non_neg_integer(), Address :: tuple(), Options :: list()) -> {'ok', string(), #state{}} | {'stop', any(), string()}.
 init(Hostname, SessionCount, Address, Options) ->
 	io:format("peer: ~p~n", [Address]),
@@ -25,18 +43,33 @@ init(Hostname, SessionCount, Address, Options) ->
 			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
 	end.
 
--spec handle_HELO(Hostname :: binary(), State :: #state{}) -> {'error', string(), #state{}} | {'ok', pos_integer(), #state{}} | {'ok', #state{}}.
+%% @doc Handle the HELO verb from the client. Arguments are the Hostname sent by the client as
+%% part of the HELO and the callback State.
+%%
+%% Return values are `{ok, State}' to simply continue with a new state, `{ok, MessageSize, State}'
+%% to continue with the SMTP session but to impose a maximum message size (which you can determine
+%% , for example, by looking at the IP address passed in to the init function) and the new callback
+%% state. You can reject the HELO by returning `{error, Message, State}' and the Message will be
+%% sent back to the client. The reject message MUST contain the SMTP status code, eg. 554.
+-spec handle_HELO(Hostname :: binary(), State :: #state{}) -> {'ok', pos_integer(), #state{}} | {'ok', #state{}} | error_message().
 handle_HELO(<<"invalid">>, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
 handle_HELO(<<"trusted_host">>, State) ->
-	{ok, State};
+	{ok, State}; %% no size limit because we trust them.
 handle_HELO(Hostname, State) ->
 	io:format("HELO from ~s~n", [Hostname]),
 	{ok, 655360, State}. % 640kb of HELO should be enough for anyone.
 	%If {ok, State} was returned here, we'd use the default 10mb limit
 
--spec handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: #state{}) -> {'error', string(), #state{}} | {'ok', list(), #state{}}.
+%% @doc Handle the EHLO verb from the client. As with EHLO the hostname is provided as an argument,
+%% but in addition to that the list of ESMTP Extensions enabled in the session is passed. This list
+%% of extensions can be modified by the callback module to add/remove extensions.
+%%
+%% The return values are `{ok, Extensions, State}' where Extensions is the new list of extensions
+%% to use for this session or `{error, Message, State}' where Message is the reject message as
+%% with handle_HELO.
+-spec handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: #state{}) -> {'ok', list(), #state{}} | error_message().
 handle_EHLO(<<"invalid">>, _Extensions, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
@@ -52,12 +85,19 @@ handle_EHLO(Hostname, Extensions, State) ->
 	end,
 	{ok, MyExtensions, State}.
 
--spec handle_MAIL(From :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
+%% @doc Handle the MAIL FROM verb. The From argument is the email address specified by the
+%% MAIL FROM command. Extensions to the MAIL verb are handled by the `handle_MAIL_extension'
+%% function.
+%%
+%% Return values are either `{ok, State}' or `{error, Message, State}' as before.
+-spec handle_MAIL(From :: binary(), State :: #state{}) -> {'ok', #state{}} | error_message().
 handle_MAIL(From, State) ->
 	io:format("Mail from ~s~n", [From]),
 	% you can accept or reject the FROM address here
 	{ok, State}.
 
+%% @doc Handle an extension to the MAIL verb. Return either `{ok, State}' or `error' to reject
+%% the option.
 -spec handle_MAIL_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_MAIL_extension(Extension, State) ->
 	io:format("Mail from extension ~s~n", [Extension]),
