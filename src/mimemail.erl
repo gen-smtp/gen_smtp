@@ -70,7 +70,7 @@ decode(All) ->
 	{Headers, Body} = parse_headers(All),
 	decode(Headers, Body, ?DEFAULT_OPTIONS).
 
--spec(decode/2 :: (Headers :: [{binary(), binary()}], Options :: options()) -> mimetuple()).
+-spec(decode/2 :: (Email :: binary(), Options :: options()) -> mimetuple()).
 %% @doc Decode with custom options
 decode(All, Options) when is_binary(All), is_list(Options) ->
 	{Headers, Body} = parse_headers(All),

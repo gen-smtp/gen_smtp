@@ -91,6 +91,8 @@ handle_EHLO(Hostname, Extensions, State) ->
 %%
 %% Return values are either `{ok, State}' or `{error, Message, State}' as before.
 -spec handle_MAIL(From :: binary(), State :: #state{}) -> {'ok', #state{}} | error_message().
+handle_MAIL(<<"badguy@blacklist.com">>, State) ->
+	{error, "552 go away", State};
 handle_MAIL(From, State) ->
 	io:format("Mail from ~s~n", [From]),
 	% you can accept or reject the FROM address here
@@ -99,24 +101,34 @@ handle_MAIL(From, State) ->
 %% @doc Handle an extension to the MAIL verb. Return either `{ok, State}' or `error' to reject
 %% the option.
 -spec handle_MAIL_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
-handle_MAIL_extension(Extension, State) ->
+handle_MAIL_extension(<<"X-SomeExtension">> = Extension, State) ->
 	io:format("Mail from extension ~s~n", [Extension]),
 	% any MAIL extensions can be handled here
-	{ok, State}.
+	{ok, State};
+handle_MAIL_extension(Extension, _State) ->
+	io:format("Unknown MAIL FROM extension ~s~n", [Extension]),
+	error.
 
 -spec handle_RCPT(To :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
+handle_RCPT(<<"nobody@example.com">>, State) ->
+	{error, "550 No such recipient", State};
 handle_RCPT(To, State) ->
 	io:format("Mail to ~s~n", [To]),
 	% you can accept or reject RCPT TO addesses here, one per call
 	{ok, State}.
 
 -spec handle_RCPT_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
-handle_RCPT_extension(Extension, State) ->
+handle_RCPT_extension(<<"X-SomeExtension">> = Extension, State) ->
 	% any RCPT TO extensions can be handled here
 	io:format("Mail to extension ~s~n", [Extension]),
-	{ok, State}.
+	{ok, State};
+handle_RCPT_extension(Extension, _State) ->
+	io:format("Unknown RCPT TO extension ~s~n", [Extension]),
+	error.
 
 -spec handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: #state{}) -> {'ok', string(), #state{}} | {'error', string(), #state{}}.
+handle_DATA(_From, _To, <<>>, State) ->
+	{error, "552 Message too small", State};
 handle_DATA(From, To, Data, State) ->
 	% some kind of unique id
 	Reference = lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(erlang:now()))]),
@@ -158,6 +170,8 @@ handle_RSET(State) ->
 	State.
 
 -spec handle_VRFY(Address :: binary(), State :: #state{}) -> {'ok', string(), #state{}} | {'error', string(), #state{}}.
+handle_VRFY(<<"someuser">>, State) ->
+	{ok, "someuser@"++smtp_util:guess_FQDN(), State};
 handle_VRFY(_Address, State) ->
 	{error, "252 VRFY disabled by policy, just send some mail", State}.
 
