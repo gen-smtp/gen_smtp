@@ -35,12 +35,12 @@ init(Hostname, SessionCount, Address, Options) ->
 	io:format("peer: ~p~n", [Address]),
 	case SessionCount > 20 of
 		false ->
-			Banner = io_lib:format("~s ESMTP smtp_server_example", [Hostname]),
+			Banner = [Hostname, " ESMTP smtp_server_example"],
 			State = #state{options = Options},
 			{ok, Banner, State};
 		true ->
 			io:format("Connection limit exceeded~n"),
-			{stop, normal, io_lib:format("421 ~s is too busy to accept mail right now", [Hostname])}
+			{stop, normal, ["421 ", Hostname, " is too busy to accept mail right now"]}
 	end.
 
 %% @doc Handle the HELO verb from the client. Arguments are the Hostname sent by the client as
@@ -178,7 +178,7 @@ handle_VRFY(_Address, State) ->
 -spec handle_other(Verb :: binary(), Args :: binary(), #state{}) -> {string(), #state{}}.
 handle_other(Verb, _Args, State) ->
 	% You can implement other SMTP verbs here, if you need to
-	{lists:flatten(io_lib:format("500 Error: command not recognized : '~s'", [Verb])), State}.
+	{["500 Error: command not recognized : '", Verb, "'"], State}.
 
 %% this callback is OPTIONAL
 %% it only gets called if you add AUTH to your ESMTP extensions

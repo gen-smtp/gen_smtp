@@ -111,11 +111,11 @@ init([Socket, Module, Options]) ->
 	{ok, {PeerName, _Port}} = socket:peername(Socket),
 	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, [])) of
 		{ok, Banner, CallbackState} ->
-			socket:send(Socket, io_lib:format("220 ~s\r\n", [Banner])),
+			socket:send(Socket, ["220 ", Banner, "\r\n"]),
 			socket:active_once(Socket),
 			{ok, #state{socket = Socket, module = Module, options = Options, callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
-			socket:send(Socket, Message ++ "\r\n"),
+			socket:send(Socket, [Message, "\r\n"]),
 			socket:close(Socket),
 			{stop, Reason};
 		ignore ->
@@ -177,7 +177,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 					socket:active_once(Socket),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT};
 				{error, Message, CallbackState} ->
-					socket:send(Socket, Message++"\r\n"),
+					socket:send(Socket, [Message, "\r\n"]),
 					socket:active_once(Socket),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
 			end;
@@ -265,13 +265,13 @@ handle_request({<<"HELO">>, <<>>}, #state{socket = Socket} = State) ->
 handle_request({<<"HELO">>, Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
 		{ok, MaxSize, CallbackState} when is_integer(MaxSize) ->
-			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
+			socket:send(Socket,["250 ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
 			{ok, State#state{extensions = [{"SIZE", integer_to_list(MaxSize)}], envelope = #envelope{}, callbackstate = CallbackState}};
 		{ok, CallbackState} ->
-			socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
+			socket:send(Socket, ["250 ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
 			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
-			socket:send(Socket, Message ++ "\r\n"),
+			socket:send(Socket, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 handle_request({<<"EHLO">>, <<>>}, #state{socket = Socket} = State) ->
@@ -282,18 +282,18 @@ handle_request({<<"EHLO">>, Hostname}, #state{socket = Socket, options = Options
 		{ok, Extensions, CallbackState} ->
 			case Extensions of
 				[] ->
-					socket:send(Socket, io_lib:format("250 ~s\r\n", [proplists:get_value(hostname, Options, smtp_util:guess_FQDN())])),
+					socket:send(Socket, ["250 ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
 					{ok, State#state{extensions = Extensions, callbackstate = CallbackState}};
 				_Else ->
 					F =
 					fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
-							{Pos, Len, string:concat(string:concat(string:concat(Acc, "250 "), E), "\r\n")};
+							{Pos, Len, [["250 ", E, "\r\n"] | Acc]};
 						({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
-							{Pos, Len, string:concat(Acc, io_lib:format("250 ~s ~s\r\n", [E, Value]))};
+							{Pos, Len, [["250 ", E, " ", Value, "\r\n"] | Acc]};
 						({E, true}, {Pos, Len, Acc}) ->
-							{Pos+1, Len, string:concat(string:concat(string:concat(Acc, "250-"), E), "\r\n")};
+							{Pos+1, Len, [["250-", E, "\r\n"] | Acc]};
 						({E, Value}, {Pos, Len, Acc}) ->
-							{Pos+1, Len, string:concat(Acc, io_lib:format("250-~s ~s\r\n", [E, Value]))}
+							{Pos+1, Len, [["250-", E, " ", Value , "\r\n"] | Acc]}
 					end,
 					Extensions2 = case Tls of
 						true ->
@@ -301,12 +301,13 @@ handle_request({<<"EHLO">>, Hostname}, #state{socket = Socket, options = Options
 						false ->
 							Extensions
 					end,
-					{_, _, Response} = lists:foldl(F, {1, length(Extensions2), string:concat(string:concat("250-", proplists:get_value(hostname, Options, smtp_util:guess_FQDN())), "\r\n")}, Extensions2),
-					socket:send(Socket, Response),
+					{_, _, Response} = lists:foldl(F, {1, length(Extensions2), [["250-", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]]}, Extensions2),
+					%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
+					socket:send(Socket, lists:reverse(Response)),
 					{ok, State#state{extensions = Extensions2, envelope = #envelope{}, callbackstate = CallbackState}}
 			end;
 		{error, Message, CallbackState} ->
-			socket:send(Socket, Message++"\r\n"),
+			socket:send(Socket, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
@@ -355,7 +356,7 @@ handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensio
 						<<"CRAM-MD5">> ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
 							String = smtp_util:get_cram_string(proplists:get_value(hostname, Options, smtp_util:guess_FQDN())),
-							socket:send(Socket, "334 "++String++"\r\n"),
+							socket:send(Socket, ["334 ", String, "\r\n"]),
 							{ok, State#state{waitingauth = 'cram-md5', authdata=base64:decode(String), envelope = Envelope#envelope{auth = {<<>>, <<>>}}}}
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
 							%crypto:start(), % ensure crypto is started, we're gonna need it
@@ -424,7 +425,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 									socket:send(Socket, "250 sender Ok\r\n"),
 									{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 								{error, Message, CallbackState} ->
-									socket:send(Socket, Message ++ "\r\n"),
+									socket:send(Socket, [Message, "\r\n"]),
 									{ok, State#state{callbackstate = CallbackState}}
 							end;
 						{ParsedAddress, ExtraInfo} ->
@@ -438,7 +439,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 										{true, Value} ->
 											case list_to_integer(binary_to_list(Size)) > list_to_integer(Value) of
 												true ->
-													{error, io_lib:format("552 Estimated message length ~s exceeds limit of ~s\r\n", [Size, Value])};
+													{error, ["552 Estimated message length ", Size, " exceeds limit of ", Value, "\r\n"]};
 												false ->
 													InnerState#state{envelope = Envelope#envelope{expectedsize = list_to_integer(binary_to_list(Size))}}
 											end;
@@ -457,7 +458,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 										{ok, CallbackState} ->
 											InnerState#state{callbackstate = CallbackState};
 										error ->
-											{error, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])}
+											{error, ["555 Unsupported option: ", ExtraInfo, "\r\n"]}
 									end
 							end,
 							case lists:foldl(F, State, Options) of
@@ -472,7 +473,7 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 											socket:send(Socket, "250 sender Ok\r\n"),
 											{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 										{error, Message, CallbackState} ->
-											socket:send(Socket, Message ++ "\r\n"),
+											socket:send(Socket, [Message, "\r\n"]),
 											{ok, NewState#state{callbackstate = CallbackState}}
 									end
 							end
@@ -507,13 +508,13 @@ handle_request({<<"RCPT">>, Args}, #state{socket = Socket, envelope = Envelope, 
 							socket:send(Socket, "250 recipient Ok\r\n"),
 							{ok, State#state{envelope = Envelope#envelope{to = Envelope#envelope.to ++ [ParsedAddress]}, callbackstate = CallbackState}};
 						{error, Message, CallbackState} ->
-							socket:send(Socket, Message++"\r\n"),
+							socket:send(Socket, [Message, "\r\n"]),
 							{ok, State#state{callbackstate = CallbackState}}
 					end;
 				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
 					io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-					socket:send(Socket, io_lib:format("555 Unsupported option: ~s\r\n", [ExtraInfo])),
+					socket:send(Socket, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
 					{ok, State}
 			end;
 		_Else ->
@@ -556,10 +557,10 @@ handle_request({<<"VRFY">>, Address}, #state{module= Module, socket = Socket, ca
 		{ParsedAddress, <<>>} ->
 			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
-					socket:send(Socket, io_lib:format("250 ~s\r\n", [Reply])),
+					socket:send(Socket, ["250 ", Reply, "\r\n"]),
 					{ok, State#state{callbackstate = CallbackState}};
 				{error, Message, CallbackState} ->
-					socket:send(Socket, Message++"\r\n"),
+					socket:send(Socket, [Message, "\r\n"]),
 					{ok, State#state{callbackstate = CallbackState}}
 			end;
 		_Other ->
@@ -609,7 +610,7 @@ handle_request({<<"STARTTLS">>, _Args}, #state{socket = Socket} = State) ->
 	{ok, State};
 handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackstate = OldCallbackState} = State) ->
 	{Message, CallbackState} = Module:handle_other(Verb, Args, OldCallbackState),
-	socket:send(Socket, Message++"\r\n"),
+	socket:send(Socket, [Message, "\r\n"]),
 	{ok, State#state{callbackstate = CallbackState}}.
 
 -spec(parse_encoded_address/1 :: (Address :: binary()) -> {binary(), binary()} | 'error').
