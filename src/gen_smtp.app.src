@@ -16,6 +16,6 @@
     smtp_server_example
    ]
   },
-  {applications, [kernel, stdlib]}
+  {applications, [kernel, stdlib, cowboy, iconv]}
  ]
 }.
