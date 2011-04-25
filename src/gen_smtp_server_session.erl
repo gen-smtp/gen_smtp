@@ -189,7 +189,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, transport = Tran
 	end;
 handle_info({_SocketType, Socket, Packet}, #state{transport = Transport} = State) ->
 	case handle_request(parse_request(Packet), State) of
-		{ok,  #state{envelope = Envelope, extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
+		{ok,  #state{extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
 			MaxSize = case has_extension(Extensions, "SIZE") of
 				{true, Value} ->
 					list_to_integer(Value);
@@ -200,7 +200,7 @@ handle_info({_SocketType, Socket, Packet}, #state{transport = Transport} = State
 			Size = 0,
 			Transport:setopts(Socket, [{packet, raw}]),
 			spawn_opt(fun() -> receive_data([],
-							Socket, Transport, {0, Envelope#envelope.expectedsize div 2}, Size, MaxSize, Session, Options) end,
+							Socket, Transport, 0, Size, MaxSize, Session, Options) end,
 				[link, {fullsweep_after, 0}]),
 			{noreply, NewState, ?TIMEOUT};
 		{ok, #state{socket=NewSocket, transport=NewTransport} = NewState} ->
@@ -711,24 +711,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 receive_data(_Acc, _Socket, _Transport, _, Size, MaxSize, Session, _Options) when MaxSize > 0, Size > MaxSize ->
 	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
-receive_data(Acc, Socket, Transport, {OldCount, OldRecvSize}, Size, MaxSize, Session, Options) ->
-	{Count, RecvSize} = case Size of
-		Size when OldCount > 2, OldRecvSize =:= 262144 ->
-			%io:format("increasing receive size to ~B~n", [1048576]),
-			{0, 1048576};% 1m
-		Size when OldCount > 5, OldRecvSize =:= 65536 ->
-			%io:format("increasing receive size to ~B~n", [262144]),
-			{0, 262144};% 256k
-		Size when OldCount > 5, OldRecvSize =:= 8192 ->
-			%io:format("increasing receive size to ~B~n", [65536]),
-			{0, 65536};% 64k
-		Size when OldCount > 2, Size > 8192, OldRecvSize =:= 0 ->
-			%io:format("increasing receive size to ~B~n", [8192]),
-			{0, 8192}; % 8k
-		_ ->
-			{OldCount + 1, OldRecvSize} % don't change anything
-	end,
-	%Transport:setopts(Socket, [{packet, raw}]),
+receive_data(Acc, Socket, Transport, RecvSize, Size, MaxSize, Session, Options) ->
 	case Transport:recv(Socket, RecvSize, 1000) of
 		{ok, Packet} when Acc == [] ->
 			case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
@@ -739,7 +722,7 @@ receive_data(Acc, Socket, Transport, {OldCount, OldRecvSize}, Size, MaxSize, Ses
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([FixedPacket | Acc], Socket, Transport, {Count, RecvSize}, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+							receive_data([FixedPacket | Acc], Socket, Transport, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
@@ -759,7 +742,7 @@ receive_data(Acc, Socket, Transport, {OldCount, OldRecvSize}, Size, MaxSize, Ses
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([FixedPacket | Acc], Socket, Transport, {Count, RecvSize}, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+							receive_data([FixedPacket | Acc], Socket, Transport, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
@@ -778,7 +761,7 @@ receive_data(Acc, Socket, Transport, {OldCount, OldRecvSize}, Size, MaxSize, Ses
 					% uh-oh
 					%io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
-					receive_data(Acc, Socket, Transport, {Count - 1, RecvSize}, Size, MaxSize, Session, Options);
+					receive_data(Acc, Socket, 0, Transport, Size, MaxSize, Session, Options);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
@@ -788,23 +771,11 @@ receive_data(Acc, Socket, Transport, {OldCount, OldRecvSize}, Size, MaxSize, Ses
 					Session ! {receive_data, Result, Rest}
 			end;
 		{error, timeout} ->
-			NewRecvSize = adjust_receive_size_down(Size, RecvSize),
-			%io:format("timeout when trying to read ~B bytes, lowering receive size to ~B~n", [RecvSize, NewRecvSize]),
-			receive_data(Acc, Socket, Transport, {-5, NewRecvSize}, Size, MaxSize, Session, Options);
+			receive_data(Acc, Socket, Transport, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
 			io:format("receive error: ~p~n", [Reason]),
 			exit(receive_error)
 	end.
-
-
-adjust_receive_size_down(_Size, RecvSize) when RecvSize > 262144 ->
-	262144;
-adjust_receive_size_down(_Size, RecvSize) when RecvSize > 65536 ->
-	65536;
-adjust_receive_size_down(_Size, RecvSize) when RecvSize > 8192 ->
-	8192;
-adjust_receive_size_down(_Size, _RecvSize) ->
-	0.
 
 check_for_bare_crlf(Bin, Offset) ->
 	case {re:run(Bin, "(?<!\r)\n", [{capture, none}, {offset, Offset}]), re:run(Bin, "\r(?!\n)", [{capture, none}, {offset, Offset}])}  of
