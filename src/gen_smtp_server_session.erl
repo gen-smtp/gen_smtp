@@ -140,52 +140,41 @@ handle_cast(_Msg, State) ->
 
 %% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
-handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, transport = Transport, readmessage = true} = State) ->
+handle_info({receive_data, {error, size_exceeded, Rest}}, #state{socket = Socket, transport = Transport, readmessage = true} = State) ->
+	case Rest of
+		<<>> -> ok; % no remaining data
+		_ -> self() ! {Transport:name(), Socket, Rest}
+	end,
 	Transport:send(Socket, "552 Message too large\r\n"),
-	Transport:setopts(Socket, [{active, once}]),
-	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, transport = Transport, readmessage = true} = State) ->
-	Transport:send(Socket, "451 Bare newline detected\r\n"),
-	io:format("bare newline detected: ~p~n", [self()]),
-	Transport:setopts(Socket, [{active, once}]),
+	Transport:setopts(Socket, [{active, once}, {packet, line}]),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, Body, Rest}, #state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
-		callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+		callbackstate = OldCallbackState, options = Options} = State) ->
 	% send the remainder of the data...
 	case Rest of
 		<<>> -> ok; % no remaining data
-		_ -> self() ! {Transport:name(Socket), Socket, Rest}
+		_ -> self() ! {Transport:name(), Socket, Rest}
 	end,
-	Transport:setopts(Socket, [{packet, line}]),
-	Envelope = Env#envelope{data = Body},% size = length(Body)},
-	Valid = case has_extension(Extensions, "SIZE") of
-		{true, Value} ->
-			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
-				true ->
-					Transport:send(Socket, "552 Message too large\r\n"),
-					Transport:setopts(Socket, [{active, once}]),
-					false;
-				false ->
-					true
-			end;
-		false ->
-			true
-	end,
-	case Valid of
-		true ->
+	Transport:setopts(Socket, [{packet, line}, {active, once}]),
+	Op = proplists:get_value(allow_bare_newlines, Options, false),
+
+	FixedBody = check_bare_crlf(Body, Op),
+
+	case FixedBody of
+		error ->
+			%% bare newline
+			Transport:send(Socket, "451 Bare newline detected\r\n"),
+			{noreply, State#state{readmessage=false, envelope=#envelope{}}, ?TIMEOUT};
+		_ ->
+			Envelope = Env#envelope{data = FixedBody},
 			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
 				{ok, Reference, CallbackState} ->
 					Transport:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
-					Transport:setopts(Socket, [{active, once}]),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT};
 				{error, Message, CallbackState} ->
 					Transport:send(Socket, [Message, "\r\n"]),
-					Transport:setopts(Socket, [{active, once}]),
 					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
-			end;
-		false ->
-			% might not even be able to get here anymore...
-			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
+			end
 	end;
 handle_info({_SocketType, Socket, Packet}, #state{transport = Transport} = State) ->
 	case handle_request(parse_request(Packet), State) of
@@ -413,7 +402,7 @@ handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined, transport = Tra
 handle_request({<<"MAIL">>, Args}, #state{socket = Socket, transport = Transport, module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
-			case binstr:strpos(binstr:to_upper(Args), "FROM:") of
+			case binstr:strpos(binstr:to_upper(Args), <<"FROM:">>) of
 				1 ->
 					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
 					case parse_encoded_address(Address) of
@@ -492,7 +481,7 @@ handle_request({<<"RCPT">>, _Args}, #state{envelope = undefined, socket = Socket
 	Transport:send(Socket, "503 Error: need MAIL command\r\n"),
 	{ok, State};
 handle_request({<<"RCPT">>, Args}, #state{socket = Socket, transport = Transport, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
-	case binstr:strpos(binstr:to_upper(Args), "TO:") of
+	case binstr:strpos(binstr:to_upper(Args), <<"TO:">>) of
 		1 ->
 			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
 			case parse_encoded_address(Address) of
@@ -708,66 +697,82 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 
 
 %% @doc a tight loop to receive the message body
-receive_data(_Acc, _Socket, _Transport, _, Size, MaxSize, Session, _Options) when MaxSize > 0, Size > MaxSize ->
-	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
-	Session ! {receive_data, {error, size_exceeded}};
+receive_data(Acc, Socket, Transport, RecvSize, Size, MaxSize, Session, Options) when MaxSize > 0, Size > MaxSize ->
+	case Transport:recv(Socket, RecvSize, 1000) of
+		{ok, Packet} ->
+			case find_end_of_DATA(Packet) of
+				0 ->
+					[Last | _] = Acc,
+					LastTwo = list_to_binary([Last, Packet]),
+					case find_end_of_DATA(LastTwo) of
+							0 ->
+								receive_data([Packet, Last], Socket, Transport, 0, Size, MaxSize, Session, Options);
+							{Index, Len} ->
+								Rest = binstr:substr(LastTwo, Index+Len),
+
+								Session ! {receive_data, {error, size_exceeded, Rest}}
+					end;
+				{Index, Len} ->
+					Rest = binstr:substr(Packet, Index+Len),
+
+					Session ! {receive_data, {error, size_exceeded, Rest}}
+			end;
+		{error, timeout} ->
+			%% TODO do we need to check for end of DATA here?
+			receive_data(Acc, Socket, Transport, 0, Size, MaxSize, Session, Options);
+		{error, Reason} ->
+			io:format("receive error: ~p~n", [Reason]),
+			exit(receive_error)
+	end;
 receive_data(Acc, Socket, Transport, RecvSize, Size, MaxSize, Session, Options) ->
 	case Transport:recv(Socket, RecvSize, 1000) of
-		{ok, Packet} when Acc == [] ->
-			case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
-				error ->
-					Session ! {receive_data, {error, bare_newline}};
-				FixedPacket ->
-					case binstr:strpos(FixedPacket, "\r\n.\r\n") of
-						0 ->
-							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
-							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([FixedPacket | Acc], Socket, Transport, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
-						Index ->
-							String = binstr:substr(FixedPacket, 1, Index - 1),
-							Rest = binstr:substr(FixedPacket, Index+5),
-							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
-							Result = list_to_binary(lists:reverse([String | Acc])),
-							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
-							Session ! {receive_data, Result, Rest}
-					end
+		{ok, FixedPacket} when Acc == [] ->
+			case find_end_of_DATA(FixedPacket) of
+				0 ->
+					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+					receive_data([FixedPacket | Acc], Socket, Transport, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+				{Index, Len} ->
+					String = binstr:substr(FixedPacket, 1, Index - 1),
+					Rest = binstr:substr(FixedPacket, Index+Len),
+					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+
+					Result = list_to_binary(lists:reverse([String | Acc])),
+					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Session ! {receive_data, Result, Rest}
 			end;
-		{ok, Packet} ->
-			[Last | _] = Acc,
-			case check_bare_crlf(Packet, Last, proplists:get_value(allow_bare_newlines, Options, false), 0) of
-				error ->
-					Session ! {receive_data, {error, bare_newline}};
-				FixedPacket ->
-					case binstr:strpos(FixedPacket, "\r\n.\r\n") of
-						0 ->
-							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
-							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([FixedPacket | Acc], Socket, Transport, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
-						Index ->
-							String = binstr:substr(FixedPacket, 1, Index - 1),
-							Rest = binstr:substr(FixedPacket, Index+5),
-							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
-							Result = list_to_binary(lists:reverse([String | Acc])),
-							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
-							Session ! {receive_data, Result, Rest}
-					end
+		{ok, FixedPacket} ->
+			case find_end_of_DATA(FixedPacket) of
+				0 ->
+					%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+					%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+					receive_data([FixedPacket | Acc], Socket, Transport, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+				{Index, Len} ->
+					String = binstr:substr(FixedPacket, 1, Index - 1),
+					Rest = binstr:substr(FixedPacket, Index+Len),
+					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+
+					Result = list_to_binary(lists:reverse([String | Acc])),
+					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					Session ! {receive_data, Result, Rest}
 			end;
 		{error, timeout} when RecvSize =:= 0, length(Acc) > 1 ->
 			% check that we didn't accidentally receive a \r\n.\r\n split across 2 receives
 			[A, B | Acc2] = Acc,
 			Packet = list_to_binary([B, A]),
-			case binstr:strpos(Packet, "\r\n.\r\n") of
+			case find_end_of_DATA(Packet) of
 				0 ->
 					% uh-oh
 					%io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
 					receive_data(Acc, Socket, 0, Transport, Size, MaxSize, Session, Options);
-				Index ->
+				{Index, Len} ->
 					String = binstr:substr(Packet, 1, Index - 1),
-					Rest = binstr:substr(Packet, Index+5),
+					Rest = binstr:substr(Packet, Index+Len),
 					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
 					Result = list_to_binary(lists:reverse([String | Acc2])),
 					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+
 					Session ! {receive_data, Result, Rest}
 			end;
 		{error, timeout} ->
@@ -775,6 +780,16 @@ receive_data(Acc, Socket, Transport, RecvSize, Size, MaxSize, Session, Options) 
 		{error, Reason} ->
 			io:format("receive error: ~p~n", [Reason]),
 			exit(receive_error)
+	end.
+
+find_end_of_DATA(Bin) ->
+	case binstr:strpos(Bin, <<"\r\n.\r\n">>) of
+		0 ->
+			case binstr:strpos(Bin, <<"\n.\n">>) of
+				0 -> 0;
+				Index -> {Index, 3}
+			end;
+		Index -> {Index, 5}
 	end.
 
 check_for_bare_crlf(Bin, Offset) ->
@@ -792,51 +807,19 @@ strip_bare_crlf(Bin, Offset) ->
 	Options = [{offset, Offset}, {return, binary}, global],
 	re:replace(re:replace(Bin, "(?<!\r)\n", "", Options), "\r(?!\n)", "", Options).
 
-check_bare_crlf(Binary, _, ignore, _) ->
-	Binary;
-check_bare_crlf(<<$\n, _Rest/binary>> = Bin, Prev, Op, Offset) when byte_size(Prev) > 0, Offset == 0 ->
-	% check if last character of previous was a CR
-	Lastchar = binstr:substr(Prev, -1),
-	case Lastchar of
-		<<"\r">> ->
-			% okay, check again for the rest
-			check_bare_crlf(Bin, <<>>, Op, 1);
-		_ when Op == false -> % not fixing or ignoring them
+check_bare_crlf(Bin, ignore) ->
+	Bin;
+check_bare_crlf(Bin, Op) ->
+	case check_for_bare_crlf(Bin, 0) of
+		true when Op == fix ->
+			fix_bare_crlf(Bin, 0);
+		true when Op == strip ->
+			strip_bare_crlf(Bin, 0);
+		true ->
 			error;
-		_ ->
-			% no dice
-			check_bare_crlf(Bin, <<>>, Op, 0)
-	end;
-check_bare_crlf(Binary, _Prev, Op, Offset) ->
-	Last = binstr:substr(Binary, -1),
-	% is the last character a CR?
-	case Last of
-		<<"\r">> ->
-			% okay, the last character is a CR, we have to assume the next packet contains the corresponding LF
-			NewBin = binstr:substr(Binary, 1, byte_size(Binary) -1),
-			case check_for_bare_crlf(NewBin, Offset) of
-				true when Op == fix ->
-					list_to_binary([fix_bare_crlf(NewBin, Offset), "\r"]);
-				true when Op == strip ->
-					list_to_binary([strip_bare_crlf(NewBin, Offset), "\r"]);
-				true ->
-					error;
-				false ->
-					Binary
-			end;
-		_ ->
-			case check_for_bare_crlf(Binary, Offset) of
-				true when Op == fix ->
-					fix_bare_crlf(Binary, Offset);
-				true when Op == strip ->
-					strip_bare_crlf(Binary, Offset);
-				true ->
-					error;
-				false ->
-					Binary
-			end
+		false ->
+			Bin
 	end.
-
 
 -ifdef(TEST).
 parse_encoded_address_test_() ->
@@ -1095,109 +1078,151 @@ smtp_session_test_() ->
 						end
 					}
 			end,
-%			fun({CSock, _Pid}) ->
-%					{"Sending DATA with a bare newline",
-%						fun() ->
-%								inet:setopts(CSock, [{active, once}]),
-%								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("220 localhost"++_Stuff,  Packet),
-%								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
-%								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 localhost\r\n",  Packet2),
-%								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
-%								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 "++_, Packet3),
-%								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
-%								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 "++_, Packet4),
-%								gen_tcp:send(CSock, "DATA\r\n"),
-%								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("354 "++_, Packet5),
-%								gen_tcp:send(CSock, "Subject: tls message\r\n"),
-%								gen_tcp:send(CSock, "To: <user@otherhost>\r\n"),
-%								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
-%								gen_tcp:send(CSock, "\r\n"),
-%								gen_tcp:send(CSock, "this\r\n"),
-%								gen_tcp:send(CSock, "body\r\n"),
-%								gen_tcp:send(CSock, "has\r\n"),
-%								gen_tcp:send(CSock, "a\r\n"),
-%								gen_tcp:send(CSock, "bare\n"),
-%								gen_tcp:send(CSock, "newline\r\n"),
-%								gen_tcp:send(CSock, "\r\n.\r\n"),
-%								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("451 "++_, Packet6),
-%						end
-%					}
-%			end,
-			%fun({CSock, _Pid}) ->
-%					{"Sending DATA with a bare CR",
-%						fun() ->
-%								inet:setopts(CSock, [{active, once}]),
-%								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("220 localhost"++_Stuff,  Packet),
-%								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
-%								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 localhost\r\n",  Packet2),
-%								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
-%								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 "++_, Packet3),
-%								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
-%								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 "++_, Packet4),
-%								gen_tcp:send(CSock, "DATA\r\n"),
-%								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("354 "++_, Packet5),
-%								gen_tcp:send(CSock, "Subject: tls message\r\n"),
-%								gen_tcp:send(CSock, "To: <user@otherhost>\r\n"),
-%								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
-%								gen_tcp:send(CSock, "\r\n"),
-%								gen_tcp:send(CSock, "this\r\n"),
-%								gen_tcp:send(CSock, "\rbody\r\n"),
-%								gen_tcp:send(CSock, "has\r\n"),
-%								gen_tcp:send(CSock, "a\r\n"),
-%								gen_tcp:send(CSock, "bare\r"),
-%								gen_tcp:send(CSock, "CR\r\n"),
-%								gen_tcp:send(CSock, "\r\n.\r\n"),
-%								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("451 "++_, Packet6),
-%						end
-%					}
-%			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA exceeding SIZE",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet3),
+								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet4),
+								gen_tcp:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("354 "++_, Packet5),
+								gen_tcp:send(CSock, "Subject: tls message\r\n"),
+								gen_tcp:send(CSock, "To: <user@otherhost>\r\n"),
+								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
+								gen_tcp:send(CSock, "\r\n"),
+								Body = [[lists:duplicate(70, "a"), "\r\n"] || _ <- lists:seq(1, 9500)],
+								gen_tcp:send(CSock, Body),
+								gen_tcp:send(CSock, "\r\n.\r\nQUIT\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("552 "++_, Packet6),
+								%gen_tcp:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet7} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("221 "++_, Packet7)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with a bare newline",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet3),
+								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet4),
+								gen_tcp:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("354 "++_, Packet5),
+								gen_tcp:send(CSock, "Subject: tls message\r\n"),
+								gen_tcp:send(CSock, "To: <user@otherhost>\r\n"),
+								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
+								gen_tcp:send(CSock, "\r\n"),
+								gen_tcp:send(CSock, "this\r\n"),
+								gen_tcp:send(CSock, "body\r\n"),
+								gen_tcp:send(CSock, "has\r\n"),
+								gen_tcp:send(CSock, "a\r\n"),
+								gen_tcp:send(CSock, "bare\n"),
+								gen_tcp:send(CSock, "newline\r\n"),
+								gen_tcp:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("451 "++_, Packet6),
+								gen_tcp:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet7} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("221 "++_, Packet7)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with a bare CR",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet3),
+								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet4),
+								gen_tcp:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("354 "++_, Packet5),
+								gen_tcp:send(CSock, "Subject: tls message\r\n"),
+								gen_tcp:send(CSock, "To: <user@otherhost>\r\n"),
+								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
+								gen_tcp:send(CSock, "\r\n"),
+								gen_tcp:send(CSock, "this\r\n"),
+								gen_tcp:send(CSock, "\rbody\r\n"),
+								gen_tcp:send(CSock, "has\r\n"),
+								gen_tcp:send(CSock, "a\r\n"),
+								gen_tcp:send(CSock, "bare\r"),
+								gen_tcp:send(CSock, "CR\r\n"),
+								gen_tcp:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("451 "++_, Packet6),
+								gen_tcp:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet7} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("221 "++_, Packet7)
+						end
+					}
+			end,
 
-%			fun({CSock, _Pid}) ->
-%					{"Sending DATA with a bare newline in the headers",
-%						fun() ->
-%								inet:setopts(CSock, [{active, once}]),
-%								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("220 localhost"++_Stuff,  Packet),
-%								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
-%								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 localhost\r\n",  Packet2),
-%								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
-%								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 "++_, Packet3),
-%								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
-%								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("250 "++_, Packet4),
-%								gen_tcp:send(CSock, "DATA\r\n"),
-%								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("354 "++_, Packet5),
-%								gen_tcp:send(CSock, "Subject: tls message\r\n"),
-%								gen_tcp:send(CSock, "To: <user@otherhost>\n"),
-%								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
-%								gen_tcp:send(CSock, "\r\n"),
-%								gen_tcp:send(CSock, "this\r\n"),
-%								gen_tcp:send(CSock, "body\r\n"),
-%								gen_tcp:send(CSock, "has\r\n"),
-%								gen_tcp:send(CSock, "no\r\n"),
-%								gen_tcp:send(CSock, "bare\r\n"),
-%								gen_tcp:send(CSock, "newlines\r\n"),
-%								gen_tcp:send(CSock, "\r\n.\r\n"),
-%								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
-%								?assertMatch("451 "++_, Packet6),
-%						end
-%					}
-%			end,
+			fun({CSock, _Pid}) ->
+					{"Sending DATA with a bare newline in the headers",
+						fun() ->
+								inet:setopts(CSock, [{active, once}]),
+								receive {tcp, CSock, Packet} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								gen_tcp:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 localhost\r\n",  Packet2),
+								gen_tcp:send(CSock, "MAIL FROM: <user@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet3} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet3),
+								gen_tcp:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("250 "++_, Packet4),
+								gen_tcp:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("354 "++_, Packet5),
+								gen_tcp:send(CSock, "Subject: tls message\r\n"),
+								gen_tcp:send(CSock, "To: <user@otherhost>\n"),
+								gen_tcp:send(CSock, "From: <user@somehost.com>\r\n"),
+								gen_tcp:send(CSock, "\r\n"),
+								gen_tcp:send(CSock, "this\r\n"),
+								gen_tcp:send(CSock, "body\r\n"),
+								gen_tcp:send(CSock, "has\r\n"),
+								gen_tcp:send(CSock, "no\r\n"),
+								gen_tcp:send(CSock, "bare\r\n"),
+								gen_tcp:send(CSock, "newlines\r\n"),
+								gen_tcp:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("451 "++_, Packet6),
+								gen_tcp:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet7} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("221 "++_, Packet7)
+						end
+					}
+			end,
 			fun({CSock, _Pid}) ->
 					{"Sending DATA with bare newline on first line of body",
 						fun() ->
@@ -1228,7 +1253,10 @@ smtp_session_test_() ->
 								gen_tcp:send(CSock, "newlines\r\n"),
 								gen_tcp:send(CSock, "\r\n.\r\n"),
 								receive {tcp, CSock, Packet6} -> inet:setopts(CSock, [{active, once}]) end,
-								?assertMatch("451 "++_, Packet6)
+								?assertMatch("451 "++_, Packet6),
+								gen_tcp:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet7} -> inet:setopts(CSock, [{active, once}]) end,
+								?assertMatch("221 "++_, Packet7)
 						end
 					}
 			end
@@ -2172,49 +2200,37 @@ stray_newline_test_() ->
 	[
 		{"Error out by default",
 			fun() ->
-					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, false, 0)),
-					?assertEqual(error, check_bare_crlf(<<"foo\n">>, <<>>, false, 0)),
-					?assertEqual(error, check_bare_crlf(<<"fo\ro\n">>, <<>>, false, 0)),
-					?assertEqual(error, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, false, 0)),
-					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, false, 0)),
-					?assertEqual(<<"foo\r">>, check_bare_crlf(<<"foo\r">>, <<>>, false, 0))
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, false)),
+					?assertEqual(error, check_bare_crlf(<<"foo\n">>, false)),
+					?assertEqual(error, check_bare_crlf(<<"fo\ro\n">>, false)),
+					?assertEqual(error, check_bare_crlf(<<"fo\ro\n\r">>, false)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, false)),
+					?assertEqual(error, check_bare_crlf(<<"foo\r">>, false))
 			end
 		},
 		{"Fixing them should work",
 			fun() ->
-					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, fix, 0)),
-					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\n">>, <<>>, fix, 0)),
-					?assertEqual(<<"fo\r\no\r\n">>, check_bare_crlf(<<"fo\ro\n">>, <<>>, fix, 0)),
-					?assertEqual(<<"fo\r\no\r\n\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, fix, 0)),
-					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, fix, 0))
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, fix)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\n">>, fix)),
+					?assertEqual(<<"fo\r\no\r\n">>, check_bare_crlf(<<"fo\ro\n">>, fix)),
+					?assertEqual(<<"fo\r\no\r\n\r\n">>, check_bare_crlf(<<"fo\ro\n\r">>, fix)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, fix))
 			end
 		},	
 		{"Stripping them should work",
 			fun() ->
-					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, strip, 0)),
-					?assertEqual(<<"foo">>, check_bare_crlf(<<"fo\ro\n">>, <<>>, strip, 0)),
-					?assertEqual(<<"foo\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, strip, 0)),
-					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, strip, 0))
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, strip)),
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"fo\ro\n">>, strip)),
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"fo\ro\n\r">>, strip)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, strip))
 			end
 		},
 		{"Ignoring them should work",
 			fun() ->
-					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, ignore, 0)),
-					?assertEqual(<<"fo\ro\n">>, check_bare_crlf(<<"fo\ro\n">>, <<>>, ignore, 0)),
-					?assertEqual(<<"fo\ro\n\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, ignore, 0)),
-					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, ignore, 0))
-			end
-		},
-		{"Leading bare LFs should check the previous line",
-			fun() ->
-					?assertEqual(<<"\nfoo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r">>, false, 0)),
-					?assertEqual(<<"\r\nfoo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r\n">>, fix, 0)),
-					?assertEqual(<<"\nfoo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r">>, fix, 0)),
-					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r\n">>, strip, 0)),
-					?assertEqual(<<"\nfoo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r">>, strip, 0)),
-					?assertEqual(<<"\nfoo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r\n">>, ignore, 0)),
-					?assertEqual(error, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r\n">>, false, 0)),
-					?assertEqual(<<"\nfoo\r\n">>, check_bare_crlf(<<"\nfoo\r\n">>, <<"bar\r">>, false, 0))
+					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, ignore)),
+					?assertEqual(<<"fo\ro\n">>, check_bare_crlf(<<"fo\ro\n">>, ignore)),
+					?assertEqual(<<"fo\ro\n\r">>, check_bare_crlf(<<"fo\ro\n\r">>, ignore)),
+					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, ignore))
 			end
 		}
 	].

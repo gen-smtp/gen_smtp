@@ -42,7 +42,8 @@
 		all/2,
 		reverse/1,
 		reverse_str_to_bin/1,
-		join/2
+		join/2,
+		last/1
 ]).
 
 -spec strchr(Bin :: binary(), C :: char()) -> non_neg_integer().
@@ -327,3 +328,12 @@ join([H], _Glue, Acc) ->
 	list_to_binary(lists:reverse([H | Acc]));
 join([H|T], Glue, Acc) ->
 	join(T, Glue, [Glue, H | Acc]).
+
+last(Bin) ->
+	try binary:last(Bin) of
+		X -> <<X>>
+	catch
+		_:_ ->
+			binstr:substr(Bin, -1)
+	end.
+
