@@ -143,9 +143,9 @@ try_smtp_sessions([{Distance, Host} | Tail], Email, Options, RetryList) ->
 	try do_smtp_session(Host, Email, Options) of
 		Res -> Res
 	catch
-		throw:{permanant_failure, Message} ->
-			% permanant failure means no retries, and don't even continue with other hosts
-			{error, no_more_hosts, {permanant_failure, Host, Message}};
+		throw:{permanent_failure, Message} ->
+			% permanent failure means no retries, and don't even continue with other hosts
+			{error, no_more_hosts, {permanent_failure, Host, Message}};
 		throw:{FailureType, Message} ->
 			case proplists:get_value(Host, RetryList) of
 				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
@@ -211,7 +211,7 @@ try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions) ->
 		{ok, Msg} ->
 			%io:format("Mail FROM rejected: ~p~n", [Msg]),
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end;
 try_MAIL_FROM(From, Socket, Extensions) ->
 	% someone was bad and didn't put in the angle brackets
@@ -234,7 +234,7 @@ try_RCPT_TO(["<" ++ _ = To | Tail], Socket, Extensions) ->
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end;
 try_RCPT_TO([To | Tail], Socket, Extensions) ->
 	% someone was bad and didn't put in the angle brackets
@@ -256,14 +256,14 @@ try_DATA(Body, Socket, _Extensions) ->
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
 					quit(Socket),
-					throw({permanant_failure, Msg})
+					throw({permanent_failure, Msg})
 			end;
 		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end.
 
 -spec try_AUTH(Socket :: socket:socket(), Options :: list(), AuthTypes :: [string()]) -> boolean().
@@ -305,7 +305,7 @@ try_AUTH(Socket, Options, AuthTypes) ->
 					case proplists:get_value(auth, Options) of
 						always ->
 							quit(Socket),
-							erlang:throw({permanant_failure, auth_failed});
+							erlang:throw({permanent_failure, auth_failed});
 						_ ->
 							false
 					end;
@@ -449,7 +449,7 @@ do_STARTTLS(Socket, Options) ->
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end.
 
 %% try connecting to a host
@@ -484,7 +484,7 @@ connect(Host, Options) ->
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
 					quit(Socket),
-					throw({permanant_failure, Msg})
+					throw({permanent_failure, Msg})
 			end;
 		{error, Reason} ->
 			throw({network_failure, {error, Reason}})
@@ -912,7 +912,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-hostname\r\n250-AUTH GSSAPI\r\n250 8BITMIME\r\n"),
 								?assertEqual({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
-								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, no_more_hosts, {permanant_failure, _, auth_failed}}, Error) end,
+								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, no_more_hosts, {permanent_failure, _, auth_failed}}, Error) end,
 								ok
 						end
 					}
