@@ -660,6 +660,11 @@ parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $a, H =< $
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % lowercase letters
 parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H =:= $-; H =:= $.; H =:= $_ ->
 	parse_encoded_address(Tail, [H | Acc], {false, AB}); % dash, dot, underscore
+% Allowed characters in the local name: ! # $ % & ' * + - / = ?  ^ _ ` . { | } ~
+parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H =:= $+;
+ 	H =:= $!; H =:= $#; H =:= $$; H =:= $%; H =:= $&; H =:= $'; H =:= $*; H =:= $=;
+	H =:= $/; H =:= $?; H =:= $^; H =:= $`; H =:= ${; H =:= $|; H =:= $}; H =:= $~ ->
+	parse_encoded_address(Tail, [H | Acc], {false, AB}); % other characters
 parse_encoded_address(_, _Acc, {false, _AB}) ->
 	error;
 parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
@@ -845,7 +850,9 @@ parse_encoded_address_test_() ->
 					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\\God@heaven.af.mil>">>)),
 					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\"God\"@heaven.af.mil>">>)),
 					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<@gateway.af.mil,@uucp.local:\"\\G\\o\\d\"@heaven.af.mil>">>)),
-					?assertEqual({<<"God2@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God2@heaven.af.mil>">>))
+					?assertEqual({<<"God2@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God2@heaven.af.mil>">>)),
+					?assertEqual({<<"God+extension@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God+extension@heaven.af.mil>">>)),
+					?assertEqual({<<"God~*$@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God~*$@heaven.af.mil>">>))
 			end
 		},
 		{"Addresses that are sorta valid should parse",
