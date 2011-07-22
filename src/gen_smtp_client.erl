@@ -143,9 +143,9 @@ try_smtp_sessions([{Distance, Host} | Tail], Email, Options, RetryList) ->
 	try do_smtp_session(Host, Email, Options) of
 		Res -> Res
 	catch
-		throw:{permanant_failure, Message} ->
-			% permanant failure means no retries, and don't even continue with other hosts
-			{error, no_more_hosts, {permanant_failure, Host, Message}};
+		throw:{permanent_failure, Message} ->
+			% permanent failure means no retries, and don't even continue with other hosts
+			{error, no_more_hosts, {permanent_failure, Host, Message}};
 		throw:{FailureType, Message} ->
 			case proplists:get_value(Host, RetryList) of
 				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
@@ -211,7 +211,7 @@ try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions) ->
 		{ok, Msg} ->
 			%io:format("Mail FROM rejected: ~p~n", [Msg]),
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end;
 try_MAIL_FROM(From, Socket, Extensions) ->
 	% someone was bad and didn't put in the angle brackets
@@ -234,7 +234,7 @@ try_RCPT_TO(["<" ++ _ = To | Tail], Socket, Extensions) ->
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end;
 try_RCPT_TO([To | Tail], Socket, Extensions) ->
 	% someone was bad and didn't put in the angle brackets
@@ -256,14 +256,14 @@ try_DATA(Body, Socket, _Extensions) ->
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
 					quit(Socket),
-					throw({permanant_failure, Msg})
+					throw({permanent_failure, Msg})
 			end;
 		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end.
 
 -spec try_AUTH(Socket :: socket:socket(), Options :: list(), AuthTypes :: [string()]) -> boolean().
@@ -305,7 +305,7 @@ try_AUTH(Socket, Options, AuthTypes) ->
 					case proplists:get_value(auth, Options) of
 						always ->
 							quit(Socket),
-							erlang:throw({permanant_failure, auth_failed});
+							erlang:throw({permanent_failure, auth_failed});
 						_ ->
 							false
 					end;
@@ -394,11 +394,31 @@ do_AUTH_each(Socket, Username, Password, [_Type | Tail]) ->
 
 -spec try_EHLO(Socket :: socket:socket(), Options :: list()) -> {ok, list()}.
 try_EHLO(Socket, Options) ->
-	socket:send(Socket, ["EHLO ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
-	%% TODO handle fallback to HELO!
-	{ok, Reply} = read_possible_multiline_reply(Socket),
-	Extensions = parse_extensions(Reply),
-	{ok, Extensions}.
+	ok = socket:send(Socket, ["EHLO ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
+	case read_possible_multiline_reply(Socket) of
+		{ok, <<"500", _Rest/binary>>} ->
+			% Unrecognized command, fall back to HELO
+			try_HELO(Socket, Options);
+		{ok, <<"4", _Rest/binary>> = Msg} ->
+			quit(Socket),
+			throw({temporary_failure, Msg});
+		{ok, Reply} ->
+			{ok, parse_extensions(Reply)}
+	end.
+
+-spec try_HELO(Socket :: socket:socket(), Options :: list()) -> {ok, list()}.
+try_HELO(Socket, Options) ->
+	ok = socket:send(Socket, ["HELO ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
+	case read_possible_multiline_reply(Socket) of
+		{ok, <<"250", _Rest/binary>>} ->
+			{ok, []};
+		{ok, <<"4", _Rest/binary>> = Msg} ->
+			quit(Socket),
+			throw({temporary_failure, Msg});
+		{ok, Msg} ->
+			quit(Socket),
+			throw({permanent_failure, Msg})
+	end.
 
 % check if we should try to do TLS
 -spec try_STARTTLS(Socket :: socket:socket(), Options :: list(), Extensions :: list()) -> {socket:socket(), list()}.
@@ -449,7 +469,7 @@ do_STARTTLS(Socket, Options) ->
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanant_failure, Msg})
+			throw({permanent_failure, Msg})
 	end.
 
 %% try connecting to a host
@@ -484,7 +504,7 @@ connect(Host, Options) ->
 					throw({temporary_failure, Msg});
 				{ok, Msg} ->
 					quit(Socket),
-					throw({permanant_failure, Msg})
+					throw({permanent_failure, Msg})
 			end;
 		{error, Reason} ->
 			throw({network_failure, {error, Reason}})
@@ -682,6 +702,31 @@ session_start_test_() ->
 								socket:send(Y, "250-server.example.com EHLO\r\n250-AUTH LOGIN PLAIN\r\n421 too busy\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, socket:recv(Y, 0, 1000)),
 								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, retries_exceeded, _}, Error) end,
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"retry with HELO when EHLO not accepted",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 \r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "500 5.3.3 Unrecognized command\r\n"),
+								?assertMatch({ok, "HELO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 Some banner\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "DATA\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "354 ok\r\n"),
+								?assertMatch({ok, "hello world\r\n"}, socket:recv(X, 0, 1000)),
+								?assertMatch({ok, ".\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
 								ok
 						end
 					}
@@ -912,7 +957,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-hostname\r\n250-AUTH GSSAPI\r\n250 8BITMIME\r\n"),
 								?assertEqual({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
-								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, no_more_hosts, {permanant_failure, _, auth_failed}}, Error) end,
+								receive {'DOWN', Monitor, _, _, Error} -> ?assertMatch({error, no_more_hosts, {permanent_failure, _, auth_failed}}, Error) end,
 								ok
 						end
 					}
