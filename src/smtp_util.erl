@@ -27,7 +27,6 @@
 		mxlookup/1, guess_FQDN/0, compute_cram_digest/2, get_cram_string/1,
 		trim_crlf/1, rfc5322_timestamp/0, zone/0, generate_message_id/0,
 		generate_message_boundary/0]).
--include_lib("kernel/src/inet_dns.hrl").
 
 %% @doc returns a sorted list of mx servers for `Domain', lowest distance first
 mxlookup(Domain) ->
@@ -44,7 +43,7 @@ mxlookup(Domain) ->
 		_ ->
 			ok
 	end,
-	case inet_res:lookup(Domain, in, ?S_MX) of
+	case inet_res:lookup(Domain, in, mx) of
 		[] ->
 			[];
 		Result ->
