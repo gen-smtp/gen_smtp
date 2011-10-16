@@ -16,6 +16,7 @@
     smtp_server_example
    ]
   },
+  {registered, []},
   {applications, [kernel, stdlib]}
  ]
 }.
