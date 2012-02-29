@@ -567,7 +567,7 @@ handle_request({<<"VRFY">>, Address}, #state{module= Module, socket = Socket, ca
 			socket:send(Socket, "501 Syntax: VRFY username/address\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, tls=false, extensions = Extensions, options = Options} = State) ->
+handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, tls=false, extensions = Extensions, callbackstate = OldCallbackState, options = Options} = State) ->
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			socket:send(Socket, "220 OK\r\n"),
@@ -592,7 +592,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, tls=false, extens
 					%io:format("SSL negotiation sucessful~n"),
 					{ok, State#state{socket = NewSocket, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
-							tls=true}};
+							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
 				{error, Reason} ->
 					io:format("SSL handshake failed : ~p~n", [Reason]),
 					socket:send(Socket, "454 TLS negotiation failed\r\n"),
