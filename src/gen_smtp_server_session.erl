@@ -635,7 +635,7 @@ parse_encoded_address(<<>>, Acc, {_Quotes, false}) ->
 	{list_to_binary(lists:reverse(Acc)), <<>>};
 parse_encoded_address(<<>>, _Acc, {_Quotes, true}) ->
 	error; % began with angle brackets but didn't end with them
-parse_encoded_address(_, Acc, _) when length(Acc) > 129 ->
+parse_encoded_address(_, Acc, _) when length(Acc) > 320 ->
 	error; % too long
 parse_encoded_address(<<"\\", Tail/binary>>, Acc, Flags) ->
 	<<H, NewTail/binary>> = Tail,
