@@ -668,7 +668,7 @@ encode_headers(Headers) ->
 encode_headers([], EncodedHeaders) ->
 	EncodedHeaders;
 encode_headers([{Key, Value}|T] = _Headers, EncodedHeaders) ->
-	encode_headers(T, encode_folded_header(list_to_binary([Key,": ",Value]),
+	encode_headers(T, encode_folded_header(list_to_binary([Key,": ",encode_header_value(Key, Value)]),
 			EncodedHeaders)).
 
 encode_folded_header(Header, HeaderLines) ->
@@ -687,6 +687,11 @@ encode_folded_header(Header, HeaderLines) ->
 			HeaderLines ++ [ binstr:substr(Header, 1, Index) ] ++
 				encode_folded_header(TabbedRemainder, [])
 	end.
+
+encode_header_value(<<"Subject">>, Value) ->
+    rfc2047_utf8_encode(Value);
+encode_header_value(_, Value) ->
+    Value.
 
 encode_component(_Type, _SubType, Headers, Params, Body) ->
 	if
@@ -824,6 +829,39 @@ fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->
 	<<"UTF-8">>;
 fix_encoding(Encoding) ->
 	Encoding.
+
+
+%% @doc Encode a binary or list according to RFC 2047. Input is
+%% assumed to be in UTF-8 encoding.
+rfc2047_utf8_encode(B) when is_binary(B) ->
+	rfc2047_utf8_encode(binary_to_list(B));
+rfc2047_utf8_encode([]) -> 
+	[];
+rfc2047_utf8_encode(Text) ->
+    rfc2047_utf8_encode(Text, Text).
+
+%% Don't escape when all characters are ASCII printable
+rfc2047_utf8_encode([], Text) ->
+    Text;
+rfc2047_utf8_encode([H|T], Text) when H >= 32 andalso H =< 126 andalso H /= $= ->
+    rfc2047_utf8_encode(T, Text);
+rfc2047_utf8_encode(_, Text) ->
+    "=?UTF-8?Q?" ++ rfc2047_utf8_encode(Text, [], 0) ++ "?=".
+
+rfc2047_utf8_encode([], Acc, _WordLen) ->
+    lists:reverse(Acc);
+rfc2047_utf8_encode(T, Acc, WordLen) when WordLen >= 55 ->
+    %% Make sure that the individual encoded words are not longer than 76 chars (including charset etc)
+    rfc2047_utf8_encode(T, [$?,$Q,$?,$8,$-,$F,$T,$U,$?,$=,32,10,13,$=,$?|Acc], 0);
+rfc2047_utf8_encode([C|T], Acc, WordLen) when C > 32 andalso C < 127 andalso C /= 32 
+    andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
+    rfc2047_utf8_encode(T, [C|Acc], WordLen+1);
+rfc2047_utf8_encode([C|T], Acc, WordLen) ->
+    rfc2047_utf8_encode(T, [hex(C rem 16), hex(C div 16), $= | Acc], WordLen+3).
+
+hex(N) when N >= 10 -> N + $A - 10;
+hex(N) -> N + $0.
+
 
 -ifdef(TEST).
 
@@ -1485,6 +1523,23 @@ encoding_test_() ->
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
 					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					?assertEqual(Result, encode(Email))
+			end
+		},
+		{"Email with UTF-8 characters in subject",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"Subject">>, <<"Fræderik Hølljen">>},
+							{<<"From">>, <<"me@example.com">>},
+							{<<"To">>, <<"you@example.com">>},
+							{<<"Message-ID">>, <<"<abcd@example.com>">>},
+							{<<"MIME-Version">>, <<"1.0">>},
+							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
+						[{<<"content-type-params">>,
+								[{<<"charset">>,<<"US-ASCII">>}],
+								{<<"disposition">>,<<"inline">>}}],
+						<<"This is a plain message">>},
+					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: me@example.com\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
 		},
