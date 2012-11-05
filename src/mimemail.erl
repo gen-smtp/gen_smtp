@@ -1510,6 +1510,12 @@ rfc2047_decode_test_() ->
 			fun() ->
 					?assertEqual(<<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>, Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>">>, decode_header(<<"=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>, =?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>">>, "utf-8"))
 			end
+		},
+		{"decode something I encoded myself",
+			fun() ->
+				A = <<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>">>,
+				?assertEqual(A, decode_header(list_to_binary(rfc2047_utf8_encode(A)), "utf-8"))
+			end
 		}
 	].
 
