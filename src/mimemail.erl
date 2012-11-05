@@ -688,10 +688,15 @@ encode_folded_header(Header, HeaderLines) ->
 				encode_folded_header(TabbedRemainder, [])
 	end.
 
-encode_header_value(<<"Subject">>, Value) ->
-    rfc2047_utf8_encode(Value);
+encode_header_value(H, Value) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc">>;
+								   H =:= <<"Reply-To">>; H =:= <<"From">> ->
+	{ok, Addresses} = smtp_util:parse_rfc822_addresses(Value),
+	{Names, Emails} = lists:unzip(Addresses),
+	NewNames = lists:map(fun rfc2047_utf8_encode/1, Names),
+	smtp_util:combine_rfc822_addresses(lists:zip(NewNames, Emails));
+
 encode_header_value(_, Value) ->
-    Value.
+	rfc2047_utf8_encode(Value).
 
 encode_component(_Type, _SubType, Headers, Params, Body) ->
 	if
@@ -833,6 +838,7 @@ fix_encoding(Encoding) ->
 
 %% @doc Encode a binary or list according to RFC 2047. Input is
 %% assumed to be in UTF-8 encoding.
+rfc2047_utf8_encode(undefined) -> undefined;
 rfc2047_utf8_encode(B) when is_binary(B) ->
 	rfc2047_utf8_encode(binary_to_list(B));
 rfc2047_utf8_encode([]) -> 
@@ -843,7 +849,7 @@ rfc2047_utf8_encode(Text) ->
 %% Don't escape when all characters are ASCII printable
 rfc2047_utf8_encode([], Text) ->
     Text;
-rfc2047_utf8_encode([H|T], Text) when H >= 32 andalso H =< 126 andalso H /= $= ->
+rfc2047_utf8_encode([H|T], Text) when H >= 32 andalso H =< 126 ->
     rfc2047_utf8_encode(T, Text);
 rfc2047_utf8_encode(_, Text) ->
     "=?UTF-8?Q?" ++ rfc2047_utf8_encode(Text, [], 0) ++ "?=".
@@ -1526,11 +1532,11 @@ encoding_test_() ->
 					?assertEqual(Result, encode(Email))
 			end
 		},
-		{"Email with UTF-8 characters in subject",
+		{"Email with UTF-8 characters",
 			fun() ->
 					Email = {<<"text">>, <<"plain">>, [
 							{<<"Subject">>, <<"Fræderik Hølljen">>},
-							{<<"From">>, <<"me@example.com">>},
+							{<<"From">>, <<"Fræderik Hølljen <me@example.com>">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Message-ID">>, <<"<abcd@example.com>">>},
 							{<<"MIME-Version">>, <<"1.0">>},
@@ -1539,7 +1545,7 @@ encoding_test_() ->
 								[{<<"charset">>,<<"US-ASCII">>}],
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
-					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: me@example.com\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
 		},
