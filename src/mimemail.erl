@@ -79,12 +79,6 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
 decode(OrigHeaders, Body, Options) ->
 	%io:format("headers: ~p~n", [Headers]),
 	Encoding = proplists:get_value(encoding, Options, none),
-	case whereis(iconv) of
-		undefined when Encoding =/= none ->
-			{ok, _Pid} = iconv:start();
-		_ ->
-			ok
-	end,
 
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
