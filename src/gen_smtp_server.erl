@@ -137,16 +137,17 @@ init([Module, Configurations]) ->
 					Protocol = proplists:get_value(protocol, NewConfig),
 					SessionOptions = proplists:get_value(sessionoptions, NewConfig, []),
 					error_logger:info_msg("~p starting at ~p~n", [?MODULE, node()]),
-					error_logger:info_msg("~p listening on ~p:~p via ~p~n", [?MODULE, IP, Port, Protocol]),
 					process_flag(trap_exit, true),
 					ListenOptions = [binary, {ip, IP}, Family],
 					case socket:listen(Protocol, Port, ListenOptions) of
 						{ok, ListenSocket} -> %%Create first accepting process
+							error_logger:info_msg("~p listening on ~p:~p via ~p~n", [?MODULE, IP, Port, Protocol]),
 							socket:begin_inet_async(ListenSocket),
 							#listener{port = socket:extract_port_from_socket(ListenSocket),
 								hostname = Hostname, sessionoptions = SessionOptions,
 								socket = ListenSocket, listenoptions = ListenOptions};
 						{error, Reason} ->
+							error_logger:error_msg("~p could not listen on ~p:~p. Error: ~p~n", [?MODULE, IP, Port, Reason]),
 							exit({init, Reason})
 					end
 			end || Config <- Configurations],
