@@ -120,6 +120,7 @@ sessions(Pid) ->
 %% @see gen_smtp_server_session
 -spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()}).
 init([Module, Configurations]) ->
+	process_flag(trap_exit, true),
 	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}},
 		{port, ?PORT}, {protocol, tcp}, {family, inet}],
 	try
@@ -127,6 +128,7 @@ init([Module, Configurations]) ->
 			[FirstConfig|_] when is_list(FirstConfig) -> ok;
 			_ -> exit({init,"Please start gen_smtp_server with an options argument formatted as a list of proplists"})
 		end,
+	        error_logger:info_msg("~p starting at ~p~n", [?MODULE, node()]),
 		Listeners = [
 			begin
 					NewConfig = lists:ukeymerge(1, lists:sort(Config), lists:sort(DefaultConfig)),
@@ -136,17 +138,16 @@ init([Module, Configurations]) ->
 					Hostname = proplists:get_value(domain, NewConfig),
 					Protocol = proplists:get_value(protocol, NewConfig),
 					SessionOptions = proplists:get_value(sessionoptions, NewConfig, []),
-					error_logger:info_msg("~p starting at ~p~n", [?MODULE, node()]),
-					error_logger:info_msg("~p listening on ~p:~p via ~p~n", [?MODULE, IP, Port, Protocol]),
-					process_flag(trap_exit, true),
 					ListenOptions = [binary, {ip, IP}, Family],
 					case socket:listen(Protocol, Port, ListenOptions) of
 						{ok, ListenSocket} -> %%Create first accepting process
+							error_logger:info_msg("~p listening on ~p:~p via ~p~n", [?MODULE, IP, Port, Protocol]),
 							socket:begin_inet_async(ListenSocket),
 							#listener{port = socket:extract_port_from_socket(ListenSocket),
 								hostname = Hostname, sessionoptions = SessionOptions,
 								socket = ListenSocket, listenoptions = ListenOptions};
 						{error, Reason} ->
+							error_logger:error_msg("~p could not listen on ~p:~p via ~p. Error: ~p~n", [?MODULE, IP, Port, Protocol, Reason]),
 							exit({init, Reason})
 					end
 			end || Config <- Configurations],
