@@ -350,12 +350,14 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 	socket:send(Socket, "AUTH LOGIN\r\n"),
 	case read_possible_multiline_reply(Socket) of
-		{ok, <<"334 VXNlcm5hbWU6\r\n">>} ->
+		%% base64 Username: or username:
+		{ok, Prompt} when Prompt == <<"334 VXNlcm5hbWU6\r\n">>; Prompt == <<"334 dXNlcm5hbWU6\r\n">> ->
 			%io:format("username prompt~n"),
 			U = base64:encode(Username),
 			socket:send(Socket, [U,"\r\n"]),
 			case read_possible_multiline_reply(Socket) of
-				{ok, <<"334 UGFzc3dvcmQ6\r\n">>} ->
+				%% base64 Password: or password:
+				{ok, Prompt2} when Prompt2 == <<"334 UGFzc3dvcmQ6\r\n">>; Prompt2 == <<"334 cGFzc3dvcmQ6\r\n">> ->
 					%io:format("password prompt~n"),
 					P = base64:encode(Password),
 					socket:send(Socket, [P,"\r\n"]),
@@ -872,6 +874,28 @@ session_start_test_() ->
 								UserString = binary_to_list(base64:encode("user")),
 								?assertEqual({ok, UserString++"\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "334 UGFzc3dvcmQ6\r\n"),
+								PassString = binary_to_list(base64:encode("pass")),
+								?assertEqual({ok, PassString++"\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "235 ok\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"AUTH LOGIN should work with lowercase prompts",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250-hostname\r\n250 AUTH LOGIN\r\n"),
+								?assertEqual({ok, "AUTH LOGIN\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "334 dXNlcm5hbWU6\r\n"),
+								UserString = binary_to_list(base64:encode("user")),
+								?assertEqual({ok, UserString++"\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "334 cGFzc3dvcmQ6\r\n"),
 								PassString = binary_to_list(base64:encode("pass")),
 								?assertEqual({ok, PassString++"\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "235 ok\r\n"),
