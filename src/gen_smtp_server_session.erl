@@ -880,9 +880,9 @@ parse_encoded_address_test_() ->
 					?assertEqual(error, parse_encoded_address(<<"God@heaven.af.mil>">>))
 			end
 		},
-		{"Address longer than 129 character should fail",
+		{"Address longer than 320 characters should fail",
 			fun() ->
-					MegaAddress = list_to_binary(lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ "@" ++ lists:seq(97, 122) ++ lists:seq(97, 122)),
+					MegaAddress = list_to_binary(lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ "@" ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122)),
 					?assertEqual(error, parse_encoded_address(MegaAddress))
 			end
 		},
