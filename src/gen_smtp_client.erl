@@ -477,7 +477,7 @@ do_STARTTLS(Socket, Options) ->
 					%NewSocket;
 					{ok, Extensions} = try_EHLO(NewSocket, Options),
 					{NewSocket, Extensions};
-				{'EXIT', _Pid, Reason} ->
+				{'EXIT', Reason} ->
 					quit(Socket),
 					error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
 					erlang:throw({temporary_failure, tls_failed});
