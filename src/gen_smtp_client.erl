@@ -138,42 +138,59 @@ send_it(Email, Options) ->
 	try_smtp_sessions(Hosts, Email, Options, []).
 
 -spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Email :: email(), Options :: list(), RetryList :: list()) -> binary() | {'error', any(), any()}.
-try_smtp_sessions([{Distance, Host} | Tail], Email, Options, RetryList) ->
-	Retries = proplists:get_value(retries, Options),
+try_smtp_sessions([{_Distance, Host} | _Tail] = Hosts, Email, Options, RetryList) ->
 	try do_smtp_session(Host, Email, Options) of
 		Res -> Res
 	catch
-		throw:{permanent_failure, Message} ->
-			% permanent failure means no retries, and don't even continue with other hosts
-			{error, no_more_hosts, {permanent_failure, Host, Message}};
-		throw:{FailureType, Message} ->
-			case proplists:get_value(Host, RetryList) of
-				RetryCount when is_integer(RetryCount), RetryCount >= Retries ->
-					% out of chances
-					%io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
-					NewHosts = Tail,
-					NewRetryList = lists:keydelete(Host, 1, RetryList);
-				RetryCount when is_integer(RetryCount) ->
-					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
-					NewHosts = Tail ++ [{Distance, Host}],
-					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, RetryCount + 1}];
-				_ when Retries == 0 ->
-					% done retrying completely
-					NewHosts = Tail,
-					NewRetryList = lists:keydelete(Host, 1, RetryList);
-				_ ->
-					% otherwise...
-					%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
-					NewHosts = Tail ++ [{Distance, Host}],
-					NewRetryList = lists:keydelete(Host, 1, RetryList) ++ [{Host, 1}]
-			end,
-			case NewHosts of
-				[] ->
-					{error, retries_exceeded, {FailureType, Host, Message}};
-				_ ->
-					try_smtp_sessions(NewHosts, Email, Options, NewRetryList)
-			end
+		throw:FailMsg ->
+			handle_smtp_throw(FailMsg, Hosts, Email, Options, RetryList)
 	end.
+
+handle_smtp_throw({permanent_failure, Message}, [{_Distance, Host} | _Tail], _Email, _Options, _RetryList) ->
+	% permanent failure means no retries, and don't even continue with other hosts
+	{error, no_more_hosts, {permanent_failure, Host, Message}};
+handle_smtp_throw({temporary_failure, tls_failed}, [{_Distance, Host} | _Tail] = Hosts, Email, Options, RetryList) ->
+	% Could not start the TLS handshake; if tls is optional then try without TLS
+	case proplists:get_value(tls, Options) of
+		if_available ->
+			NoTLSOptions = [{tls,never} | proplists:delete(tls, Options)],
+			try do_smtp_session(Host, Email, NoTLSOptions) of
+				Res -> Res
+			catch
+				throw:FailMsg ->
+					handle_smtp_throw(FailMsg, Hosts, Email, Options, RetryList)
+			end;
+		_ ->
+			try_next_host({temporary_failure, tls_failed}, Hosts, Email, Options, RetryList)
+	end;
+handle_smtp_throw(FailMsg, Hosts, Email, Options, RetryList) ->
+	try_next_host(FailMsg, Hosts, Email, Options, RetryList).
+
+try_next_host({FailureType, Message}, [{_Distance, Host} | _Tail] = Hosts, Email, Options, RetryList) ->
+	Retries = proplists:get_value(retries, Options),
+	RetryCount = proplists:get_value(Host, RetryList),
+	case fetch_next_host(Retries, RetryCount, Hosts, RetryList) of
+		{[], _NewRetryList} ->
+			{error, retries_exceeded, {FailureType, Host, Message}};
+		{NewHosts, NewRetryList} ->
+			try_smtp_sessions(NewHosts, Email, Options, NewRetryList)
+	end.
+
+fetch_next_host(Retries, RetryCount, [{_Distance, Host} | Tail], RetryList) when is_integer(RetryCount), RetryCount >= Retries ->
+	% out of chances
+	%io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
+	{Tail, lists:keydelete(Host, 1, RetryList)};
+fetch_next_host(_Retries, RetryCount, [{Distance, Host} | Tail], RetryList) when is_integer(RetryCount) ->
+	%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
+	{Tail ++ [{Distance, Host}], lists:keydelete(Host, 1, RetryList) ++ [{Host, RetryCount + 1}]};
+fetch_next_host(0, _RetryCount, [{_Distance, Host} | Tail], RetryList) ->
+	% done retrying completely
+	{Tail, lists:keydelete(Host, 1, RetryList)};
+fetch_next_host(_Retries, _RetryCount, [{Distance, Host} | Tail], RetryList) ->
+	% otherwise...
+	%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
+	{Tail ++ [{Distance, Host}], lists:keydelete(Host, 1, RetryList) ++ [{Host, 1}]}.
+
 
 -spec do_smtp_session(Host :: string(), Email :: email(), Options :: list()) -> binary().
 do_smtp_session(Host, Email, Options) ->
@@ -423,9 +440,9 @@ try_HELO(Socket, Options) ->
 % check if we should try to do TLS
 -spec try_STARTTLS(Socket :: socket:socket(), Options :: list(), Extensions :: list()) -> {socket:socket(), list()}.
 try_STARTTLS(Socket, Options, Extensions) ->
-		case {proplists:get_value(tls, Options),
-				proplists:get_value(<<"STARTTLS">>, Extensions)} of
-			{Atom, true} when Atom =:= always; Atom =:= if_available ->
+	case {proplists:get_value(tls, Options),
+			proplists:get_value(<<"STARTTLS">>, Extensions)} of
+		{Atom, true} when Atom =:= always; Atom =:= if_available ->
 			%io:format("Starting TLS~n"),
 			case {do_STARTTLS(Socket, Options), Atom} of
 				{false, always} ->
@@ -460,16 +477,20 @@ do_STARTTLS(Socket, Options) ->
 					%NewSocket;
 					{ok, Extensions} = try_EHLO(NewSocket, Options),
 					{NewSocket, Extensions};
+				{'EXIT', _Pid, Reason} ->
+					quit(Socket),
+					error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
+					erlang:throw({temporary_failure, tls_failed});
 				_Else ->
 					%io:format("~p~n", [Else]),
 					false
 			end;
 		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
-			throw({temporary_failure, Msg});
+			erlang:throw({temporary_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
-			throw({permanent_failure, Msg})
+			erlang:throw({permanent_failure, Msg})
 	end.
 
 %% try connecting to a host
