@@ -472,7 +472,7 @@ do_STARTTLS(Socket, Options) ->
 			application:start(crypto),
 			application:start(public_key),
 			application:start(ssl),
-			case socket:to_ssl_client(Socket, [], 5000) of
+			case catch socket:to_ssl_client(Socket, [], 5000) of
 				{ok, NewSocket} ->
 					%NewSocket;
 					{ok, Extensions} = try_EHLO(NewSocket, Options),
