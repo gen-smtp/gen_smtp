@@ -307,21 +307,23 @@ split_body_by_boundary(Body, Boundary, MimeVsn, Options) ->
 		[Start, End] ->
 			NewBody = binstr:substr(Body, Start + byte_size(Boundary), End - Start),
 			% from now on, we can be sure that each boundary is preceeded by a CRLF
-			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), []),
+			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), [], Options),
 			[decode_component(Headers, Body2, MimeVsn, Options) || {Headers, Body2} <- [V || {_, Body3} = V <- Parts, byte_size(Body3) =/= 0]]
 		end.
 
-split_body_by_boundary_(<<>>, _Boundary, Acc) ->
+split_body_by_boundary_(<<>>, _Boundary, Acc, _Options) ->
 	lists:reverse(Acc);
-split_body_by_boundary_(Body, Boundary, Acc) ->
+split_body_by_boundary_(Body, Boundary, Acc, Options) ->
 	% trim the incomplete first line
 	TrimmedBody = binstr:substr(Body, binstr:strpos(Body, "\r\n") + 2),
 	case binstr:strpos(TrimmedBody, Boundary) of
 		0 ->
 			lists:reverse([{[], TrimmedBody} | Acc]);
 		Index ->
+			{ParsedHdrs, BodyRest} = parse_headers(binstr:substr(TrimmedBody, 1, Index - 1)),
+			DecodedHdrs = decode_headers(ParsedHdrs, [], proplists:get_vablue(encoding, Options, none)),
 			split_body_by_boundary_(binstr:substr(TrimmedBody, Index + byte_size(Boundary)), Boundary,
-				[parse_headers(binstr:substr(TrimmedBody, 1, Index - 1)) | Acc])
+									[{DecodedHdrs, BodyRest} | Acc], Options)
 	end.
 
 -spec(parse_headers/1 :: (Body :: binary()) -> {[{binary(), binary()}], binary()}).
@@ -969,10 +971,10 @@ various_parsing_test_() ->
 	[
 		{"split_body_by_boundary test",
 			fun() ->
-					?assertEqual([{[], <<"foo bar baz">>}], split_body_by_boundary_(<<"stuff\r\nfoo bar baz">>, <<"--bleh">>, [])),
-					?assertEqual([{[], <<"foo\r\n">>}, {[], <<>>}, {[], <<>>}, {[], <<"bar baz">>}], split_body_by_boundary_(<<"stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz">>, <<"--bleh">>, [])),
-					%?assertEqual([{[], []}, {[], []}, {[], "bar baz"}], split_body_by_boundary_("\r\n--bleh\r\n--bleh\r\n", "--bleh", [])),
-					%?assertMatch([{"text", "plain", [], _,"foo\r\n"}], split_body_by_boundary("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", "1.0"))
+					?assertEqual([{[], <<"foo bar baz">>}], split_body_by_boundary_(<<"stuff\r\nfoo bar baz">>, <<"--bleh">>, [], [])),
+					?assertEqual([{[], <<"foo\r\n">>}, {[], <<>>}, {[], <<>>}, {[], <<"bar baz">>}], split_body_by_boundary_(<<"stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz">>, <<"--bleh">>, [], [])),
+					%?assertEqual([{[], []}, {[], []}, {[], "bar baz"}], split_body_by_boundary_("\r\n--bleh\r\n--bleh\r\n", "--bleh", [], [])),
+					%?assertMatch([{"text", "plain", [], _,"foo\r\n"}], split_body_by_boundary("stuff\r\nfoo\r\n--bleh\r\n--bleh\r\n--bleh-- stuff\r\nbar baz", "--bleh", "1.0", []))
 					?assertEqual({[], <<"foo: bar\r\n">>}, parse_headers(<<"\r\nfoo: bar\r\n">>)),
 					?assertEqual({[{<<"foo">>, <<"barbaz">>}], <<>>}, parse_headers(<<"foo: bar\r\n baz\r\n">>)),
 					?assertEqual({[], <<" foo bar baz\r\nbam">>}, parse_headers(<<"\sfoo bar baz\r\nbam">>)),
