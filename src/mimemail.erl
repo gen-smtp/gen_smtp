@@ -124,29 +124,43 @@ decode_headers([{Key, Value} | Headers], Acc, Charset) ->
 	decode_headers(Headers, [{Key, decode_header(Value, Charset)} | Acc], Charset).
 
 decode_header(Value, Charset) ->
+	RTokens = tokenize_header(Value, []),
+	Tokens = lists:reverse(RTokens),
+	Decoded = try decode_header_tokens_strict(Tokens, Charset)
+			  catch _:_ ->
+					  decode_header_tokens_permissive(Tokens, Charset, [])
+			  end,
+	iolist_to_binary(Decoded).
+
+-type hdr_token() :: binary() | {Encoding::binary(), Data::binary()}.
+-spec tokenize_header(binary(), [hdr_token()]) -> [hdr_token()].
+tokenize_header(Value, Acc) ->
+	%% maybe replace "?([^\s]+)\\?" with "?([^\s]*)\\?"?
+	%% see msg lvuvmm593b8s7pqqfhu7cdtqd4g4najh
+	%% Subject: =?utf-8?Q??=
+	%%	=?utf-8?Q?=D0=9F=D0=BE=D0=B4=D1=82=D0=B2=D0=B5=D1=80=D0=B4=D0=B8=D1=82=D0=B5=20?=
+	%%	=?utf-8?Q?=D1=80=D0=B5=D0=B3=D0=B8=D1=81=D1=82=D1=80=D0=B0=D1=86=D0=B8=D1=8E=20?=
+	%%	=?utf-8?Q?=D0=B2=20Moy-Rebenok.ru?=
+
 	case re:run(Value, "=\\?([-A-Za-z0-9_]+)\\?([qQbB])\\?([^\s]+)\\?=", [ungreedy]) of
 		nomatch ->
-			Value;
+			[Value | Acc];
 		{match,[{AllStart, AllLen},{EncodingStart, EncodingLen},{TypeStart, _},{DataStart, DataLen}]} ->
+			%% RFC 2047 #2 (encoded-word)
 			Encoding = binstr:substr(Value, EncodingStart+1, EncodingLen),
 			Type = binstr:to_lower(binstr:substr(Value, TypeStart+1, 1)),
 			Data = binstr:substr(Value, DataStart+1, DataLen),
 
-			CD = case iconv:open(Charset, fix_encoding(Encoding)) of
-				{ok, Res} -> Res;
-				{error, einval} -> throw({bad_charset, fix_encoding(Encoding)})
-			end,
+			EncodedData =
+				case Type of
+					<<"q">> ->
+						%% RFC 2047 #5. (3)
+						decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]));
+					<<"b">> ->
+						decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
+				end,
 
-			DecodedData = case Type of
-				<<"q">> ->
-					{ok, S} = iconv:conv(CD, decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]))),
-					S;
-				<<"b">> ->
-					{ok, S} = iconv:conv(CD, decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))),
-					S
-			end,
-
-			iconv:close(CD),
+			%% iconv:close(CD),
 
 
 			Offset = case re:run(binstr:substr(Value, AllStart + AllLen + 1), "^([\s\t\n\r]+)=\\?[-A-Za-z0-9_]+\\?[^\s]\\?[^\s]+\\?=", [ungreedy]) of
@@ -158,9 +172,50 @@ decode_header(Value, Charset) ->
 			end,
 
 
-			NewValue = list_to_binary([binstr:substr(Value, 1, AllStart), DecodedData, binstr:substr(Value, AllStart + AllLen + Offset)]),
-			decode_header(NewValue, Charset)
+			tokenize_header(binstr:substr(Value, AllStart + AllLen + Offset),
+							[{fix_encoding(Encoding), EncodedData}, binstr:substr(Value, 1, AllStart) | Acc])
 	end.
+
+
+decode_header_tokens_strict([], _) ->
+	[];
+decode_header_tokens_strict([{Encoding, Data} | Tokens], Charset) ->
+	{ok, S} = convert(Charset, Encoding, Data),
+	[S | decode_header_tokens_strict(Tokens, Charset)];
+decode_header_tokens_strict([Data | Tokens], Charset) ->
+	[Data | decode_header_tokens_strict(Tokens, Charset)].
+
+%% this decoder can handle folded not-by-RFC UTF headers, when somebody split
+%% multibyte string not by characters, but by bytes. It first join folded
+%% string and only then decode it with iconv.
+decode_header_tokens_permissive([], _, Stack) ->
+	lists:reverse(Stack);
+decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
+	NewData = iolist_to_binary([PrevData, Data]),
+	case convert(Charset, Enc, NewData) of
+		{ok, S} ->
+			decode_header_tokens_permissive(Tokens, Charset, [S | Stack]);
+		_ ->
+			decode_header_tokens_permissive(Tokens, Charset, [{Enc, NewData} | Stack])
+	end;
+decode_header_tokens_permissive([NextToken | _] = Tokens, Charset, [{_, _} | Stack])
+  when is_binary(NextToken) orelse is_tuple(NextToken) ->
+	%% practicaly very rare case "=?utf-8?Q?BROKEN?= =?windows-1251?Q?maybe-broken?="
+	%% or "=?utf-8?Q?BROKEN?= raw-ascii-string"
+	%% drop broken value from stack
+	decode_header_tokens_permissive(Tokens, Charset, Stack);
+decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
+	decode_header_tokens_permissive(Tokens, Charset, [Data | Stack]).
+
+
+convert(To, From, Data) ->
+	CD = case iconv:open(To, From) of
+			 {ok, Res} -> Res;
+			 {error, einval} -> throw({bad_charset, From})
+		 end,
+	Converted = iconv:conv(CD, Data),
+	iconv:close(CD),
+	Converted.
 
 
 decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
