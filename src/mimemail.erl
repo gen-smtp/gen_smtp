@@ -134,6 +134,8 @@ decode_header(Value, Charset) ->
 
 -type hdr_token() :: binary() | {Encoding::binary(), Data::binary()}.
 -spec tokenize_header(binary(), [hdr_token()]) -> [hdr_token()].
+tokenize_header(<<>>, Acc) ->
+    Acc;
 tokenize_header(Value, Acc) ->
 	%% maybe replace "?([^\s]+)\\?" with "?([^\s]*)\\?"?
 	%% see msg lvuvmm593b8s7pqqfhu7cdtqd4g4najh
@@ -173,7 +175,7 @@ tokenize_header(Value, Acc) ->
 
 
 			tokenize_header(binstr:substr(Value, AllStart + AllLen + Offset),
-							[{fix_encoding(Encoding), EncodedData}, binstr:substr(Value, 1, AllStart) | Acc])
+							[{fix_encoding(Encoding), EncodedData} | Acc])
 	end.
 
 
@@ -1282,6 +1284,14 @@ parse_example_mails_test_() ->
 				Filename = <<209,130,208,181,209,129,209,130,208,190,208,178,209,139,208,185,32,209,132,208,176,208,185,208,187,46,116,120,116>>,
 				?assertEqual(Filename, ContentTypeName),
 				?assertEqual(Filename, DispositionName)
+			end
+		},
+		{"permissive malformed folded multibyte header decoder",
+			fun() ->
+				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
+				?assertEqual(<<"Hello world\n">>, Body),
+				?assertEqual(<<"NOD32 Smart Security - бесплатная лицензия">>,
+							proplists:get_value(<<"Subject">>, Headers))
 			end
 		},
 		{"testcase1",
