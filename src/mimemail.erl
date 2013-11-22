@@ -193,8 +193,10 @@ decode_header_tokens_strict([Data | Tokens], Charset) ->
 %% this decoder can handle folded not-by-RFC UTF headers, when somebody split
 %% multibyte string not by characters, but by bytes. It first join folded
 %% string and only then decode it with iconv.
-decode_header_tokens_permissive([], _, Stack) ->
-	lists:reverse(Stack);
+decode_header_tokens_permissive([], _, [Result]) when is_binary(Result) ->
+	Result;
+decode_header_tokens_permissive([], _, []) ->
+	[];
 decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
 	NewData = iolist_to_binary([PrevData, Data]),
 	case convert(Charset, Enc, NewData) of
