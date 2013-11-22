@@ -135,6 +135,8 @@ decode_header(Value, Charset) ->
 
 -type hdr_token() :: binary() | {Encoding::binary(), Data::binary()}.
 -spec tokenize_header(binary(), [hdr_token()]) -> [hdr_token()].
+tokenize_header(<<>>, Acc) ->
+    Acc;
 tokenize_header(Value, Acc) ->
 	%% maybe replace "?([^\s]+)\\?" with "?([^\s]*)\\?"?
 	%% see msg lvuvmm593b8s7pqqfhu7cdtqd4g4najh
@@ -174,7 +176,7 @@ tokenize_header(Value, Acc) ->
 
 
 			tokenize_header(binstr:substr(Value, AllStart + AllLen + Offset),
-							[{fix_encoding(Encoding), EncodedData}, binstr:substr(Value, 1, AllStart) | Acc])
+							[{fix_encoding(Encoding), EncodedData} | Acc])
 	end.
 
 
@@ -376,7 +378,7 @@ split_body_by_boundary_(Body, Boundary, Acc, Options) ->
 			lists:reverse([{[], TrimmedBody} | Acc]);
 		Index ->
 			{ParsedHdrs, BodyRest} = parse_headers(binstr:substr(TrimmedBody, 1, Index - 1)),
-			DecodedHdrs = decode_headers(ParsedHdrs, [], proplists:get_vablue(encoding, Options, none)),
+			DecodedHdrs = decode_headers(ParsedHdrs, [], proplists:get_value(encoding, Options, none)),
 			split_body_by_boundary_(binstr:substr(TrimmedBody, Index + byte_size(Boundary)), Boundary,
 									[{DecodedHdrs, BodyRest} | Acc], Options)
 	end.
@@ -1271,6 +1273,14 @@ parse_example_mails_test_() ->
 				{ok, Bin} = file:read_file("../testdata/html.eml"),
 				Decoded = decode(Bin),
 				?assertEqual(2, length(element(5, Decoded)))
+			end
+		},
+		{"permissive malformed folded multibyte header decoder",
+			fun() ->
+				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
+				?assertEqual(<<"Hello world\n">>, Body),
+				?assertEqual(<<"NOD32 Smart Security - бесплатная лицензия">>,
+							proplists:get_value(<<"Subject">>, Headers))
 			end
 		},
 		{"testcase1",
