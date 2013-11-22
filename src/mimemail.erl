@@ -1285,6 +1285,24 @@ parse_example_mails_test_() ->
 							proplists:get_value(<<"Subject">>, Headers))
 			end
 		},
+		{"decode headers of multipart messages",
+			fun() ->
+				{<<"multipart">>, _, _, _, [Inline, Attachment]} = Getmail("utf-attachment-name.eml"),
+				{<<"text">>, _, _, _, InlineBody} = Inline,
+				{<<"text">>, _, _, ContentHeaders, _AttachmentBody} = Attachment,
+				ContentTypeName = proplists:get_value(
+									<<"name">>, proplists:get_value(
+												  <<"content-type-params">>, ContentHeaders)),
+				DispositionName = proplists:get_value(
+									<<"filename">>, proplists:get_value(
+													  <<"disposition-params">>, ContentHeaders)),
+
+				?assertEqual(<<"Hello\r\n">>, InlineBody),
+				?assert(ContentTypeName == DispositionName),
+				?assertEqual(<<"тестовый файл.txt">>, ContentTypeName),
+				?assertEqual(<<"тестовый файл.txt">>, DispositionName)
+			end
+		},
 		{"testcase1",
 			fun() ->
 				Multipart = <<"multipart">>,
