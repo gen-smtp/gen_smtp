@@ -173,9 +173,11 @@ tokenize_header(Value, Acc) ->
 					1+ WhiteSpaceLen
 			end,
 
-
-			tokenize_header(binstr:substr(Value, AllStart + AllLen + Offset),
-							[{fix_encoding(Encoding), EncodedData} | Acc])
+			NewAcc = case binstr:substr(Value, 1, AllStart) of
+						 <<>> -> [{fix_encoding(Encoding), EncodedData} | Acc];
+						 Other -> [{fix_encoding(Encoding), EncodedData}, Other | Acc]
+					 end,
+			tokenize_header(binstr:substr(Value, AllStart + AllLen + Offset), NewAcc)
 	end.
 
 
