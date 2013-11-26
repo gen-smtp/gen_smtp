@@ -79,7 +79,6 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
 decode(OrigHeaders, Body, Options) ->
 	%io:format("headers: ~p~n", [Headers]),
 	Encoding = proplists:get_value(encoding, Options, none),
-
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
@@ -459,16 +458,12 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
-	CD = case iconv:open(OutEncoding, fix_encoding(InEncoding)) of
+	InEncodingFixed = fix_encoding(InEncoding),
+	CD = case iconv:open(OutEncoding, InEncodingFixed) of
 		{ok, Res} -> Res;
-		{error, einval} -> throw({bad_charset, fix_encoding(InEncoding)})
+		{error, einval} -> throw({bad_charset, InEncodingFixed})
 	end,
-	{ok, Result} = try iconv:conv_chunked(CD, NewBody) of
-		{ok, _} = Res2 -> Res2
-	catch
-		_:_ ->
-			iconv:conv(CD, NewBody)
-	end,
+	{ok, Result} = iconv:conv(CD, NewBody),
 	iconv:close(CD),
 	Result.
 
@@ -879,12 +874,7 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
 get_default_encoding() ->
-	case code:ensure_loaded(iconv) of
-		{error, _} ->
-			none;
-		{module, iconv} ->
-			<<"utf-8//IGNORE">>
-	end.
+	<<"utf-8//IGNORE">>.
 
 % convert some common invalid character names into the correct ones
 fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->

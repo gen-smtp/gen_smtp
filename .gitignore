@@ -8,3 +8,4 @@ build
 .eunit/
 ebin/gen_smtp.app
 src/smtp_rfc822_parse.erl
+deps/

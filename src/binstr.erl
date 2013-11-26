@@ -326,4 +326,6 @@ join(Binaries, Glue) ->
 join([H], _Glue, Acc) ->
 	list_to_binary(lists:reverse([H | Acc]));
 join([H|T], Glue, Acc) ->
-	join(T, Glue, [Glue, H | Acc]).
+	join(T, Glue, [Glue, H | Acc]);
+join([], _Glue, _Acc) ->
+	<<"">>.
