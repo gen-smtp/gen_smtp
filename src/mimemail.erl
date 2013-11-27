@@ -320,7 +320,7 @@ split_body_by_boundary_(Body, Boundary, Acc, Options) ->
 			lists:reverse([{[], TrimmedBody} | Acc]);
 		Index ->
 			{ParsedHdrs, BodyRest} = parse_headers(binstr:substr(TrimmedBody, 1, Index - 1)),
-			DecodedHdrs = decode_headers(ParsedHdrs, [], proplists:get_vablue(encoding, Options, none)),
+			DecodedHdrs = decode_headers(ParsedHdrs, [], proplists:get_value(encoding, Options, none)),
 			split_body_by_boundary_(binstr:substr(TrimmedBody, Index + byte_size(Boundary)), Boundary,
 									[{DecodedHdrs, BodyRest} | Acc], Options)
 	end.
@@ -1222,8 +1222,11 @@ parse_example_mails_test_() ->
 
 				?assertEqual(<<"Hello\r\n">>, InlineBody),
 				?assert(ContentTypeName == DispositionName),
-				?assertEqual(<<"тестовый файл.txt">>, ContentTypeName),
-				?assertEqual(<<"тестовый файл.txt">>, DispositionName)
+				% Take the filename as a literal, to prevent character set issues with Erlang
+				% In utf-8 the filename is:"тестовый файл.txt"
+				Filename = <<209,130,208,181,209,129,209,130,208,190,208,178,209,139,208,185,32,209,132,208,176,208,185,208,187,46,116,120,116>>,
+				?assertEqual(Filename, ContentTypeName),
+				?assertEqual(Filename, DispositionName)
 			end
 		},
 		{"testcase1",
