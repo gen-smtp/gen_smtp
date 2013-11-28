@@ -1273,8 +1273,9 @@ parse_example_mails_test_() ->
 			fun() ->
 				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
 				?assertEqual(<<"Hello world\n">>, Body),
-				?assertEqual(<<"NOD32 Smart Security - бесплатная лицензия">>,
-							proplists:get_value(<<"Subject">>, Headers))
+                    Subject = <<78,79,68,51,50,32,83,109,97,114,116,32,83,101,99,117, 114,105,116,121,32,45,32,208,177,208,181,209,129,208,
+                                191,208,187,208,176,209,130,208,189,208,176,209,143,32, 208,187,208,184,209,134,208,181,208,189,208,183,208,184,209,143>>
+				?assertEqual(Subject, proplists:get_value(<<"Subject">>, Headers))
 			end
 		},
 		{"decode headers of multipart messages",
@@ -1291,8 +1292,11 @@ parse_example_mails_test_() ->
 
 				?assertEqual(<<"Hello\r\n">>, InlineBody),
 				?assert(ContentTypeName == DispositionName),
-				?assertEqual(<<"тестовый файл.txt">>, ContentTypeName),
-				?assertEqual(<<"тестовый файл.txt">>, DispositionName)
+				% Take the filename as a literal, to prevent character set issues with Erlang
+				% In utf-8 the filename is:"тестовый файл.txt"
+				Filename = <<209,130,208,181,209,129,209,130,208,190,208,178,209,139,208,185,32,209,132,208,176,208,185,208,187,46,116,120,116>>,
+				?assertEqual(Filename, ContentTypeName),
+				?assertEqual(Filename, DispositionName)
 			end
 		},
 		{"testcase1",
