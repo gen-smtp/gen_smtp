@@ -935,7 +935,7 @@ hex(N) -> N + $0.
 %% @doc
 %% DKIM sign functions
 %% RFC 6376
-%% Will implement 'simple' canonicalization algorithm (#3.4.1, #3.4.3)
+%% Implements 'simple' canonicalization algorithm (#3.4.1, #3.4.3)
 %% `h' - list of headers to sign (lowercased binary)
 %% `c' - {Headers, Body} canonicalization type. Only {simple, simple} supported
 %% for now.
@@ -971,13 +971,23 @@ dkim_sign_email(Headers, Body, Opts) ->
 			{v, 1}, {a, <<"rsa-sha256">>}, {bh, BodyHash}, {c, Can},
 			{d, SDID}, {h, HeadersToSign}, {s, Selector}],
 	%% hash headers
-	CanHeaders = dkim_canonicalize_headers(Headers, HdrsCanT),
-	[DkimHeaderNoB] = dkim_canonicalize_headers([dkim_make_header([{b, <<>>} | Tags])], Can),
-	DataHash = dkim_hash_data(CanHeaders, HeadersToSign, DkimHeaderNoB, BodyHash),
+	Headers1 = dkim_filter_headers(Headers, HeadersToSign),
+	CanHeaders = dkim_canonicalize_headers(Headers1, HdrsCanT),
+	[DkimHeaderNoB] = dkim_canonicalize_headers([dkim_make_header([{b, undefined} | Tags])], HdrsCanT),
+	DataHash = dkim_hash_data(CanHeaders, DkimHeaderNoB),
+	%% io:format("~s~n~n", [base64:encode(DataHash)]),
 	%% sign
 	Signature = dkim_sign(DataHash, PrivateKey),
 	DkimHeader = dkim_make_header([{b, Signature} | Tags]),
 	[DkimHeader | Headers].
+
+dkim_filter_headers(Headers, HeadersToSign) ->
+	KeyedHeaders = [begin
+						[Name, _] = binary:split(Hdr, <<":">>),
+						{binstr:to_lower(Name), Hdr}
+					end || Hdr <- Headers],
+	WithUndef = [get_header_value(binstr:to_lower(Name), KeyedHeaders) || Name <- HeadersToSign],
+	[Hdr || Hdr <- WithUndef, Hdr =/= undefined].
 
 dkim_canonicalize_headers(Headers, simple) ->
 	Headers;
@@ -987,7 +997,7 @@ dkim_canonicalize_headers(_Headers, relaxed) ->
 dkim_canonicalize_body(<<>>, simple) ->
 	<<"\r\n">>;
 dkim_canonicalize_body(Body, simple) ->
-	Body;										%TODO: strip trailing empty lines
+	re:replace(Body, "(\r\n)*$", "\r\n", [{return, binary}]);
 dkim_canonicalize_body(_Body, relaxed) ->
 	throw({not_supported, dkim_body_relaxed}).
 
@@ -996,10 +1006,9 @@ dkim_hash_body(CanonicBody) ->
 	%% crypto:sha256(CanonicBody).
 
 %% RFC 5.5 & 3.7
-dkim_hash_data(CanonicHeaders, HeadersToSign, DkimHeader, BodyHash) ->
-	GetHeader = fun(N) -> get_header_value(N, CanonicHeaders, <<>>) end, %ensure header is \r\n terminated
-	JoinedHeaders = << <<(GetHeader(Name))/binary>> || Name <- HeadersToSign>>,
-	crypto:hash(sha256, <<JoinedHeaders/binary, DkimHeader/binary, BodyHash/binary>>).
+dkim_hash_data(CanonicHeaders, DkimHeader) ->
+	JoinedHeaders = << <<Hdr/binary, "\r\n">> || Hdr <- CanonicHeaders>>,
+	crypto:hash(sha256, <<JoinedHeaders/binary, DkimHeader/binary>>).
 
 dkim_sign(DataHash, {pem_plain, PrivBin}) ->
 	[PrivEntry] = public_key:pem_decode(PrivBin),
@@ -1014,8 +1023,7 @@ dkim_sign(DataHash, {pem_encrypted, EncPrivBin, Passwd}) ->
 dkim_make_header(Tags) ->
 	RevTags = lists:reverse(Tags),				%so {b, ...} became last tag
 	EncodedTags = binstr:join([dkim_encode_tag(K, V) || {K, V} <- RevTags], <<"; ">>),
-	[Encoded] = encode_headers([{<<"DKIM-Signature">>, EncodedTags}]),
-	Encoded.
+	binstr:join(encode_headers([{<<"DKIM-Signature">>, EncodedTags}]), <<"\r\n">>).
 
 %% RFC #3.5
 dkim_encode_tag(v, 1) ->
@@ -1024,6 +1032,9 @@ dkim_encode_tag(v, 1) ->
 dkim_encode_tag(a, <<"rsa-sha256">>) ->
 	%% algorithm
 	<<"a=rsa-sha256">>;
+dkim_encode_tag(b, undefined) ->
+	%% signature (when hashing with no digest)
+	<<"b=">>;
 dkim_encode_tag(b, V) ->
 	%% signature
 	B64Sign = base64:encode(V),
@@ -2111,10 +2122,58 @@ roundtrip_test_() ->
 		}
 	].
 
-dkim_test_() ->
+dkim_canonicalization_test_() ->
 	%% * canonicalization from #3.4.5
+    Hdrs = [<<"A : X\r\n">>,
+            <<"B : Y\t\r\n\tZ  \r\n">>],
+    Body = <<" C \r\nD \t E\r\n\r\n\r\n">>,
+	[{"Simple body canonicalization",
+      fun() ->
+              ?assertEqual(<<" C \r\nD \t E\r\n">>, dkim_canonicalize_body(Body, simple)),
+              ?assertEqual(<<"\r\n">>, dkim_canonicalize_body(<<>>, simple)),
+              ?assertEqual(<<"\r\n">>, dkim_canonicalize_body(<<"\r\n\r\n\r\n">>, simple)),
+              ?assertEqual(<<"A\r\n\r\nB\r\n">>, dkim_canonicalize_body(<<"A\r\n\r\nB\r\n\r\n">>, simple))
+      end},
+    {"Simple headers canonicalization",
+    fun() ->
+            ?assertEqual([<<"A : X\r\n">>,
+                          <<"B : Y\t\r\n\tZ  \r\n">>],
+                         dkim_canonicalize_headers(Hdrs, simple))
+    end}].
+
+dkim_sign_test_() ->
 	%% * sign using testdata/dkim*.pem
-	[].
+	[{"Sign simple",
+	  fun() ->
+			  Email = {<<"text">>, <<"plain">>,
+					   [{<<"From">>, <<"me@example.com">>},
+						{<<"Subject">>, <<"Hello world!">>},
+						{<<"Date">>, <<"Thu, 28 Nov 2013 04:15:44 +0400">>},
+						{<<"Message-ID">>, <<"the-id">>}],
+					   [],
+					   <<"123">>},
+			  {ok, PrivKey} = file:read_file("../testdata/dkim-rsa-private.pem"),
+			  Options = [{dkim, [{s, <<"foo.bar">>},
+								 {d, <<"example.com">>},
+								 {private_key, {pem_plain, PrivKey}}]}],
+
+			  Enc = encode(Email, Options),
+			  %% This `Enc' value can be verified, for example, by Python script
+			  %% https://launchpad.net/dkimpy like:
+			  %% >>> pubkey = ''.join(open("../testdata/dkim-rsa-public.pem").read().splitlines()[1:-1])
+			  %% >>> dns_mock = lambda *args: 'v=DKIM1; g=*; k=rsa; p=' + pubkey
+			  %% >>> import dkim
+			  %% >>> d = dkim.DKIM(mime_message) % pass `Enc' value as 1'st argument
+			  %% >>> d.verify(dnsfunc=dns_mock)
+			  %% True
+			  {_, _, [{DkimHdrName, DkimHdrVal} | _], _, _} = decode(Enc),
+			  ?assertEqual(<<"DKIM-Signature">>, DkimHdrName),
+			  ?assertEqual(<<"s=foo.bar; h=from:to:subject:date; d=example.com; c=simple/simple; "
+							 "bh=Afm/S7SaxS19en1h955RwsupTF914DQUPqYU8Nh7kpw=; a=rsa-sha256; v=1; "
+							 "b=QX6RAuSWp9W54bROyR7mZC0c707OlxtlTnfOjD6FvCe98KvBUliaqjIcUvveENJA/mOB/"
+							 "EkmjYd0EHzZURXPjfK/XeQqxCd985FA5KS/NV0yL7yrPRcaeD0bZ4zqmdayw1s0EJLL460"
+							 "x02U8jvnZhI882uXNWseh0iNY/86DT0k=">>, DkimHdrVal)
+	  end}].
 
 -endif.
 
