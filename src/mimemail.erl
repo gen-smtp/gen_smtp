@@ -1269,6 +1269,15 @@ parse_example_mails_test_() ->
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		},
+		{"permissive malformed folded multibyte header decoder",
+			fun() ->
+				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
+				?assertEqual(<<"Hello world\n">>, Body),
+				Subject = <<78,79,68,51,50,32,83,109,97,114,116,32,83,101,99,117, 114,105,116,121,32,45,32,208,177,208,181,209,129,208,
+							191,208,187,208,176,209,130,208,189,208,176,209,143,32, 208,187,208,184,209,134,208,181,208,189,208,183,208,184,209,143>>,
+				?assertEqual(Subject, proplists:get_value(<<"Subject">>, Headers))
+			end
+		},
 		{"decode headers of multipart messages",
 			fun() ->
 				{<<"multipart">>, _, _, _, [Inline, Attachment]} = Getmail("utf-attachment-name.eml"),
