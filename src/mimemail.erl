@@ -127,8 +127,14 @@ decode_header(Value, Charset) ->
 	RTokens = tokenize_header(Value, []),
 	Tokens = lists:reverse(RTokens),
 	Decoded = try decode_header_tokens_strict(Tokens, Charset)
-			  catch _:_ ->
-					  decode_header_tokens_permissive(Tokens, Charset, [])
+			  catch Type:Reason ->
+					  case decode_header_tokens_permissive(Tokens, Charset, []) of
+						  {ok, Dec} -> Dec;
+						  error ->
+							  % re-throw original error
+							  % may also use erlang:raise/3 to preserve original traceback
+							  erlang:Type(Reason)
+					  end
 			  end,
 	iolist_to_binary(Decoded).
 
@@ -193,9 +199,10 @@ decode_header_tokens_strict([Data | Tokens], Charset) ->
 %% multibyte string not by characters, but by bytes. It first join folded
 %% string and only then decode it with iconv.
 decode_header_tokens_permissive([], _, [Result]) when is_binary(Result) ->
-	Result;
-decode_header_tokens_permissive([], _, []) ->
-	[];
+	{ok, Result};
+decode_header_tokens_permissive([], _, _Stack) ->
+	%% io:format(user, "Stack: ~p~n", [Stack]),
+	error;
 decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
 	NewData = iolist_to_binary([PrevData, Data]),
 	case convert(Charset, Enc, NewData) of
@@ -206,7 +213,7 @@ decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData
 	end;
 decode_header_tokens_permissive([NextToken | _] = Tokens, Charset, [{_, _} | Stack])
   when is_binary(NextToken) orelse is_tuple(NextToken) ->
-	%% practicaly very rare case "=?utf-8?Q?BROKEN?= =?windows-1251?Q?maybe-broken?="
+	%% practicaly very rare case "=?utf-8?Q?BROKEN?=\r\n\t=?windows-1251?Q?maybe-broken?="
 	%% or "=?utf-8?Q?BROKEN?= raw-ascii-string"
 	%% drop broken value from stack
 	decode_header_tokens_permissive(Tokens, Charset, Stack);
