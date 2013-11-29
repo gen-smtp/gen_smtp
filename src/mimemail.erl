@@ -79,7 +79,6 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
 decode(OrigHeaders, Body, Options) ->
 	%io:format("headers: ~p~n", [Headers]),
 	Encoding = proplists:get_value(encoding, Options, none),
-
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
@@ -134,8 +133,14 @@ decode_header(Value, Charset) ->
 	RTokens = tokenize_header(Value, []),
 	Tokens = lists:reverse(RTokens),
 	Decoded = try decode_header_tokens_strict(Tokens, Charset)
-			  catch _:_ ->
-					  decode_header_tokens_permissive(Tokens, Charset, [])
+			  catch Type:Reason ->
+					  case decode_header_tokens_permissive(Tokens, Charset, []) of
+						  {ok, Dec} -> Dec;
+						  error ->
+							  % re-throw original error
+							  % may also use erlang:raise/3 to preserve original traceback
+							  erlang:Type(Reason)
+					  end
 			  end,
 	iolist_to_binary(Decoded).
 
@@ -200,9 +205,10 @@ decode_header_tokens_strict([Data | Tokens], Charset) ->
 %% multibyte string not by characters, but by bytes. It first join folded
 %% string and only then decode it with iconv.
 decode_header_tokens_permissive([], _, [Result]) when is_binary(Result) ->
-	Result;
-decode_header_tokens_permissive([], _, []) ->
-	[];
+	{ok, Result};
+decode_header_tokens_permissive([], _, _Stack) ->
+	%% io:format(user, "Stack: ~p~n", [Stack]),
+	error;
 decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
 	NewData = iolist_to_binary([PrevData, Data]),
 	case convert(Charset, Enc, NewData) of
@@ -213,7 +219,7 @@ decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData
 	end;
 decode_header_tokens_permissive([NextToken | _] = Tokens, Charset, [{_, _} | Stack])
   when is_binary(NextToken) orelse is_tuple(NextToken) ->
-	%% practicaly very rare case "=?utf-8?Q?BROKEN?= =?windows-1251?Q?maybe-broken?="
+	%% practicaly very rare case "=?utf-8?Q?BROKEN?=\r\n\t=?windows-1251?Q?maybe-broken?="
 	%% or "=?utf-8?Q?BROKEN?= raw-ascii-string"
 	%% drop broken value from stack
 	decode_header_tokens_permissive(Tokens, Charset, Stack);
@@ -465,16 +471,12 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
-	CD = case iconv:open(OutEncoding, fix_encoding(InEncoding)) of
+	InEncodingFixed = fix_encoding(InEncoding),
+	CD = case iconv:open(OutEncoding, InEncodingFixed) of
 		{ok, Res} -> Res;
-		{error, einval} -> throw({bad_charset, fix_encoding(InEncoding)})
+		{error, einval} -> throw({bad_charset, InEncodingFixed})
 	end,
-	{ok, Result} = try iconv:conv_chunked(CD, NewBody) of
-		{ok, _} = Res2 -> Res2
-	catch
-		_:_ ->
-			iconv:conv(CD, NewBody)
-	end,
+	{ok, Result} = iconv:conv(CD, NewBody),
 	iconv:close(CD),
 	Result.
 
@@ -885,12 +887,7 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
 get_default_encoding() ->
-	case code:ensure_loaded(iconv) of
-		{error, _} ->
-			none;
-		{module, iconv} ->
-			<<"utf-8//IGNORE">>
-	end.
+	<<"utf-8//IGNORE">>.
 
 % convert some common invalid character names into the correct ones
 fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->
@@ -1442,8 +1439,9 @@ parse_example_mails_test_() ->
 			fun() ->
 				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
 				?assertEqual(<<"Hello world\n">>, Body),
-				?assertEqual(<<"NOD32 Smart Security - бесплатная лицензия">>,
-							proplists:get_value(<<"Subject">>, Headers))
+				Subject = <<78,79,68,51,50,32,83,109,97,114,116,32,83,101,99,117, 114,105,116,121,32,45,32,208,177,208,181,209,129,208,
+							191,208,187,208,176,209,130,208,189,208,176,209,143,32, 208,187,208,184,209,134,208,181,208,189,208,183,208,184,209,143>>,
+				?assertEqual(Subject, proplists:get_value(<<"Subject">>, Headers))
 			end
 		},
 		{"decode headers of multipart messages",
@@ -1460,8 +1458,11 @@ parse_example_mails_test_() ->
 
 				?assertEqual(<<"Hello\r\n">>, InlineBody),
 				?assert(ContentTypeName == DispositionName),
-				?assertEqual(<<"тестовый файл.txt">>, ContentTypeName),
-				?assertEqual(<<"тестовый файл.txt">>, DispositionName)
+				% Take the filename as a literal, to prevent character set issues with Erlang
+				% In utf-8 the filename is:"тестовый файл.txt"
+				Filename = <<209,130,208,181,209,129,209,130,208,190,208,178,209,139,208,185,32,209,132,208,176,208,185,208,187,46,116,120,116>>,
+				?assertEqual(Filename, ContentTypeName),
+				?assertEqual(Filename, DispositionName)
 			end
 		},
 		{"testcase1",
