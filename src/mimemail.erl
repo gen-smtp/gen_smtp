@@ -53,7 +53,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([encode/1, decode/2, decode/1, get_header_value/2, get_header_value/3, parse_headers/1]).
+-export([encode/1, encode/2, decode/2, decode/1, get_header_value/2, get_header_value/3, parse_headers/1]).
 
 -define(DEFAULT_OPTIONS, [
 		{encoding, get_default_encoding()}, % default encoding is utf-8 if we can find the iconv module
@@ -727,30 +727,24 @@ escape_tspecial(<<C, Rest/binary>>, _IsSpecial, Acc)
 escape_tspecial(<<C, Rest/binary>>, IsSpecial, Acc) ->
 	escape_tspecial(Rest, IsSpecial, <<Acc/binary, C>>).
 
-encode_headers(Headers) ->
-	encode_headers(Headers, []).
+encode_headers([]) ->
+	[];
+encode_headers([{Key, Value}|T] = _Headers) ->
+    EncodedHeader = encode_folded_header(list_to_binary([Key,": ",encode_header_value(Key, Value)]), <<>>),
+	[EncodedHeader | encode_headers(T)].
 
-encode_headers([], EncodedHeaders) ->
-	EncodedHeaders;
-encode_headers([{Key, Value}|T] = _Headers, EncodedHeaders) ->
-	encode_headers(T, encode_folded_header(list_to_binary([Key,": ",encode_header_value(Key, Value)]),
-			EncodedHeaders)).
-
-encode_folded_header(Header, HeaderLines) ->
-	case binstr:strchr(Header, $;) of
-		0 ->
-			HeaderLines ++ [Header];
-		Index ->
-			Remainder = binstr:substr(Header, Index+1),
-			TabbedRemainder = case Remainder of
+encode_folded_header(Rest, Acc) ->
+	case binstr:split(Rest, <<$;>>, 2) of
+		[_] ->
+			<<Acc/binary, Rest/binary>>;
+		[Before, After] ->
+			NewPart = case After of
 				<<$\t,_Rest/binary>> ->
-					Remainder;
+					<<Before/binary, ";\r\n">>;
 				_ ->
-					list_to_binary(["\t", Remainder])
+					<<Before/binary, ";\r\n\t">>
 			end,
-			% TODO - not tail recursive
-			HeaderLines ++ [ binstr:substr(Header, 1, Index) ] ++
-				encode_folded_header(TabbedRemainder, [])
+            encode_folded_header(After, <<Acc/binary, NewPart/binary>>)
 	end.
 
 encode_header_value(H, Value) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc">>;
@@ -2150,7 +2144,8 @@ dkim_sign_test_() ->
 					   [{<<"From">>, <<"me@example.com">>},
 						{<<"Subject">>, <<"Hello world!">>},
 						{<<"Date">>, <<"Thu, 28 Nov 2013 04:15:44 +0400">>},
-						{<<"Message-ID">>, <<"the-id">>}],
+						{<<"Message-ID">>, <<"the-id">>},
+                        {<<"Content-Type">>, <<"text/plain; charset=utf-8">>}],
 					   [],
 					   <<"123">>},
 			  {ok, PrivKey} = file:read_file("../testdata/dkim-rsa-private.pem"),
