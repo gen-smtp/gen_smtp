@@ -153,7 +153,7 @@ scan_rfc822([$<|Rest], Acc) ->
 	{Token, R} = scan_rfc822_scan_endpointybracket(Rest),
 	scan_rfc822(R, [{'>', 0}, {string, 0, Token}, {'<', 0}|Acc]);
 scan_rfc822(String, Acc) ->
-	case re:run(String, "(.*?)([\s<>,].*)", [{capture, all_but_first, list}]) of
+	case re:run(String, "(.+?)([\s<>,].*)", [{capture, all_but_first, list}]) of
 		{match, [Token, Rest]} ->
 			scan_rfc822(Rest, [{string, 0, Token}|Acc]);
 		nomatch ->

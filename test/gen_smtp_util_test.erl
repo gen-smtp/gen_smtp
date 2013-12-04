@@ -67,6 +67,15 @@ combine_rfc822_addresses_test_() ->
       end}
     ].
 
+illegal_rfc822_addresses_test_() ->
+    [
+     {"Nested brackets",
+      fun() ->
+              ?assertEqual({error,{0,smtp_rfc822_parse, ["syntax error before: ","\">\""]}},
+                           smtp_util:parse_rfc822_addresses("a<b<c>>"))
+      end}
+    ].
+
 rfc822_addresses_roundtrip_test() ->
     Addr = <<"Jan <a,a@a.com>, Berend Botje <b@b.com>">>,
     {ok, Parsed} = smtp_util:parse_rfc822_addresses(Addr),
