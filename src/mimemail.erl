@@ -858,10 +858,9 @@ hex(N) -> N + $0.
 %% @doc
 %% DKIM sign functions
 %% RFC 6376
-%% Implements 'simple' canonicalization algorithm (#3.4.1, #3.4.3)
 %% `h' - list of headers to sign (lowercased binary)
-%% `c' - {Headers, Body} canonicalization type. Only {simple, simple} supported
-%% for now.
+%% `c' - {Headers, Body} canonicalization type. Only {simple, simple} and
+%% {relaxed, simple} supported for now.
 %% `s' `d' - if s = <<"foo.bar">> and d = <<"example.com">>, public key should
 %% be located in "foo.bar._domainkey.example.com" (see RFC-6376 #3.6.2.1).
 %% `private_key' - private key, to sign emails. May be of 2 types: encrypted and
@@ -884,7 +883,7 @@ dkim_sign_email(Headers, Body, Opts) ->
 	SDID = proplists:get_value(d, Opts),
 	Selector = proplists:get_value(s, Opts),
 	%% BodyLength = proplists:get_value(l, Opts),
-	{HdrsCanT, BodyCanT} = Can = proplists:get_value(c, Opts, {simple, simple}),
+	{HdrsCanT, BodyCanT} = Can = proplists:get_value(c, Opts, {relaxed, simple}),
 	PrivateKey = proplists:get_value(private_key, Opts),
 
 	%% hash body
@@ -907,15 +906,26 @@ dkim_sign_email(Headers, Body, Opts) ->
 dkim_filter_headers(Headers, HeadersToSign) ->
 	KeyedHeaders = [begin
 						[Name, _] = binary:split(Hdr, <<":">>),
-						{binstr:to_lower(Name), Hdr}
+						{binstr:strip(binstr:to_lower(Name)), Hdr}
 					end || Hdr <- Headers],
 	WithUndef = [get_header_value(binstr:to_lower(Name), KeyedHeaders) || Name <- HeadersToSign],
 	[Hdr || Hdr <- WithUndef, Hdr =/= undefined].
 
 dkim_canonicalize_headers(Headers, simple) ->
 	Headers;
-dkim_canonicalize_headers(_Headers, relaxed) ->
-	throw({not_supported, dkim_headers_relaxed}).
+dkim_canonicalize_headers(Headers, relaxed) ->
+	dkim_canonic_hdrs_relaxed(Headers).
+
+dkim_canonic_hdrs_relaxed([Hdr | Rest]) ->
+	[Name, Value] = binary:split(Hdr, <<":">>),
+	LowStripName = binstr:to_lower(binstr:strip(Name)),
+
+	UnfoldedHdrValue = binary:replace(Value, <<"\r\n">>, <<>>, [global]),
+	SingleWSValue = re:replace(UnfoldedHdrValue, "[\t ]+", " ", [global, {return, binary}]),
+	StrippedWithName = <<LowStripName/binary, ":", (binstr:strip(SingleWSValue))/binary>>,
+	[StrippedWithName | dkim_canonic_hdrs_relaxed(Rest)];
+dkim_canonic_hdrs_relaxed([]) -> [].
+
 
 dkim_canonicalize_body(<<>>, simple) ->
 	<<"\r\n">>;
@@ -966,9 +976,9 @@ dkim_encode_tag(bh, V) ->
 	%% body hash
 	B64Sign = base64:encode(V),
 	<<"bh=", B64Sign/binary>>;
-dkim_encode_tag(c, {simple, simple}) ->				% 'relaxed' not supported yet
+dkim_encode_tag(c, {Hdrs, simple}) ->     % 'relaxed' for body not supported yet
 	%% canonicalization type
-	<<"c=simple/simple">>;
+	<<"c=", (atom_to_binary(Hdrs, utf8))/binary, "/simple">>;
 dkim_encode_tag(d, Domain) ->
 	%% SDID (domain)
 	<<"d=", Domain/binary>>;
@@ -2052,15 +2062,22 @@ dkim_canonicalization_test_() ->
               ?assertEqual(<<"\r\n">>, dkim_canonicalize_body(<<"\r\n\r\n\r\n">>, simple)),
               ?assertEqual(<<"A\r\n\r\nB\r\n">>, dkim_canonicalize_body(<<"A\r\n\r\nB\r\n\r\n">>, simple))
       end},
-    {"Simple headers canonicalization",
-    fun() ->
-            ?assertEqual([<<"A : X\r\n">>,
-                          <<"B : Y\t\r\n\tZ  \r\n">>],
-                         dkim_canonicalize_headers(Hdrs, simple))
-    end}].
+	{"Simple headers canonicalization",
+	fun() ->
+			?assertEqual([<<"A : X\r\n">>,
+						  <<"B : Y\t\r\n\tZ	 \r\n">>],
+						 dkim_canonicalize_headers(Hdrs, simple))
+	end},
+	{"Relaxed headers canonicalization",
+	 fun() ->
+			 ?assertEqual([<<"a:X">>,	  % \r\n's are stripped by current impl.
+						   <<"b:Y Z">>],
+						  dkim_canonicalize_headers(Hdrs, relaxed))
+	 end}].
 
 dkim_sign_test_() ->
 	%% * sign using testdata/dkim*.pem
+	{ok, PrivKey} = file:read_file("../testdata/dkim-rsa-private.pem"),
 	[{"Sign simple",
 	  fun() ->
 			  Email = {<<"text">>, <<"plain">>,
@@ -2068,10 +2085,9 @@ dkim_sign_test_() ->
 						{<<"Subject">>, <<"Hello world!">>},
 						{<<"Date">>, <<"Thu, 28 Nov 2013 04:15:44 +0400">>},
 						{<<"Message-ID">>, <<"the-id">>},
-                        {<<"Content-Type">>, <<"text/plain; charset=utf-8">>}],
+						{<<"Content-Type">>, <<"text/plain; charset=utf-8">>}],
 					   [],
 					   <<"123">>},
-			  {ok, PrivKey} = file:read_file("../testdata/dkim-rsa-private.pem"),
 			  Options = [{dkim, [{s, <<"foo.bar">>},
 								 {d, <<"example.com">>},
 								 {private_key, {pem_plain, PrivKey}}]}],
@@ -2092,6 +2108,33 @@ dkim_sign_test_() ->
 							 "b=QX6RAuSWp9W54bROyR7mZC0c707OlxtlTnfOjD6FvCe98KvBUliaqjIcUvveENJA/mOB/"
 							 "EkmjYd0EHzZURXPjfK/XeQqxCd985FA5KS/NV0yL7yrPRcaeD0bZ4zqmdayw1s0EJLL460"
 							 "x02U8jvnZhI882uXNWseh0iNY/86DT0k=">>, DkimHdrVal)
+	  end},
+	 {"Sign relaxed headers, simple body",
+	  fun() ->
+			  Email = {<<"text">>, <<"plain">>,
+					   [{<<"From">>, <<"me@example.com">>},
+						{<<"Subject">>, <<"Hello world!">>},
+						{<<"Date">>, <<"Thu, 28 Nov 2013 04:15:44 +0400">>},
+						{<<"Message-ID">>, <<"the-id-relaxed">>},
+						{<<"Content-Type">>, <<"text/plain; charset=utf-8">>}],
+					   [],
+					   <<"123">>},
+			  Options = [{dkim, [{s, <<"foo.bar">>},
+								 {d, <<"example.com">>},
+								 {c, {relaxed, simple}},
+								 {private_key, {pem_plain, PrivKey}}]}],
+
+			  Enc = encode(Email, Options),
+			  file:write_file("/home/seriy/relaxed-signed.eml", Enc),
+			  {_, _, [{DkimHdrName, DkimHdrVal} | _], _, _} = decode(Enc),
+			  %% io:format(user, "~p", [DkimHdrVal]),
+			  ?assertEqual(<<"DKIM-Signature">>, DkimHdrName),
+			  ?assertEqual(
+				 <<"s=foo.bar; h=from:to:subject:date; d=example.com; c=relaxed/simple; "
+				   "bh=Afm/S7SaxS19en1h955RwsupTF914DQUPqYU8Nh7kpw=; a=rsa-sha256; v=1; "
+				   "b=dXxKq6A7m4A3AoS90feuLP+IxOyXFTPIibja52E2JCAyOsxvIGlI51xR1LvmEaelv9"
+				   "jJTH9iGyAC7RzTKxrWV1QXayvr05bsTy3vDw7P4vfZ1gmspuP/3Icw+J8KEn+p6+CRrf"
+				   "T97QadH42PT6XmO2v01q5nhMgNE4yQyf9DBJs=">>, DkimHdrVal)
 	  end}].
 
 -endif.
