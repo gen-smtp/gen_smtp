@@ -1,3 +1,5 @@
+FILES = $(shell ls ebin/*.beam | grep -v smtp_rfc822_parse)
+
 compile:
 	@./rebar compile
 
@@ -10,4 +12,7 @@ test:
 	ERL_AFLAGS="-s ssl" 
 	./rebar -C rebar.test.config skip_deps=true eunit
 
-.PHONY: compile clean test
+dialyze:
+	dialyzer $(FILES)
+
+.PHONY: compile clean test dialyze
