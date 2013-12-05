@@ -82,7 +82,7 @@ SignedMailBody = \
                   [],
                   <<"This is the email body">>},
                   [{dkim, DKIMOptions}]),
-gen_smtp_client:send({"whatever@test.com", ["andrew@hijacked.us"], SignedMailBody}, []).
+gen_smtp_client:send({"whatever@example.com", ["andrew@hijacked.us"], SignedMailBody}, []).
 ```
 Don't forget to put your public key to `foo.bar._domainkey.example.com` TXT DNS record as smth like
 ```
