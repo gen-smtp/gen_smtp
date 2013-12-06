@@ -576,10 +576,6 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			socket:send(Socket, "220 OK\r\n"),
-			crypto:start(),
-			application:start(asn1),
-			application:start(public_key),
-			application:start(ssl),
 			Options1 = case proplists:get_value(certfile, Options) of
 				undefined ->
 					[];

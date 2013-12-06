@@ -16,7 +16,14 @@
     smtp_server_example
    ]
   },
-  {applications, [kernel, stdlib]},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  crypto,
+                  asn1,
+                  public_key,
+                  ssl
+                 ]},
   {registered, []}
  ]
 }.

@@ -86,9 +86,6 @@ connect(Protocol, Address, Port, Opts) ->
 connect(tcp, Address, Port, Opts, Time) ->
 	gen_tcp:connect(Address, Port, tcp_connect_options(Opts), Time);
 connect(ssl, Address, Port, Opts, Time) ->
-	application:start(crypto),
-	application:start(public_key),
-	application:start(ssl),
 	ssl:connect(Address, Port, ssl_connect_options(Opts), Time).
 
 
@@ -98,9 +95,6 @@ listen(Protocol, Port) ->
 
 -spec listen(Protocol :: protocol(), Port :: pos_integer(), Options :: list()) -> socket().
 listen(ssl, Port, Options) ->
-	application:start(crypto),
-	application:start(public_key),
-	application:start(ssl),
 	ssl:listen(Port, ssl_listen_options(Options));
 listen(tcp, Port, Options) ->
 	gen_tcp:listen(Port, tcp_listen_options(Options)).
