@@ -352,9 +352,7 @@ connect_test_() ->
 		{"listen and connect via ssl",
 		fun() ->
 			Self = self(),
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+	        application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}]),
 						?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
@@ -393,9 +391,7 @@ evented_connections_test_() ->
 		},
 		{"current process receives connection to SSL listen sockets",
 		fun() ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}]),
 			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
@@ -420,9 +416,7 @@ evented_connections_test_() ->
 		%% can respond to either ssl or tcp connections.
 		{"current TCP listener receives SSL connection",
 		fun() ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
@@ -458,9 +452,7 @@ accept_test_() ->
 		},
 		{"Accept via ssl",
 		fun() ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}]),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
 			spawn(fun()->connect(ssl, "localhost", ?TEST_PORT) end),
@@ -481,9 +473,7 @@ type_test_() ->
 		},
 		{"an ssl socket returns 'ssl'",
 		fun() ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}]),
 			?assertMatch(ssl, type(ListenSocket)),
 			close(ListenSocket)
@@ -624,9 +614,7 @@ ssl_upgrade_test_() ->
 		{"TCP connection can be upgraded to ssl",
 		fun() ->
 			Self = self(),
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 			      	{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			      	{ok, ServerSocket} = accept(ListenSocket),
@@ -645,9 +633,7 @@ ssl_upgrade_test_() ->
 		},
 		{"SSL server connection can't be upgraded again",
 		fun() ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}]),
 						{ok, ServerSocket} = accept(ListenSocket),
@@ -661,9 +647,7 @@ ssl_upgrade_test_() ->
 		{"SSL client connection can't be upgraded again",
 		fun() ->
 			Self = self(),
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
+			application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}]),
 						{ok, ServerSocket} = accept(ListenSocket),
