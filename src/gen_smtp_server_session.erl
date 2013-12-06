@@ -1753,7 +1753,7 @@ smtp_session_tls_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				application:ensure_all_started(gen_smtp),
+				gen_smtp_application:ensure_all_started(gen_smtp),
 				Self = self(),
 				spawn(fun() ->
 							{ok, ListenSock} = socket:listen(tcp, 9876, [binary]),

@@ -804,7 +804,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "STARTTLS\r\n"}, socket:recv(X, 0, 1000)),
-								application:ensure_all_started(gen_smtp),
+								gen_smtp_application:ensure_all_started(gen_smtp),
 								socket:send(X, "220 ok\r\n"),
 								{ok, Y} = socket:to_ssl_server(X, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
@@ -833,7 +833,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "STARTTLS\r\n"}, socket:recv(X, 0, 1000)),
-								application:ensure_all_started(gen_smtp),
+								gen_smtp_application:ensure_all_started(gen_smtp),
 								socket:send(X, "220 ok\r\n"),
 								{ok, Y} = socket:to_ssl_server(X, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
@@ -1000,7 +1000,7 @@ session_start_test_() ->
 			fun({_ListenSock}) ->
 					{"Connecting to a SSL socket directly should work",
 						fun() ->
-								application:ensure_all_started(gen_smtp),
+								gen_smtp_application:ensure_all_started(gen_smtp),
 								{ok, ListenSock} = socket:listen(ssl, 9877, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}]),
 								Options = [{relay, <<"localhost">>}, {port, 9877}, {hostname, <<"testing">>}, {ssl, true}],
 								{ok, _Pid} = send({<<"test@foo.com">>, [<<"<foo@bar.com>">>, <<"baz@bar.com">>], <<"hello world">>}, Options),
