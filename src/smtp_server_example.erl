@@ -32,14 +32,14 @@
 %% and send Message to the client.
 -spec init(Hostname :: binary(), SessionCount :: non_neg_integer(), Address :: tuple(), Options :: list()) -> {'ok', string(), #state{}} | {'stop', any(), string()}.
 init(Hostname, SessionCount, Address, Options) ->
-	io:format("peer: ~p~n", [Address]),
+	lager:debug("peer: ~p~n", [Address]),
 	case SessionCount > 20 of
 		false ->
 			Banner = [Hostname, " ESMTP smtp_server_example"],
 			State = #state{options = Options},
 			{ok, Banner, State};
 		true ->
-			io:format("Connection limit exceeded~n"),
+			lager:debug("Connection limit exceeded~n"),
 			{stop, normal, ["421 ", Hostname, " is too busy to accept mail right now"]}
 	end.
 
@@ -58,7 +58,7 @@ handle_HELO(<<"invalid">>, State) ->
 handle_HELO(<<"trusted_host">>, State) ->
 	{ok, State}; %% no size limit because we trust them.
 handle_HELO(Hostname, State) ->
-	io:format("HELO from ~s~n", [Hostname]),
+	lager:debug("HELO from ~s~n", [Hostname]),
 	{ok, 655360, State}. % 640kb of HELO should be enough for anyone.
 	%If {ok, State} was returned here, we'd use the default 10mb limit
 
@@ -74,7 +74,7 @@ handle_EHLO(<<"invalid">>, _Extensions, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
 handle_EHLO(Hostname, Extensions, State) ->
-	io:format("EHLO from ~s~n", [Hostname]),
+	lager:debug("EHLO from ~s~n", [Hostname]),
 	% You can advertise additional extensions, or remove some defaults
 	MyExtensions = case proplists:get_value(auth, State#state.options, false) of
 		true ->
@@ -94,7 +94,7 @@ handle_EHLO(Hostname, Extensions, State) ->
 handle_MAIL(<<"badguy@blacklist.com">>, State) ->
 	{error, "552 go away", State};
 handle_MAIL(From, State) ->
-	io:format("Mail from ~s~n", [From]),
+	lager:debug("Mail from ~s~n", [From]),
 	% you can accept or reject the FROM address here
 	{ok, State}.
 
@@ -102,28 +102,28 @@ handle_MAIL(From, State) ->
 %% the option.
 -spec handle_MAIL_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_MAIL_extension(<<"X-SomeExtension">> = Extension, State) ->
-	io:format("Mail from extension ~s~n", [Extension]),
+	lager:debug("Mail from extension ~s~n", [Extension]),
 	% any MAIL extensions can be handled here
 	{ok, State};
 handle_MAIL_extension(Extension, _State) ->
-	io:format("Unknown MAIL FROM extension ~s~n", [Extension]),
+	lager:debug("Unknown MAIL FROM extension ~s~n", [Extension]),
 	error.
 
 -spec handle_RCPT(To :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
 handle_RCPT(<<"nobody@example.com">>, State) ->
 	{error, "550 No such recipient", State};
 handle_RCPT(To, State) ->
-	io:format("Mail to ~s~n", [To]),
+	lager:debug("Mail to ~s~n", [To]),
 	% you can accept or reject RCPT TO addesses here, one per call
 	{ok, State}.
 
 -spec handle_RCPT_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_RCPT_extension(<<"X-SomeExtension">> = Extension, State) ->
 	% any RCPT TO extensions can be handled here
-	io:format("Mail to extension ~s~n", [Extension]),
+	lager:debug("Mail to extension ~s~n", [Extension]),
 	{ok, State};
 handle_RCPT_extension(Extension, _State) ->
-	io:format("Unknown RCPT TO extension ~s~n", [Extension]),
+	lager:debug("Unknown RCPT TO extension ~s~n", [Extension]),
 	error.
 
 -spec handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: #state{}) -> {'ok', string(), #state{}} | {'error', string(), #state{}}.
@@ -136,16 +136,16 @@ handle_DATA(From, To, Data, State) ->
 	case proplists:get_value(relay, State#state.options, false) of
 		true -> relay(From, To, Data);
 		false ->
-			io:format("message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, byte_size(Data)]),
+			lager:debug("message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, byte_size(Data)]),
 			case proplists:get_value(parse, State#state.options, false) of
 				false -> ok;
 				true ->
 					try mimemail:decode(Data) of
 						_Result ->
-							io:format("Message decoded successfully!~n")
+							lager:debug("Message decoded successfully!~n")
 					catch
 						What:Why ->
-							io:format("Message decode FAILED with ~p:~p~n", [What, Why]),
+							lager:debug("Message decode FAILED with ~p:~p~n", [What, Why]),
 							case proplists:get_value(dump, State#state.options, false) of
 							false -> ok;
 							true ->
@@ -199,7 +199,7 @@ handle_AUTH(_Type, _Username, _Password, _State) ->
 %% it only gets called if you add STARTTLS to your ESMTP extensions
 -spec handle_STARTTLS(#state{}) -> #state{}.
 handle_STARTTLS(State) ->
-    io:format("TLS Started~n"),
+    lager:debug("TLS Started~n"),
     State.
 
 -spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {ok, #state{}}.

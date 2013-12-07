@@ -128,7 +128,7 @@ send_it(Email, Options) ->
 		_ ->
 			smtp_util:mxlookup(RelayDomain)
 	end,
-	%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
+	lager:debug("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
 	Hosts = case MXRecords of
 		[] ->
 			[{0, RelayDomain}]; % maybe we're supposed to relay to a host directly
@@ -178,32 +178,32 @@ try_next_host({FailureType, Message}, [{_Distance, Host} | _Tail] = Hosts, Email
 
 fetch_next_host(Retries, RetryCount, [{_Distance, Host} | Tail], RetryList) when is_integer(RetryCount), RetryCount >= Retries ->
 	% out of chances
-	%io:format("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
+	lager:debug("retries for ~s exceeded (~p of ~p)~n", [Host, RetryCount, Retries]),
 	{Tail, lists:keydelete(Host, 1, RetryList)};
-fetch_next_host(_Retries, RetryCount, [{Distance, Host} | Tail], RetryList) when is_integer(RetryCount) ->
-	%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
+fetch_next_host(Retries, RetryCount, [{Distance, Host} | Tail], RetryList) when is_integer(RetryCount) ->
+	lager:debug("scheduling ~s for retry (~p of ~p)~n", [Host, RetryCount, Retries]),
 	{Tail ++ [{Distance, Host}], lists:keydelete(Host, 1, RetryList) ++ [{Host, RetryCount + 1}]};
 fetch_next_host(0, _RetryCount, [{_Distance, Host} | Tail], RetryList) ->
 	% done retrying completely
 	{Tail, lists:keydelete(Host, 1, RetryList)};
-fetch_next_host(_Retries, _RetryCount, [{Distance, Host} | Tail], RetryList) ->
+fetch_next_host(Retries, _RetryCount, [{Distance, Host} | Tail], RetryList) ->
 	% otherwise...
-	%io:format("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
+	lager:debug("scheduling ~s for retry (~p of ~p)~n", [Host, 1, Retries]),
 	{Tail ++ [{Distance, Host}], lists:keydelete(Host, 1, RetryList) ++ [{Host, 1}]}.
 
 
 -spec do_smtp_session(Host :: string(), Email :: email(), Options :: list()) -> binary().
 do_smtp_session(Host, Email, Options) ->
-	{ok, Socket, _Host, _Banner} = connect(Host, Options),
-	%io:format("connected to ~s; banner was ~s~n", [Host, Banner]),
+	{ok, Socket, Host, Banner} = connect(Host, Options),
+	lager:debug("connected to ~s; banner was ~s~n", [Host, Banner]),
 	{ok, Extensions} = try_EHLO(Socket, Options),
-	%io:format("Extensions are ~p~n", [Extensions]),
+	lager:debug("Extensions are ~p~n", [Extensions]),
 	{Socket2, Extensions2} = try_STARTTLS(Socket, Options, Extensions),
-	%io:format("Extensions are ~p~n", [Extensions2]),
-	_Authed = try_AUTH(Socket2, Options, proplists:get_value(<<"AUTH">>, Extensions2)),
-	%io:format("Authentication status is ~p~n", [Authed]),
+	lager:debug("Extensions are ~p~n", [Extensions2]),
+	Authed = try_AUTH(Socket2, Options, proplists:get_value(<<"AUTH">>, Extensions2)),
+	lager:debug("Authentication status is ~p~n", [Authed]),
 	Receipt = try_sending_it(Email, Socket2, Extensions2),
-	%io:format("Mail sending successful~n"),
+	lager:debug("Mail sending successful~n"),
 	quit(Socket2),
 	Receipt.
 
@@ -226,7 +226,7 @@ try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions) ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
 		{ok, Msg} ->
-			%io:format("Mail FROM rejected: ~p~n", [Msg]),
+			lager:debug("Mail FROM rejected: ~p~n", [Msg]),
 			quit(Socket),
 			throw({permanent_failure, Msg})
 	end;
@@ -315,7 +315,7 @@ try_AUTH(Socket, Options, AuthTypes) ->
 		true ->
 			Username = proplists:get_value(username, Options),
 			Password = proplists:get_value(password, Options),
-			%io:format("Auth types: ~p~n", [AuthTypes]),
+			lager:debug("Auth types: ~p~n", [AuthTypes]),
 			Types = re:split(AuthTypes, " ", [{return, list}, trim]),
 			case do_AUTH(Socket, Username, Password, Types) of
 				false ->
@@ -334,10 +334,10 @@ try_AUTH(Socket, Options, AuthTypes) ->
 -spec do_AUTH(Socket :: socket:socket(), Username :: string(), Password :: string(), Types :: [string()]) -> boolean().
 do_AUTH(Socket, Username, Password, Types) ->
 	FixedTypes = [string:to_upper(X) || X <- Types],
-	%io:format("Fixed types: ~p~n", [FixedTypes]),
+	lager:debug("Fixed types: ~p~n", [FixedTypes]),
 	AllowedTypes = [X  || X <- ?AUTH_PREFERENCE, lists:member(X, FixedTypes)],
-	%io:format("available authentication types, in order of preference: ~p~n",
-	%	[AllowedTypes]),
+	lager:debug("available authentication types, in order of preference: ~p~n",
+               [AllowedTypes]),
 	do_AUTH_each(Socket, Username, Password, AllowedTypes).
 
 -spec do_AUTH_each(Socket :: socket:socket(), Username :: string() | binary(), Password :: string() | binary(), AuthTypes :: [string()]) -> boolean().
@@ -354,14 +354,14 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 			socket:send(Socket, [String, "\r\n"]),
 			case read_possible_multiline_reply(Socket) of
 				{ok, <<"235", _Rest/binary>>} ->
-					%io:format("authentication accepted~n"),
+					lager:debug("authentication accepted~n"),
 					true;
-				{ok, _Msg} ->
-					%io:format("authentication rejected: ~s~n", [Msg]),
+				{ok, Msg} ->
+					lager:debug("authentication rejected: ~s~n", [Msg]),
 					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
-		{ok, _Something} ->
-			%io:format("got ~s~n", [Something]),
+		{ok, Term} ->
+			lager:debug("got ~s~n", [Term]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
@@ -369,29 +369,29 @@ do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
 	case read_possible_multiline_reply(Socket) of
 		%% base64 Username: or username:
 		{ok, Prompt} when Prompt == <<"334 VXNlcm5hbWU6\r\n">>; Prompt == <<"334 dXNlcm5hbWU6\r\n">> ->
-			%io:format("username prompt~n"),
+			lager:debug("username prompt~n"),
 			U = base64:encode(Username),
 			socket:send(Socket, [U,"\r\n"]),
 			case read_possible_multiline_reply(Socket) of
 				%% base64 Password: or password:
 				{ok, Prompt2} when Prompt2 == <<"334 UGFzc3dvcmQ6\r\n">>; Prompt2 == <<"334 cGFzc3dvcmQ6\r\n">> ->
-					%io:format("password prompt~n"),
+					lager:debug("password prompt~n"),
 					P = base64:encode(Password),
 					socket:send(Socket, [P,"\r\n"]),
 					case read_possible_multiline_reply(Socket) of
 						{ok, <<"235 ", _Rest/binary>>} ->
-							%io:format("authentication accepted~n"),
+							lager:debug("authentication accepted~n"),
 							true;
-						{ok, _Msg} ->
-							%io:format("password rejected: ~s", [Msg]),
+						{ok, Msg} ->
+							lager:debug("password rejected: ~s", [Msg]),
 							do_AUTH_each(Socket, Username, Password, Tail)
 					end;
-				{ok, _Msg2} ->
-					%io:format("username rejected: ~s", [Msg2]),
+				{ok, Msg2} ->
+					lager:debug("username rejected: ~s", [Msg2]),
 					do_AUTH_each(Socket, Username, Password, Tail)
 			end;
-		{ok, _Something} ->
-			%io:format("got ~s~n", [Something]),
+		{ok, Term} ->
+			lager:debug("got ~s~n", [Term]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
@@ -399,16 +399,15 @@ do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail]) ->
 	socket:send(Socket, ["AUTH PLAIN ", AuthString, "\r\n"]),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"235", _Rest/binary>>} ->
-			%io:format("authentication accepted~n"),
+			lager:debug("authentication accepted~n"),
 			true;
-		_Else ->
+		Else ->
 			% TODO do we need to bother trying the multi-step PLAIN?
-			%io:format("authentication rejected~n"),
-			%io:format("~p~n", [Else]),
+			lager:debug("authentication rejected: ~p~n", [Else]),
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
-do_AUTH_each(Socket, Username, Password, [_Type | Tail]) ->
-	%io:format("unsupported AUTH type ~s~n", [Type]),
+do_AUTH_each(Socket, Username, Password, [Type | Tail]) ->
+	lager:debug("unsupported AUTH type ~s~n", [Type]),
 	do_AUTH_each(Socket, Username, Password, Tail).
 
 -spec try_EHLO(Socket :: socket:socket(), Options :: list()) -> {ok, list()}.
@@ -445,17 +444,17 @@ try_STARTTLS(Socket, Options, Extensions) ->
 	case {proplists:get_value(tls, Options),
 			proplists:get_value(<<"STARTTLS">>, Extensions)} of
 		{Atom, true} when Atom =:= always; Atom =:= if_available ->
-			%io:format("Starting TLS~n"),
+			lager:debug("Starting TLS~n"),
 			case {do_STARTTLS(Socket, Options), Atom} of
 				{false, always} ->
-					%io:format("TLS failed~n"),
+					lager:debug("TLS failed~n"),
 					quit(Socket),
 					erlang:throw({temporary_failure, tls_failed});
 				{false, if_available} ->
-					%io:format("TLS failed~n"),
+					lager:debug("TLS failed~n"),
 					{Socket, Extensions};
 				{{S, E}, _} ->
-					%io:format("TLS started~n"),
+					lager:debug("TLS started~n"),
 					{S, E}
 			end;
 		{always, _} ->
@@ -483,8 +482,8 @@ do_STARTTLS(Socket, Options) ->
 					quit(Socket),
 					error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
 					erlang:throw({temporary_failure, tls_failed});
-				_Else ->
-					%io:format("~p~n", [Else]),
+				Else ->
+					lager:debug("~p~n", [Else]),
 					false
 			end;
 		{ok, <<"4", _Rest/binary>> = Msg} ->
@@ -605,7 +604,7 @@ parse_extensions(Reply) ->
 							0 ->
 								{binstr:to_upper(Body), true};
 							_ ->
-								%io:format("discarding option ~p~n", [Body]),
+								lager:debug("discarding option ~p~n", [Body]),
 								[]
 						end
 				end

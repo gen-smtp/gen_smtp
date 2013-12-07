@@ -184,7 +184,7 @@ handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}},
 				end || L <- Listeners]),
 		{ok, ClientSocket} = socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket, Listener#listener.listenoptions),
 		%% New client connected
-		% io:format("new client connection.~n", []),
+		% lager:debug("new client connection.~n", []),
 		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, [{hostname, Listener#listener.hostname}, {sessioncount, length(CurSessions) + 1} | Listener#listener.sessionoptions]) of
 			{ok, Pid} ->
 				link(Pid),
@@ -203,11 +203,11 @@ handle_info({'EXIT', From, Reason}, State) ->
 		true ->
 			{noreply, State#state{sessions = lists:delete(From, State#state.sessions)}};
 		false ->
-			io:format("process ~p exited with reason ~p~n", [From, Reason]),
+			lager:debug("process ~p exited with reason ~p~n", [From, Reason]),
 			{noreply, State}
 	end;
 handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
-	io:format("Client terminated connection with econnaborted~n"),
+	lager:debug("Client terminated connection with econnaborted~n"),
 	socket:begin_inet_async(ListenSocket),
 	{noreply, State};
 handle_info({inet_async, _ListenSocket,_, Error}, State) ->
@@ -219,7 +219,7 @@ handle_info(_Info, State) ->
 %% @hidden
 -spec terminate(Reason :: any(), State :: #state{}) -> 'ok'.
 terminate(Reason, State) ->
-	io:format("Terminating due to ~p~n", [Reason]),
+	lager:debug("Terminating due to ~p~n", [Reason]),
 	lists:foreach(fun(#listener{socket=S}) -> catch socket:close(S) end, State#state.listeners),
 	ok.
 
