@@ -471,9 +471,6 @@ do_STARTTLS(Socket, Options) ->
 	socket:send(Socket, "STARTTLS\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"220", _Rest/binary>>} ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
 			case catch socket:to_ssl_client(Socket, [], 5000) of
 				{ok, NewSocket} ->
 					%NewSocket;
@@ -502,9 +499,6 @@ connect(Host, Options) ->
 	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false}],
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
-			application:start(crypto),
-			application:start(public_key),
-			application:start(ssl),
 			ssl;
 		_ ->
 			tcp
@@ -810,9 +804,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "STARTTLS\r\n"}, socket:recv(X, 0, 1000)),
-								application:start(crypto),
-								application:start(public_key),
-								application:start(ssl),
+								gen_smtp_application:ensure_all_started(gen_smtp),
 								socket:send(X, "220 ok\r\n"),
 								{ok, Y} = socket:to_ssl_server(X, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
@@ -841,9 +833,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "STARTTLS\r\n"}, socket:recv(X, 0, 1000)),
-								application:start(crypto),
-								application:start(public_key),
-								application:start(ssl),
+								gen_smtp_application:ensure_all_started(gen_smtp),
 								socket:send(X, "220 ok\r\n"),
 								{ok, Y} = socket:to_ssl_server(X, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
@@ -1010,9 +1000,7 @@ session_start_test_() ->
 			fun({_ListenSock}) ->
 					{"Connecting to a SSL socket directly should work",
 						fun() ->
-								application:start(crypto),
-								application:start(public_key),
-								application:start(ssl),
+								gen_smtp_application:ensure_all_started(gen_smtp),
 								{ok, ListenSock} = socket:listen(ssl, 9877, [{certfile, "../testdata/server.crt"}, {keyfile, "../testdata/server.key"}]),
 								Options = [{relay, <<"localhost">>}, {port, 9877}, {hostname, <<"testing">>}, {ssl, true}],
 								{ok, _Pid} = send({<<"test@foo.com">>, [<<"<foo@bar.com>">>, <<"baz@bar.com">>], <<"hello world">>}, Options),

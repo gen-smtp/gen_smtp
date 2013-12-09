@@ -44,8 +44,6 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
 
--export([behaviour_info/1]).
-
 -record(envelope,
 	{
 		from :: binary() | 'undefined',
@@ -71,24 +69,31 @@
 	}
 ).
 
-%% @hidden
--spec behaviour_info(atom()) -> [{atom(), non_neg_integer()}] | 'undefined'.
-behaviour_info(callbacks) ->
-	[{init,4},
-	  {terminate,2},
-	  {code_change,3},
-	  {handle_HELO,2},
-	  {handle_EHLO,3},
-	  {handle_MAIL,2},
-	  {handle_MAIL_extension,2},
-	  {handle_RCPT,2},
-	  {handle_RCPT_extension,2},
-	  {handle_DATA,4},
-	  {handle_RSET,1},
-	  {handle_VRFY,2},
-	  {handle_other,3}];
-behaviour_info(_Other) ->
-	undefined.
+-type(state() :: any()).
+-type(error_message() :: {'error', string(), state()}).
+
+-callback code_change(OldVsn :: any(), State :: state(), Extra :: any()) ->  {'ok', state()}.
+-callback handle_HELO(Hostname :: binary(), State :: state()) ->
+    {'ok', pos_integer(), state()} | {'ok', state()} | error_message().
+-callback handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: state()) ->
+    {'ok', list(), state()} | error_message().
+-callback handle_MAIL(From :: binary(), State :: state()) ->
+    {'ok', state()} | {'error', string(), state()}.
+-callback handle_MAIL_extension(Extension :: binary(), State :: state()) ->
+    {'ok', state()} | 'error'.
+-callback handle_RCPT(To :: binary(), State :: state()) ->
+    {'ok', state()} | {'error', string(), state()}.
+-callback handle_RCPT_extension(Extension :: binary(), State :: state()) ->
+    {'ok', state()} | 'error'.
+-callback handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: state()) ->
+    {'ok', string(), state()} | {'error', string(), state()}.
+-callback handle_RSET(State :: state()) -> state().
+-callback handle_VRFY(Address :: binary(), State :: state()) ->
+    {'ok', string(), state()} | {'error', string(), state()}.
+-callback handle_other(Verb :: binary(), Args :: binary(), state()) ->
+                          {string(), state()}.
+
+
 
 %% @doc Start a SMTP session linked to the calling process.
 %% @see start/3
@@ -571,9 +576,6 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			socket:send(Socket, "220 OK\r\n"),
-			crypto:start(),
-			application:start(public_key),
-			application:start(ssl),
 			Options1 = case proplists:get_value(certfile, Options) of
 				undefined ->
 					[];
@@ -1751,9 +1753,7 @@ smtp_session_tls_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				crypto:start(),
-				application:start(public_key),
-				application:start(ssl),
+				gen_smtp_application:ensure_all_started(gen_smtp),
 				Self = self(),
 				spawn(fun() ->
 							{ok, ListenSock} = socket:listen(tcp, 9876, [binary]),
