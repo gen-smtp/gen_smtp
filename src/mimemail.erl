@@ -200,9 +200,11 @@ decode_header_tokens_strict([Data | Tokens], Charset) ->
 %% string and only then decode it with iconv.
 decode_header_tokens_permissive([], _, [Result]) when is_binary(Result) ->
 	{ok, Result};
-decode_header_tokens_permissive([], _, _Stack) ->
-	%% io:format(user, "Stack: ~p~n", [Stack]),
-	error;
+decode_header_tokens_permissive([], _, Stack) ->
+	case lists:all(fun erlang:is_binary/1, Stack) of
+		true -> {ok, lists:reverse(Stack)};
+		false  -> error
+	end;
 decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
 	NewData = iolist_to_binary([PrevData, Data]),
 	case convert(Charset, Enc, NewData) of
