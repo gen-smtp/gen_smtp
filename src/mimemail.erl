@@ -1308,14 +1308,6 @@ parse_example_mails_test_() ->
 				?assertEqual(Filename, DispositionName)
 			end
 		},
-		{"permissive malformed folded multibyte header decoder",
-			fun() ->
-				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
-				?assertEqual(<<"Hello world\n">>, Body),
-				?assertEqual(<<"NOD32 Smart Security - бесплатная лицензия">>,
-							proplists:get_value(<<"Subject">>, Headers))
-			end
-		},
 		{"testcase1",
 			fun() ->
 				Multipart = <<"multipart">>,
