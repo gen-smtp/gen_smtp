@@ -2065,7 +2065,7 @@ dkim_canonicalization_test_() ->
 	{"Simple headers canonicalization",
 	fun() ->
 			?assertEqual([<<"A : X\r\n">>,
-						  <<"B : Y\t\r\n\tZ	 \r\n">>],
+						  <<"B : Y\t\r\n\tZ  \r\n">>],
 						 dkim_canonicalize_headers(Hdrs, simple))
 	end},
 	{"Relaxed headers canonicalization",
@@ -2090,6 +2090,7 @@ dkim_sign_test_() ->
 					   <<"123">>},
 			  Options = [{dkim, [{s, <<"foo.bar">>},
 								 {d, <<"example.com">>},
+								 {c, {simple, simple}},
 								 {private_key, {pem_plain, PrivKey}}]}],
 
 			  Enc = encode(Email, Options),
