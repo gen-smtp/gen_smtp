@@ -161,8 +161,8 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 	end,
 	socket:setopts(Socket, [{packet, line}]),
 	% Unescape double periods (rfc821 4.5.2)
-	EscapedBody = iolist_to_binary(re:replace(Body, <<"^\.\.">>, <<".">>, [global, multiline])),
-	Envelope = Env#envelope{data = EscapedBody},% size = length(EscapedBody)},
+	UnescapedBody = re:replace(Body, <<"^\.\.">>, <<".">>, [global, multiline, {return, binary}]),
+	Envelope = Env#envelope{data = UnescapedBody},% size = length(UnescapedBody)},
 	Valid = case has_extension(Extensions, "SIZE") of
 		{true, Value} ->
 			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
