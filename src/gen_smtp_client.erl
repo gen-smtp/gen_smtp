@@ -264,7 +264,9 @@ try_DATA(Body, Socket, _Extensions) ->
 	socket:send(Socket, "DATA\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"354", _Rest/binary>>} ->
-			socket:send(Socket, [Body, "\r\n.\r\n"]),
+			%% Escape period at start of line (rfc821 4.5.2)
+			EscapedBody = re:replace(Body, <<"^\\\.">>, <<"..">>, [global, multiline, {return, binary}]),
+			socket:send(Socket, [EscapedBody, "\r\n.\r\n"]),
 			case read_possible_multiline_reply(Socket) of
 				{ok, <<"250 ", Receipt/binary>>} ->
 					Receipt;
