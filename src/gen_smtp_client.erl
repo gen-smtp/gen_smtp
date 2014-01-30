@@ -774,7 +774,30 @@ session_start_test_() ->
 					}
 			end,
 			fun({ListenSock}) ->
-					{"a valid complete transaction with binary arguments shoyld succeed",
+					{"a valid complete transaction exercising period escaping",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
+								{ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], ".hello world"}, Options),
+								{ok, X} = socket:accept(ListenSock, 1000),
+								socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 hostname\r\n"),
+								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "DATA\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "354 ok\r\n"),
+								?assertMatch({ok, "..hello world\r\n"}, socket:recv(X, 0, 1000)),
+								?assertMatch({ok, ".\r\n"}, socket:recv(X, 0, 1000)),
+								socket:send(X, "250 ok\r\n"),
+								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"a valid complete transaction with binary arguments should succeed",
 						fun() ->
 								Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
 								{ok, _Pid} = send({<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>}, Options),
