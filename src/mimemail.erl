@@ -77,7 +77,7 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
 	decode(Headers, Body, Options).
 
 decode(OrigHeaders, Body, Options) ->
-	%io:format("headers: ~p~n", [Headers]),
+	lager:debug("headers: ~p~n", [OrigHeaders]),
 	Encoding = proplists:get_value(encoding, Options, none),
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
@@ -112,7 +112,7 @@ encode({Type, Subtype, Headers, ContentTypeParams, Parts}) ->
 		binstr:join(encode_component(Type, Subtype, FixedHeaders2, FixedParams, Parts),
 			"\r\n")]);
 encode(_) ->
-	io:format("Not a mime-decoded DATA~n"),
+	lager:debug("Not a mime-decoded DATA~n"),
 	erlang:error(non_mime).
 
 
@@ -248,7 +248,7 @@ decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 				undefined ->
 					erlang:error(no_boundary);
 				Boundary ->
-					% io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
+					% lager:debug("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
 					{<<"multipart">>, SubType, Headers, Parameters2, split_body_by_boundary(Body, list_to_binary(["--", Boundary]), MimeVsn, Options)}
 			end;
@@ -257,7 +257,7 @@ decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
 			{<<"message">>, <<"rfc822">>, Headers, Parameters2, decode(NewHeaders, NewBody, Options)};
 		{Type, SubType, Parameters} ->
-			%io:format("body is ~s/~s~n", [Type, SubType]),
+			lager:debug("body is ~s/~s~n", [Type, SubType]),
 			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
 			{Type, SubType, Headers, Parameters2, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body, proplists:get_value(<<"charset">>, Parameters), proplists:get_value(encoding, Options, none))};
 		undefined -> % defaults
@@ -272,7 +272,7 @@ decode_component(_Headers, _Body, Other, _Options) ->
 -spec(get_header_value/3 :: (Needle :: binary(), Headers :: [{binary(), binary()}], Default :: any()) -> binary() | any()).
 %% @doc Do a case-insensitive header lookup to return that header's value, or the specified default.
 get_header_value(Needle, Headers, Default) ->
-	%io:format("Headers: ~p~n", [Headers]),
+	lager:debug("Headers: ~p~n", [Headers]),
 	F =
 	fun({Header, _Value}) ->
 			binstr:to_lower(Header) =:= binstr:to_lower(Needle)
@@ -415,7 +415,7 @@ parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
 	% folded headers
 	[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
 	FieldValue = list_to_binary([OldFieldValue, T]),
-	%io:format("~p = ~p~n", [FieldName, FieldValue]),
+	lager:debug("~p = ~p~n", [FieldName, FieldValue]),
 	case binstr:strpos(Body, "\r\n") of
 		0 ->
 			{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
@@ -425,7 +425,7 @@ parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
 			parse_headers(binstr:substr(Body, Index2 + 2), binstr:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | OtherHeaders])
 	end;
 parse_headers(Body, Line, Headers) ->
-	%io:format("line: ~p, nextpart ~p~n", [Line, binstr:substr(Body, 1, 10)]),
+	lager:debug("line: ~p, nextpart ~p~n", [Line, binstr:substr(Body, 1, 10)]),
 	case binstr:strchr(Line, $:) of
 		0 ->
 			{lists:reverse(Headers), list_to_binary([Line, "\r\n", Body])};
@@ -507,7 +507,7 @@ decode_quoted_printable(Line, Rest, Acc) ->
 		0 ->
 			decode_quoted_printable(Rest, <<>>, [decode_quoted_printable_line(Line, []) | Acc]);
 		Index ->
-			%io:format("next line ~p~nnext rest ~p~n", [binstr:substr(Rest, 1, Index +1), binstr:substr(Rest, Index + 2)]),
+			lager:debug("next line ~p~nnext rest ~p~n", [binstr:substr(Rest, 1, Index +1), binstr:substr(Rest, Index + 2)]),
 			decode_quoted_printable(binstr:substr(Rest, 1, Index +1), binstr:substr(Rest, Index + 2),
 				[decode_quoted_printable_line(Line, []) | Acc])
 	end.
@@ -798,7 +798,7 @@ encode_component_part(Part) ->
 					PartData
 			 );
 		_ ->
-			io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
+			lager:debug("encode_component_part couldn't match Part to: ~p~n", [Part]),
 			[]
 	end.
 
