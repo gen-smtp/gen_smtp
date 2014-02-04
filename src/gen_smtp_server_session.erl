@@ -160,7 +160,7 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 		_ -> self() ! {socket:get_proto(Socket), Socket, Rest}
 	end,
 	socket:setopts(Socket, [{packet, line}]),
-	%% Unescape periods at start of line (rfc821 4.5.2)
+	%% Unescape periods at start of line (rfc5321 4.5.2)
 	UnescapedBody = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
 	Envelope = Env#envelope{data = UnescapedBody},% size = length(Body)},
 	Valid = case has_extension(Extensions, "SIZE") of
