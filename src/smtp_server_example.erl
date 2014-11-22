@@ -7,7 +7,8 @@
 
 -export([init/4, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
 	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4, handle_RSET/1, handle_VRFY/2,
-	handle_other/3, handle_AUTH/4, handle_STARTTLS/1, code_change/3, terminate/2]).
+	handle_other/3, handle_AUTH/4, handle_STARTTLS/1, handle_info/2,
+	code_change/3, terminate/2]).
 
 -define(RELAY, true).
 
@@ -201,6 +202,13 @@ handle_AUTH(_Type, _Username, _Password, _State) ->
 handle_STARTTLS(State) ->
     io:format("TLS Started~n"),
     State.
+
+-spec handle_info(Info :: term(), State :: term()) ->
+    {noreply, NewState :: term()} |
+    {noreply, NewState :: term(), timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: term()}.
+handle_info(_Info, State) ->
+	{noreply, State}.
 
 -spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
