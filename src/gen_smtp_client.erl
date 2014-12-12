@@ -498,7 +498,11 @@ do_STARTTLS(Socket, Options) ->
 connect(Host, Options) when is_binary(Host) ->
 	connect(binary_to_list(Host), Options);
 connect(Host, Options) ->
-	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false}],
+	AddSockOpts = case proplists:get_value(sockopts, Options) of
+		undefined -> [];
+		Other -> Other
+	end,
+	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false}] ++ AddSockOpts,
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
 			ssl;
