@@ -502,7 +502,7 @@ connect(Host, Options) ->
 		undefined -> [];
 		Other -> Other
 	end,
-	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false}] ++ AddSockOpts,
+    SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
 			ssl;
