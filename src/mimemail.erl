@@ -883,7 +883,12 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
 get_default_encoding() ->
-	<<"utf-8//IGNORE">>.
+	case erlang:function_exported(iconv, conv, 2) of
+		% default encoding is utf-8 if we can find the iconv module
+		true -> <<"utf-8//IGNORE">>;
+		% if iconv is not available, no transcoding will be performed
+		false -> none
+	end.
 
 % convert some common invalid character names into the correct ones
 fix_encoding(Encoding) when Encoding == <<"utf8">>; Encoding == <<"UTF8">> ->
