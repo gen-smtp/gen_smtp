@@ -48,7 +48,7 @@
 -export([send/2, send/3, send_blocking/2]).
 -endif.
 
--type email() :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}. 
+-type email() :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}.
 
 -spec send(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list()) -> {'ok', pid()} | {'error', any()}.
 %% @doc Send an email in a non-blocking fashion via a spawned_linked process.
@@ -315,8 +315,9 @@ try_AUTH(Socket, Options, AuthTypes) ->
 					false
 			end;
 		true ->
-			Username = proplists:get_value(username, Options),
-			Password = proplists:get_value(password, Options),
+
+			Username = to_string(proplists:get_value(username, Options)),
+			Password = to_string(proplists:get_value(password, Options)),
 			%io:format("Auth types: ~p~n", [AuthTypes]),
 			Types = re:split(AuthTypes, " ", [{return, list}, trim]),
 			case do_AUTH(Socket, Username, Password, Types) of
@@ -332,6 +333,9 @@ try_AUTH(Socket, Options, AuthTypes) ->
 					true
 			end
 	end.
+
+to_string(String) when is_list(String)   -> String;
+to_string(Binary) when is_binary(Binary) -> binary_to_list(Binary).
 
 -spec do_AUTH(Socket :: socket:socket(), Username :: string(), Password :: string(), Types :: [string()]) -> boolean().
 do_AUTH(Socket, Username, Password, Types) ->
@@ -718,7 +722,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(X, 0, 1000)),
 								socket:send(X, "250-server.example.com EHLO\r\n250-AUTH LOGIN PLAIN\r\n421 too busy\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, socket:recv(X, 0, 1000)),
-								
+
 								{ok, Y} = socket:accept(ListenSock, 1000),
 								socket:send(Y, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, socket:recv(Y, 0, 1000)),
