@@ -63,11 +63,7 @@ guess_FQDN() ->
 -compile({nowarn_deprecated_function, [{crypto, md5_mac}]}).
 -spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> binary()).
 compute_cram_digest(Key, Data) ->
-	Bin = 
-		case check_hmac_md5_fun() of
-				true -> crypto:hmac(md5, Key, Data);
-				_ -> crypto:md5_mac(Key, Data)
-		end,
+	Bin = crypto:hmac(md5, Key, Data),
 	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 %% @doc Generate a seed string for CRAM.
@@ -183,6 +179,3 @@ scan_rfc822_scan_endquote([$"|Rest], Acc, false) ->
 	{lists:reverse(Acc), Rest};
 scan_rfc822_scan_endquote([Ch|Rest], Acc, _) ->
 	scan_rfc822_scan_endquote(Rest, [Ch|Acc], false).
-
-check_hmac_md5_fun()->
-	erlang:function_exported(crypto, hmac, 3).
