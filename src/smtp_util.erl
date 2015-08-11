@@ -127,9 +127,10 @@ combine_rfc822_addresses([{Name, Email}|Rest], Acc) ->
 	combine_rfc822_addresses(Rest, [32, $,, $>, Email, $<, 32, opt_quoted(Name)|Acc]).
 
 opt_quoted(N)  ->
-	case re:run(N, "\"") of
-		nomatch -> N;
-		{match, _} ->
+	case re:run(N, "\"", [{capture, none}]) of
+		nomatch ->
+			N;
+		match ->
 			[$", re:replace(N, "\"", "\\\\\"", [global]), $"]
 	end.
 
@@ -168,9 +169,10 @@ scan_rfc822_scan_endpointybracket(String) ->
 			{String, []}
 	end.
 
-scan_rfc822_scan_endquote([$\\|R], Acc, InEscape) ->
-	%% in escape
-	scan_rfc822_scan_endquote(R, Acc, not(InEscape));
+scan_rfc822_scan_endquote([$\\|R], Acc, false) ->
+	scan_rfc822_scan_endquote(R, Acc, true);
+scan_rfc822_scan_endquote([$\\|R], Acc, true) ->
+	scan_rfc822_scan_endquote(R, [$\\|Acc], false);
 scan_rfc822_scan_endquote([$"|R], Acc, true) ->
 	scan_rfc822_scan_endquote(R, [$"|Acc], false);
 scan_rfc822_scan_endquote([$"|Rest], Acc, false) ->
