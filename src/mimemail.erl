@@ -918,12 +918,36 @@ rfc2047_utf8_encode(T, Acc, WordLen) when WordLen >= 55 ->
 rfc2047_utf8_encode([C|T], Acc, WordLen) when C > 32 andalso C < 127 andalso C /= 32 
     andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
     rfc2047_utf8_encode(T, [C|Acc], WordLen+1);
-rfc2047_utf8_encode([C|T], Acc, WordLen) ->
-    rfc2047_utf8_encode(T, [hex(C rem 16), hex(C div 16), $= | Acc], WordLen+3).
+%% ASCII
+rfc2047_utf8_encode([C|T], Acc, WordLen) when C >= 32 andalso C < 127 ->
+    rfc2047_utf8_encode(T, encode_byte(C) ++ Acc, WordLen+3);
+%% First byte of UTF-8 sequence
+%% ensure that encoded 2-4 byte UTF-8 characters keept in one line
+rfc2047_utf8_encode([C|T], Acc, WordLen) when C > 192 andalso C =< 247 ->
+    UTFBytes = utf_char_bytes(C),
+    {Rest, ExtraUTFBytes} = encode_extra_utf_bytes(UTFBytes-1, T),
+    rfc2047_utf8_encode(Rest, ExtraUTFBytes ++ encode_byte(C) ++ Acc, WordLen+UTFBytes*3).
 
+encode_byte(C) -> [ hex(C rem 16), hex(C div 16), $= ].
 hex(N) when N >= 10 -> N + $A - 10;
 hex(N) -> N + $0.
 
+%% https://en.wikipedia.org/wiki/UTF-8#Description
+%% 240 - 247
+utf_char_bytes(C) when C >= 2#11110000 andalso C =< 2#11110111 -> 4;
+%% 224 - 239
+utf_char_bytes(C) when C >= 2#11100000 andalso C =< 2#11101111 -> 3;
+%% 192 - 223
+utf_char_bytes(C) when C >= 2#11000000 andalso C =< 2#11011111 -> 2;
+%% 0 - 127 (ASCII)
+utf_char_bytes(C) when C >= 2#00000000 andalso C =< 2#01111111 -> 1.
+
+encode_extra_utf_bytes(0, AccIn) -> {AccIn, []};
+encode_extra_utf_bytes(Bytes, AccIn) -> encode_extra_utf_bytes(Bytes, AccIn, []).
+
+encode_extra_utf_bytes(0, AccIn, AccOut) -> {AccIn, AccOut};
+encode_extra_utf_bytes(Bytes, [C|T], AccOut) when C >= 128 andalso C =< 191 ->
+    encode_extra_utf_bytes(Bytes-1, T, encode_byte(C) ++ AccOut).
 
 %% @doc
 %% DKIM sign functions
