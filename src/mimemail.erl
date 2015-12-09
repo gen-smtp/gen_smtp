@@ -900,33 +900,39 @@ rfc2047_utf8_encode(B) when is_binary(B) ->
 rfc2047_utf8_encode([]) -> 
 	[];
 rfc2047_utf8_encode(Text) ->
-    rfc2047_utf8_encode(Text, Text).
+    %% Don't escape when all characters are ASCII printable
+    case is_ascii_printable(Text) of
+        'true' -> Text;
+        'false' -> rfc2047_utf8_encode(Text, lists:reverse("=?UTF-8?Q?"), 10, [])
+    end.
 
-%% Don't escape when all characters are ASCII printable
-rfc2047_utf8_encode([], Text) ->
-    Text;
-rfc2047_utf8_encode([H|T], Text) when H >= 32 andalso H =< 126 ->
-    rfc2047_utf8_encode(T, Text);
-rfc2047_utf8_encode(_, Text) ->
-    "=?UTF-8?Q?" ++ rfc2047_utf8_encode(Text, [], 0) ++ "?=".
-
-rfc2047_utf8_encode([], Acc, _WordLen) ->
-    lists:reverse(Acc);
-rfc2047_utf8_encode(T, Acc, WordLen) when WordLen >= 55 ->
+rfc2047_utf8_encode(T, Acc, WordLen, Char) when WordLen + length(Char) > 73 ->
+    CloseLine = lists:reverse("?=\r\n "),
+    NewLine = Char ++ lists:reverse("=?UTF-9?Q?"),
     %% Make sure that the individual encoded words are not longer than 76 chars (including charset etc)
-    rfc2047_utf8_encode(T, [$?,$Q,$?,$8,$-,$F,$T,$U,$?,$=,$\ ,$\n,$\r,$=,$?|Acc], 0);
-rfc2047_utf8_encode([C|T], Acc, WordLen) when C > 32 andalso C < 127 andalso C /= 32 
+    rfc2047_utf8_encode(T, NewLine ++ CloseLine ++ Acc, length(NewLine), []);
+
+rfc2047_utf8_encode([], Acc, _WordLen, Char) ->
+    lists:reverse("=?" ++ Char ++ Acc);
+
+%% ASCII characters dont encode except space, ?, _, =, and .
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32 
     andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
-    rfc2047_utf8_encode(T, [C|Acc], WordLen+1);
-%% ASCII
-rfc2047_utf8_encode([C|T], Acc, WordLen) when C >= 32 andalso C < 127 ->
-    rfc2047_utf8_encode(T, encode_byte(C) ++ Acc, WordLen+3);
+    rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), [C]);
+%% Encode all other ASCII
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C >= 32 andalso C < 127 ->
+    rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), encode_byte(C));
 %% First byte of UTF-8 sequence
 %% ensure that encoded 2-4 byte UTF-8 characters keept in one line
-rfc2047_utf8_encode([C|T], Acc, WordLen) when C > 192 andalso C =< 247 ->
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 192 andalso C =< 247 ->
     UTFBytes = utf_char_bytes(C),
     {Rest, ExtraUTFBytes} = encode_extra_utf_bytes(UTFBytes-1, T),
-    rfc2047_utf8_encode(Rest, ExtraUTFBytes ++ encode_byte(C) ++ Acc, WordLen+UTFBytes*3).
+    rfc2047_utf8_encode(Rest, Char ++ Acc, WordLen+length(Char), ExtraUTFBytes ++ encode_byte(C)).
+
+is_ascii_printable([]) -> 'true';
+is_ascii_printable([H|T]) when H >= 32 andalso H =< 126 ->
+    is_ascii_printable(T);
+is_ascii_printable(_) -> 'false'.
 
 encode_byte(C) -> [ hex(C rem 16), hex(C div 16), $= ].
 hex(N) when N >= 10 -> N + $A - 10;
