@@ -91,7 +91,7 @@
 -callback handle_VRFY(Address :: binary(), State :: state()) ->
     {'ok', string(), state()} | {'error', string(), state()}.
 -callback handle_other(Verb :: binary(), Args :: binary(), state()) ->
-                          {string(), state()}.
+                          {string() | 'noreply', state()}.
 
 
 
@@ -614,8 +614,13 @@ handle_request({<<"STARTTLS">>, _Args}, #state{socket = Socket} = State) ->
 	{ok, State};
 handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackstate = OldCallbackState} = State) ->
 	{Message, CallbackState} = Module:handle_other(Verb, Args, OldCallbackState),
-	socket:send(Socket, [Message, "\r\n"]),
+	maybe_reply(Message, Socket),
 	{ok, State#state{callbackstate = CallbackState}}.
+
+-spec(maybe_reply/2 :: (Message :: string() | 'noreply', Socket :: socket:socket()) -> 'ok' | {'error', any()}).
+maybe_reply('noreply', _) -> 'ok';
+maybe_reply(Message, Socket) ->
+	socket:send(Socket, [Message, "\r\n"]).
 
 -spec(parse_encoded_address/1 :: (Address :: binary()) -> {binary(), binary()} | 'error').
 parse_encoded_address(<<>>) ->
