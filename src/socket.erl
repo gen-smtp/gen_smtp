@@ -30,7 +30,9 @@
                               {packet, line},
                               {reuseaddr, true}]).
 -define(TCP_CONNECT_OPTIONS,[ {active, false},
-                              {packet, line}]).
+                              {packet, line},
+                              {ip, {0,0,0,0}},
+                              {port, 0}]).
 -define(SSL_LISTEN_OPTIONS, [ {active, false},
                               {backlog, 30},
                               {certfile, "server.crt"},
@@ -44,8 +46,10 @@
 -define(SSL_CONNECT_OPTIONS,[ {active, false},
                               {depth, 0},
                               {packet, line},
-                              {ssl_imp, new}]).
-
+                              {ssl_imp, new},
+                              {ip, {0,0,0,0}},
+                              {port, 0}]).
+ 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
