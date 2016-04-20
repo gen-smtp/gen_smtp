@@ -85,9 +85,9 @@ decode(OrigHeaders, Body, Options) ->
 	Encoding = proplists:get_value(encoding, Options, none),
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
-	AllowMissingVersion = proplists:get_value(allow_missing_version, Options, false),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
 		undefined ->
+			AllowMissingVersion = proplists:get_value(allow_missing_version, Options, false),
 			case parse_content_type(get_header_value(<<"Content-Type">>, Headers)) of
 				{<<"multipart">>, _SubType, _Parameters} when AllowMissingVersion ->
 					MimeVersion = proplists:get_value(default_mime_version, Options, ?DEFAULT_MIME_VERSION),
