@@ -18,7 +18,8 @@ defmodule GenSMTP.Mixfile do
 
   defp package do
     [files: ~w(src rebar.config LICENSE README.markdown),
-     contributors: ["Vagabond"],
+     contributors: ["arjan", "mworrell", "Vagabond"],
+     licenses: ["BSD 2-clause"],
      links: %{"GitHub" => "https://github.com/Vagabond/gen_smtp"}]
   end
 end
