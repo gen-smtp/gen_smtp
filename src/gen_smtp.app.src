@@ -22,7 +22,8 @@
                   crypto,
                   asn1,
                   public_key,
-                  ssl
+                  ssl,
+                  eiconv
                  ]},
   {registered, []}
  ]

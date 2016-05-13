@@ -1773,7 +1773,7 @@ smtp_session_tls_test_() ->
 					SSock when is_port(SSock) ->
 						ok
 				end,
-				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, [{keyfile, "../testdata/server.key"}, {certfile, "../testdata/server.crt"}, {hostname, "localhost"}, {sessioncount, 1}, {callbackoptions, [{auth, true}]}]),
+				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}, {hostname, "localhost"}, {sessioncount, 1}, {callbackoptions, [{auth, true}]}]),
 				socket:controlling_process(SSock, Pid),
 				{CSock, Pid}
 		end,

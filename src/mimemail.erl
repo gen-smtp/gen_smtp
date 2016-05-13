@@ -1244,7 +1244,7 @@ various_parsing_test_() ->
 
 parse_example_mails_test_() ->
 	Getmail = fun(File) ->
-		{ok, Email} = file:read_file(string:concat("../testdata/", File)),
+		{ok, Email} = file:read_file(string:concat("test/fixtures/", File)),
 		%Email = binary_to_list(Bin),
 		decode(Email)
 	end,
@@ -1458,7 +1458,7 @@ parse_example_mails_test_() ->
 		},
 		{"no \\r\\n before first boundary",
 			fun() ->
-				{ok, Bin} = file:read_file("../testdata/html.eml"),
+				{ok, Bin} = file:read_file("test/fixtures/html.eml"),
 				Decoded = decode(Bin),
 				?assertEqual(2, length(element(5, Decoded)))
 			end
@@ -2108,7 +2108,7 @@ roundtrip_test_() ->
 	[
 		{"roundtrip test for the gamut",
 			fun() ->
-					{ok, Email} = file:read_file("../testdata/the-gamut.eml"),
+					{ok, Email} = file:read_file("test/fixtures/the-gamut.eml"),
 					Decoded = decode(Email),
 					_Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
@@ -2122,7 +2122,7 @@ roundtrip_test_() ->
 		},
 		{"round trip plain text only email",
 			fun() ->
-					{ok, Email} = file:read_file("../testdata/Plain-text-only.eml"),
+					{ok, Email} = file:read_file("test/fixtures/Plain-text-only.eml"),
 					Decoded = decode(Email),
 					_Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
@@ -2136,7 +2136,7 @@ roundtrip_test_() ->
 		},
 		{"round trip quoted-printable email",
 			fun() ->
-					{ok, Email} = file:read_file("../testdata/testcase1"),
+					{ok, Email} = file:read_file("test/fixtures/testcase1"),
 					Decoded = decode(Email),
 					_Encoded = encode(Decoded),
 					%{ok, F1} = file:open("f1", [write]),
@@ -2177,8 +2177,8 @@ dkim_canonicalization_test_() ->
 	 end}].
 
 dkim_sign_test_() ->
-	%% * sign using testdata/dkim*.pem
-	{ok, PrivKey} = file:read_file("../testdata/dkim-rsa-private.pem"),
+	%% * sign using test/fixtures/dkim*.pem
+	{ok, PrivKey} = file:read_file("test/fixtures/dkim-rsa-private.pem"),
 	[{"Sign simple",
 	  fun() ->
 			  Email = {<<"text">>, <<"plain">>,
@@ -2199,7 +2199,7 @@ dkim_sign_test_() ->
 			  Enc = encode(Email, Options),
 			  %% This `Enc' value can be verified, for example, by Python script
 			  %% https://launchpad.net/dkimpy like:
-			  %% >>> pubkey = ''.join(open("../testdata/dkim-rsa-public.pem").read().splitlines()[1:-1])
+			  %% >>> pubkey = ''.join(open("test/fixtures/dkim-rsa-public.pem").read().splitlines()[1:-1])
 			  %% >>> dns_mock = lambda *args: 'v=DKIM1; g=*; k=rsa; p=' + pubkey
 			  %% >>> import dkim
 			  %% >>> d = dkim.DKIM(mime_message) % pass `Enc' value as 1'st argument
