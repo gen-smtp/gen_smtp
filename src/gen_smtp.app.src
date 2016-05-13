@@ -2,8 +2,8 @@
 
 {application, gen_smtp,
  [
-  {description, "An erlang SMTP server/client framework"},
-  {vsn, "0.9.0"},
+  {description, "A generic Erlang SMTP server/client framework"},
+  {vsn, "0.10.0"},
   {modules,
    [
     binstr,
@@ -22,9 +22,11 @@
                   crypto,
                   asn1,
                   public_key,
-                  ssl,
-                  eiconv
+                  ssl
                  ]},
-  {registered, []}
+  {registered, []},
+  {maintainers, ["Arjan Scherpenisse", "Marc Worrell", "Andrew Thompson"]},
+  {licenses, ["BSD 2-clause"]},
+  {links, [{"GitHub", "https://github.com/Vagabond/gen_smtp"}]}
  ]
 }.
