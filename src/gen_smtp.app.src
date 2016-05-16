@@ -9,5 +9,6 @@
   {maintainers,["Arjan Scherpenisse","Marc Worrell",
                 "Andrew Thompson"]},
   {licenses,["BSD 2-clause"]},
-  {links,[{"GitHub","https://github.com/Vagabond/gen_smtp"}]}]
+  {links,[{"GitHub","https://github.com/Vagabond/gen_smtp"}]},
+  {exclude_files, ["src/smtp_rfc822_parse.erl"]}]
 }.
