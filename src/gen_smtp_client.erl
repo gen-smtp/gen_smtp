@@ -486,6 +486,10 @@ do_STARTTLS(Socket, Options) ->
 					quit(Socket),
 					error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
 					erlang:throw({temporary_failure, tls_failed});
+				{error, ssl_not_started} ->
+					quit(Socket),
+					error_logger:error_msg("SSL not started.~n"),
+					erlang:throw({permanent_failure, ssl_not_started});
 				_Else ->
 					%io:format("~p~n", [Else]),
 					false
