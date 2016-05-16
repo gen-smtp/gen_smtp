@@ -220,10 +220,11 @@ unique_id() ->
     erlang:now().
 -endif.
 
+-spec relay(binary(), [binary()], binary()) -> ok.
 relay(_, [], _) ->
 	ok;
 relay(From, [To|Rest], Data) ->
 	% relay message to email address
-	[_User, Host] = string:tokens(To, "@"),
+	[_User, Host] = string:tokens(binary_to_list(To), "@"),
 	gen_smtp_client:send({From, [To], erlang:binary_to_list(Data)}, [{relay, Host}]),
 	relay(From, Rest, Data).
