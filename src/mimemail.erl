@@ -64,13 +64,13 @@
 
 -type(options() :: [{'encoding', binary()} | {'decode_attachment', boolean()}]).
 
--spec(decode/1 :: (Email :: binary()) -> mimetuple()).
+-spec decode(Email :: binary()) -> mimetuple().
 %% @doc Decode a MIME email from a binary.
 decode(All) ->
 	{Headers, Body} = parse_headers(All),
 	decode(Headers, Body, ?DEFAULT_OPTIONS).
 
--spec(decode/2 :: (Email :: binary(), Options :: options()) -> mimetuple()).
+-spec decode(Email :: binary(), Options :: options()) -> mimetuple().
 %% @doc Decode with custom options
 decode(All, Options) when is_binary(All), is_list(Options) ->
 	{Headers, Body} = parse_headers(All),
@@ -98,7 +98,7 @@ decode(OrigHeaders, Body, Options) ->
 			decode_component(Headers, Body, Other, Options)
 	end.
 
--spec(encode/1 :: (MimeMail :: mimetuple()) -> binary()).
+-spec encode(MimeMail :: mimetuple()) -> binary().
 encode(MimeMail) ->
 	encode(MimeMail, []).
 
@@ -275,7 +275,7 @@ decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 decode_component(_Headers, _Body, Other, _Options) ->
 	erlang:error({mime_version, Other}).
 
--spec(get_header_value/3 :: (Needle :: binary(), Headers :: [{binary(), binary()}], Default :: any()) -> binary() | any()).
+-spec get_header_value(Needle :: binary(), Headers :: [{binary(), binary()}], Default :: any()) -> binary() | any().
 %% @doc Do a case-insensitive header lookup to return that header's value, or the specified default.
 get_header_value(Needle, Headers, Default) ->
 	%io:format("Headers: ~p~n", [Headers]),
@@ -291,7 +291,7 @@ get_header_value(Needle, Headers, Default) ->
 			Default
 	end.
 
--spec(get_header_value/2 :: (Needle :: binary(), Headers :: [{binary(), binary()}]) -> binary() | 'undefined').
+-spec get_header_value(Needle :: binary(), Headers :: [{binary(), binary()}]) -> binary() | 'undefined'.
 %% @doc Do a case-insensitive header lookup to return the header's value, or `undefined'.
 get_header_value(Needle, Headers) ->
 	get_header_value(Needle, Headers, undefined).
@@ -331,8 +331,8 @@ parse_with_comments(<<$", T/binary>>, Acc, Depth, false) -> %"
 parse_with_comments(<<H, Tail/binary>>, Acc, Depth, Quotes) ->
 	parse_with_comments(Tail, [H | Acc], Depth, Quotes).
 
--spec(parse_content_type/1 :: (Value :: 'undefined') -> 'undefined';
-	(Value :: binary()) -> {binary(), binary(), [{binary(), binary()}]}).
+-spec parse_content_type(Value :: 'undefined') -> 'undefined';
+	(Value :: binary()) -> {binary(), binary(), [{binary(), binary()}]}.
 parse_content_type(undefined) ->
 	undefined;
 parse_content_type(String) ->
@@ -351,8 +351,8 @@ parse_content_type(String) ->
 				throw(bad_content_type)
 	end.
 
--spec(parse_content_disposition/1 :: (Value :: 'undefined') -> 'undefined';
-	(String :: binary()) -> {binary(), [{binary(), binary()}]}).
+-spec parse_content_disposition(Value :: 'undefined') -> 'undefined';
+	(String :: binary()) -> {binary(), [{binary(), binary()}]}.
 parse_content_disposition(undefined) ->
 	undefined;
 parse_content_disposition(String) ->
@@ -401,7 +401,7 @@ split_body_by_boundary_(Body, Boundary, Acc, Options) ->
 									[{DecodedHdrs, BodyRest} | Acc], Options)
 	end.
 
--spec(parse_headers/1 :: (Body :: binary()) -> {[{binary(), binary()}], binary()}).
+-spec parse_headers(Body :: binary()) -> {[{binary(), binary()}], binary()}.
 %% @doc Parse the headers off of a message and return a list of headers and the trailing body.
 parse_headers(Body) ->
 	case binstr:strpos(Body, "\r\n") of
@@ -482,7 +482,7 @@ decode_body(Type, Body, InEncoding, OutEncoding) ->
 	iconv:close(CD),
 	Result.
 
--spec(decode_body/2 :: (Type :: binary() | 'undefined', Body :: binary()) -> binary()).
+-spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
 decode_body(undefined, Body) ->
 	Body;
 decode_body(Type, Body) ->
