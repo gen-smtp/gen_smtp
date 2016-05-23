@@ -28,7 +28,7 @@ Current Participants
 Who is using it?
 ================
 
-+ gen_smtp is used to provide the email functionality of [OpenACD](http://github.com/Vagabond/OpenACD)
++ gen_smtp is used to provide the email functionality of [OpenACD](https://github.com/OpenACD/OpenACD)
 + gen_smtp will be used as both the SMTP server and SMTP client for [Zotonic](http://zotonic.com) as of version 0.7
 + [Chicago Boss](http://www.chicagoboss.org/) uses gen_smtp for its mail API.
 + [Gmailbox](https://www.gmailbox.org) uses gen_smtp to provide a free email forwarding service.
