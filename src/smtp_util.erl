@@ -60,7 +60,6 @@ guess_FQDN() ->
 	FQDN.
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
--compile({nowarn_deprecated_function, [{crypto, md5_mac}]}).
 -spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> binary()).
 compute_cram_digest(Key, Data) ->
 	Bin = crypto:hmac(md5, Key, Data),
