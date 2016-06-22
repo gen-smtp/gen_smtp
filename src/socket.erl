@@ -174,7 +174,7 @@ setopts(Socket, Options) when is_port(Socket) ->
 setopts(Socket, Options) ->
 	ssl:setopts(Socket, Options).
 
--spec(get_proto/1 :: (Socket :: any()) -> 'tcp' | 'ssl').
+-spec get_proto(Socket :: any()) -> 'tcp' | 'ssl'.
 get_proto(Socket) when is_port(Socket) ->
 	tcp;
 get_proto(_Socket) ->
@@ -315,7 +315,7 @@ extract_port_from_socket({sslsocket,_,{SSLPort,_}}) ->
 extract_port_from_socket(Socket) ->
 	Socket.
 
--spec(set_sockopt/2 :: (ListSock :: port(), CliSocket :: port()) -> 'ok' | any()).
+-spec set_sockopt(ListSock :: port(), CliSocket :: port()) -> 'ok' | any().
 set_sockopt(ListenObject, ClientSocket) ->
 	ListenSocket = extract_port_from_socket(ListenObject),
 	true = inet_db:register_socket(ClientSocket, inet_tcp),
