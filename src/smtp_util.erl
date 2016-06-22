@@ -61,18 +61,18 @@ guess_FQDN() ->
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
 -compile({nowarn_deprecated_function, [{crypto, md5_mac}]}).
--spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> binary()).
+-spec compute_cram_digest(Key :: binary(), Data :: string()) -> binary().
 compute_cram_digest(Key, Data) ->
 	Bin = crypto:hmac(md5, Key, Data),
 	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 %% @doc Generate a seed string for CRAM.
--spec(get_cram_string/1 :: (Hostname :: string()) -> string()).
+-spec get_cram_string(Hostname :: string()) -> string().
 get_cram_string(Hostname) ->
 	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
 
 %% @doc Trim \r\n from `String'
--spec(trim_crlf/1 :: (String :: string()) -> string()).
+-spec trim_crlf(String :: string()) -> string().
 trim_crlf(String) ->
 	string:strip(string:strip(String, right, $\n), right, $\r).
 
