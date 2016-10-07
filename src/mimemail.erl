@@ -239,7 +239,7 @@ convert(To, From, Data) ->
 	Converted.
 
 
-decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
+decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
 	case parse_content_disposition(get_header_value(<<"Content-Disposition">>, Headers)) of
 		{Disposition, DispositionParams} ->
 			ok;
