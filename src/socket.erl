@@ -48,8 +48,9 @@
                               {packet, line},
                               {ssl_imp, new},
                               {ip, {0,0,0,0}},
+                              {versions, ['tlsv1.2']},
                               {port, 0}]).
- 
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
