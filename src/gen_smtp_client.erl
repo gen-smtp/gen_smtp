@@ -28,6 +28,7 @@
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
 		{tls, if_available}, % always, never, if_available
+		{ssl_tls_options, [{versions, ['tlsv1.2']}]}, % used in ssl:connect, http://erlang.org/doc/man/ssl.html
 		{auth, if_available},
 		{hostname, smtp_util:guess_FQDN()},
 		{retries, 1} % how many retries per smtp host on temporary failure
@@ -471,23 +472,13 @@ try_STARTTLS(Socket, Options, Extensions) ->
 			{Socket, Extensions}
 	end.
 
-%% use tls proptocol if tls is set to always
--spec ssl_options(Options :: list()) -> [ssl:protocol()].
-ssl_options(Options) ->
-	case proplists:get_value(tls, Options) of
-		always ->
-			[{versions, ['tlsv1.2']}];
-		_Else ->
-			[]
-	end.
-
 %% attempt to upgrade socket to TLS
 -spec do_STARTTLS(Socket :: socket:socket(), Options :: list()) -> {socket:socket(), list()} | false.
 do_STARTTLS(Socket, Options) ->
 	socket:send(Socket, "STARTTLS\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"220", _Rest/binary>>} ->
-			case catch socket:to_ssl_client(Socket, ssl_options(Options), 5000) of
+			case catch socket:to_ssl_client(Socket, proplists:get_value(ssl_tls_options, Options, []), 5000) of
 				{ok, NewSocket} ->
 					%NewSocket;
 					{ok, Extensions} = try_EHLO(NewSocket, Options),

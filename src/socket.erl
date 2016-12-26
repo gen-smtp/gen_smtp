@@ -46,7 +46,6 @@
 -define(SSL_CONNECT_OPTIONS,[ {active, false},
                               {depth, 0},
                               {packet, line},
-                              {ssl_imp, new},
                               {ip, {0,0,0,0}},
                               {versions, ['tlsv1.2']},
                               {port, 0}]).
