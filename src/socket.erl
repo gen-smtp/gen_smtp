@@ -47,7 +47,7 @@
                               {depth, 0},
                               {packet, line},
                               {ip, {0,0,0,0}},
-                              {versions, ['tlsv1.2']},
+                              {versions, ['tlsv1.1', 'tlsv1.2']},
                               {port, 0}]).
 
 -ifdef(TEST).
