@@ -56,6 +56,26 @@ always}` as one of the options. You can specify an alternate port with `{port,
 2525}` (default is 25) or you can indicate that the server is listening for SSL
 connections using `{ssl, true}` (port defaults to 465 with this option).
 
+Options
+=======
+    send(Email, Options)
+    send(Email, Options, Callback)
+    send_blocking(Email, Options)
+
+The `send` method variants `send/2, send/3, send_blocking/2` take an `Options` argument.
+`Options` must be a proplist with the following valid values:
+
+  * **relay** the smtp relay, e.g. `"smtp.gmail.com"`
+  * **username** the username of the smtp relay e.g. `"me@gmail.com"`
+  * **password** the password of the smtp relay e.g. `"mypassword"`
+  * **auth** whether the smtp server needs authentication, valid values are `if_available` and `always`, Defaults to `if_available`. If your smtp relay requires authentication set it to `always`
+  * **ssl** whether to connect on 465 in ssl mode, Defaults to `false`
+  * **tls** valid values are `always`, `never`, `if_available`. Most modern smtp relays use tls, so set this to `always`, Defaults to `if_available`
+  * **tls_options** used in `ssl:connect`, More info at http://erlang.org/doc/man/ssl.html , Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`, This is merged with options listed at: https://github.com/Vagabond/gen_smtp/blob/master/src/socket.erl#L46 . Any options not present in this list will be ignored.
+  * **hostname** the hostname to be used by the smtp relay, Defaults to: `smtp_util:guess_FQDN()`. The hostname on your computer might not be correct, so set this to a valid value.
+  * **retries** how many retries per smtp host on temporary failure, Defaults to 1, which means it will retry once if there is a failure.
+
+
 DKIM signing of outgoing emails
 -------------------------------
 
