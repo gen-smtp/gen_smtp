@@ -78,26 +78,26 @@
 %%%-----------------------------------------------------------------
 %%% API
 %%%-----------------------------------------------------------------
--spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer()) -> socket().
+-spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer()) -> {ok, socket()} | {error, any()}.
 connect(Protocol, Address, Port) ->
 	connect(Protocol, Address, Port, [], infinity).
 
--spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer(), Options :: list()) -> socket().
+-spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer(), Options :: list()) -> {ok, socket()} | {error, any()}.
 connect(Protocol, Address, Port, Opts) ->
 	connect(Protocol, Address, Port, Opts, infinity).
 
--spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer(), Options :: list(), Time :: non_neg_integer() | 'infinity') -> socket().
+-spec connect(Protocol :: protocol(), Address :: address(), Port :: pos_integer(), Options :: list(), Time :: non_neg_integer() | 'infinity') -> {ok, socket()} | {error, any()}.
 connect(tcp, Address, Port, Opts, Time) ->
 	gen_tcp:connect(Address, Port, tcp_connect_options(Opts), Time);
 connect(ssl, Address, Port, Opts, Time) ->
 	ssl:connect(Address, Port, ssl_connect_options(Opts), Time).
 
 
--spec listen(Protocol :: protocol(), Port :: pos_integer()) -> socket().
+-spec listen(Protocol :: protocol(), Port :: pos_integer()) -> {ok, socket()} | {error, any()}.
 listen(Protocol, Port) ->
 	listen(Protocol, Port, []).
 
--spec listen(Protocol :: protocol(), Port :: pos_integer(), Options :: list()) -> socket().
+-spec listen(Protocol :: protocol(), Port :: pos_integer(), Options :: list()) -> {ok, socket()} | {error, any()}.
 listen(ssl, Port, Options) ->
 	ssl:listen(Port, ssl_listen_options(Options));
 listen(tcp, Port, Options) ->
@@ -424,10 +424,10 @@ evented_connections_test_() ->
 			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
-			receive
-				{inet_async, _ListenPort, _, {ok,ServerSocket}} -> ok
+			ServerSocket = receive
+				{inet_async, _ListenPort, _, {ok,ServerSocket0}} -> ServerSocket0
 			end,
-			{ok, ServerSocket} = handle_inet_async(ListenSocket, ServerSocket),
+			?assertMatch({ok, ServerSocket}, handle_inet_async(ListenSocket, ServerSocket)),
 			?assert(is_port(ListenSocket)),
 			?assert(is_port(ServerSocket)),
 			{ok, NewServerSocket} = to_ssl_server(ServerSocket, [{certfile, "test/fixtures/server.crt"}, {keyfile, "test/fixtures/server.key"}]),
@@ -560,12 +560,12 @@ option_test_() ->
 		},
 		{"tcp_listen_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
+			?assertEqual([list|lists:keysort(1, [{active, true},
 			                   {backlog, 30},
 			                   {ip,{0,0,0,0}},
 			                   {keepalive, true},
 			                   {packet, 2},
-			                   {reuseaddr, true}],
+			                   {reuseaddr, true}])],
 			             tcp_listen_options([{active, true},{packet,2}]))
 		end
 		},
@@ -580,7 +580,7 @@ option_test_() ->
 		},
 		{"ssl_listen_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
+			?assertEqual([list|lists:keysort(1, [{active, true},
 			                   {backlog, 30},
 			                   {certfile, "server.crt"},
 			                   {depth, 0},
@@ -589,9 +589,9 @@ option_test_() ->
 			                   {packet, 2},
 			                   {reuse_sessions, false},
 			                   {reuseaddr, true},
-			                   {ssl_imp, new}],
+			                   {ssl_imp, new}])],
 			             ssl_listen_options([{active, true},{packet,2}])),
-			?assertMatch([list,{active, false},
+			?assertEqual([list|lists:keysort(1, [{active, false},
 			                   {backlog, 30},
 			                   {certfile, "../server.crt"},
 			                   {depth, 0},
@@ -600,7 +600,7 @@ option_test_() ->
 			                   {packet, line},
 			                   {reuse_sessions, false},
 			                   {reuseaddr, true},
-			                   {ssl_imp, new}],
+			                   {ssl_imp, new}])],
 			             ssl_listen_options([{certfile, "../server.crt"}, {keyfile, "../server.key"}]))
 		end
 		},

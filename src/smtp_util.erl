@@ -47,7 +47,7 @@ mxlookup(Domain) ->
 	end,
 	case inet_res:lookup(Domain, in, mx) of
 		[] ->
-			[];
+			lists:map(fun(X) -> {10, inet_parse:ntoa(X)} end, inet_res:lookup(Domain, in, a));
 		Result ->
 			lists:sort(fun({Pref, _Name}, {Pref2, _Name2}) -> Pref =< Pref2 end, Result)
 	end.
@@ -60,7 +60,7 @@ guess_FQDN() ->
 	FQDN.
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
--spec compute_cram_digest(Key :: binary(), Data :: string()) -> binary().
+-spec compute_cram_digest(Key :: binary(), Data :: binary()) -> binary().
 compute_cram_digest(Key, Data) ->
 	Bin = crypto:hmac(md5, Key, Data),
 	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
