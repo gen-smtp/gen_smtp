@@ -260,7 +260,7 @@ try_RCPT_TO([To | Tail], Socket, Extensions) ->
 
 -spec try_DATA(Body :: binary() | function(), Socket :: socket:socket(), Extensions :: list()) -> binary().
 try_DATA(Body, Socket, Extensions) when is_function(Body) ->
-    try_DATA(Body(), Socket, Extensions);
+	try_DATA(Body(), Socket, Extensions);
 try_DATA(Body, Socket, _Extensions) ->
 	socket:send(Socket, "DATA\r\n"),
 	case read_possible_multiline_reply(Socket) of
@@ -511,7 +511,7 @@ connect(Host, Options) ->
 		undefined -> [];
 		Other -> Other
 	end,
-    SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
+	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
 			ssl;

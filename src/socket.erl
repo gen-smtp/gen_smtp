@@ -424,10 +424,10 @@ evented_connections_test_() ->
 			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
-			receive
-				{inet_async, _ListenPort, _, {ok,ServerSocket}} -> ok
+			ServerSocket = receive
+				{inet_async, _ListenPort, _, {ok,ServerSocket0}} -> ServerSocket0
 			end,
-			{ok, ServerSocket} = handle_inet_async(ListenSocket, ServerSocket),
+			?assertMatch({ok, ServerSocket}, handle_inet_async(ListenSocket, ServerSocket)),
 			?assert(is_port(ListenSocket)),
 			?assert(is_port(ServerSocket)),
 			{ok, NewServerSocket} = to_ssl_server(ServerSocket, [{certfile, "test/fixtures/server.crt"}, {keyfile, "test/fixtures/server.key"}]),
@@ -516,69 +516,68 @@ option_test_() ->
 		},
 		{"tcp_listen_options has defaults",
 		fun() ->
-			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([]))
+			?assertEqual([list|lists:keysort(1,?TCP_LISTEN_OPTIONS)], tcp_listen_options([]))
 		end
 		},
 		{"tcp_connect_options has defaults",
 		fun() ->
-			?assertEqual([list|?TCP_CONNECT_OPTIONS], tcp_connect_options([]))
+			?assertEqual([list|lists:keysort(1, ?TCP_CONNECT_OPTIONS)], tcp_connect_options([]))
 		end
 		},
 		{"ssl_listen_options has defaults",
 		fun() ->
-			?assertEqual([list|?SSL_LISTEN_OPTIONS], ssl_listen_options([]))
+			?assertEqual([list|lists:keysort(1, ?SSL_LISTEN_OPTIONS)], ssl_listen_options([]))
 		end
 		},
 		{"ssl_connect_options has defaults",
 		fun() ->
-			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([]))
+			?assertEqual([list|lists:keysort(1, ?SSL_CONNECT_OPTIONS)], ssl_connect_options([]))
 		end
 		},
 		{"tcp_listen_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([{active,false}])),
-			?assertEqual([binary|?TCP_LISTEN_OPTIONS], tcp_listen_options([binary,{active,false}]))
+			?assertEqual([list|lists:keysort(1, ?TCP_LISTEN_OPTIONS)], tcp_listen_options([{active,false}])),
+			?assertEqual([binary|lists:keysort(1, ?TCP_LISTEN_OPTIONS)], tcp_listen_options([binary,{active,false}]))
 		end
 		},
 		{"tcp_connect_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?TCP_CONNECT_OPTIONS], tcp_connect_options([{active,false}])),
-			?assertEqual([binary|?TCP_CONNECT_OPTIONS], tcp_connect_options([binary,{active,false}]))
+			?assertEqual([list|lists:keysort(1, ?TCP_CONNECT_OPTIONS)], tcp_connect_options([{active,false}])),
+			?assertEqual([binary|lists:keysort(1, ?TCP_CONNECT_OPTIONS)], tcp_connect_options([binary,{active,false}]))
 		end
 		},
 		{"ssl_listen_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?SSL_LISTEN_OPTIONS], ssl_listen_options([{active,false}])),
-			?assertEqual([binary|?SSL_LISTEN_OPTIONS], ssl_listen_options([binary,{active,false}]))
+			?assertEqual([list|lists:keysort(1, ?SSL_LISTEN_OPTIONS)], ssl_listen_options([{active,false}])),
+			?assertEqual([binary|lists:keysort(1, ?SSL_LISTEN_OPTIONS)], ssl_listen_options([binary,{active,false}]))
 		end
 		},
 		{"ssl_connect_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([{active,false}])),
-			?assertEqual([binary|?SSL_CONNECT_OPTIONS], ssl_connect_options([binary,{active,false}]))
+			?assertEqual([list|lists:keysort(1, ?SSL_CONNECT_OPTIONS)], ssl_connect_options([{active,false}])),
+			?assertEqual([binary|lists:keysort(1, ?SSL_CONNECT_OPTIONS)], ssl_connect_options([binary,{active,false}]))
 		end
 		},
 		{"tcp_listen_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
+			?assertEqual([list|lists:keysort(1, [{active, true},
 			                   {backlog, 30},
 			                   {ip,{0,0,0,0}},
 			                   {keepalive, true},
 			                   {packet, 2},
-			                   {reuseaddr, true}],
+			                   {reuseaddr, true}])],
 			             tcp_listen_options([{active, true},{packet,2}]))
 		end
 		},
 		{"tcp_connect_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
-			                   {packet, 2}],
+			?assertEqual([list,{active,true},{ip,{0,0,0,0}},{packet,2},{port,0}],
 			             tcp_connect_options([{active, true},{packet,2}]))
 		end
 		},
 		{"ssl_listen_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
+			?assertEqual([list|lists:keysort(1, [{active, true},
 			                   {backlog, 30},
 			                   {certfile, "server.crt"},
 			                   {depth, 0},
@@ -587,9 +586,9 @@ option_test_() ->
 			                   {packet, 2},
 			                   {reuse_sessions, false},
 			                   {reuseaddr, true},
-			                   {ssl_imp, new}],
+			                   {ssl_imp, new}])],
 			             ssl_listen_options([{active, true},{packet,2}])),
-			?assertMatch([list,{active, false},
+			?assertEqual([list|lists:keysort(1, [{active, false},
 			                   {backlog, 30},
 			                   {certfile, "../server.crt"},
 			                   {depth, 0},
@@ -598,17 +597,20 @@ option_test_() ->
 			                   {packet, line},
 			                   {reuse_sessions, false},
 			                   {reuseaddr, true},
-			                   {ssl_imp, new}],
+			                   {ssl_imp, new}])],
 			             ssl_listen_options([{certfile, "../server.crt"}, {keyfile, "../server.key"}]))
 		end
 		},
 		{"ssl_connect_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
-			                   {depth, 0},
-			                   {packet, 2},
-			                   {ssl_imp, new}],
-			             ssl_connect_options([{active, true},{packet,2}]))
+			?assertMatch([list,
+										{active,true},
+										{depth,0},
+										{ip,{0,0,0,0}},
+										{packet,2},
+										{port,0},
+										{versions,[tlsv1,'tlsv1.1','tlsv1.2']}],
+									 ssl_connect_options([{active, true},{packet,2}]))
 		end
 		}
 	].
