@@ -526,7 +526,11 @@ connect(Host, Options) ->
 		_ ->
 			25
 	end,
-	case socket:connect(Proto, Host, Port, SockOpts, 5000) of
+	Timeout = case proplists:get_value(timeout, Options) of
+		undefined -> 5000;
+		OTimeout -> OTimeout
+	end,
+	case socket:connect(Proto, Host, Port, SockOpts, Timeout) of
 		{ok, Socket} ->
 			case read_possible_multiline_reply(Socket) of
 				{ok, <<"220", Banner/binary>>} ->
