@@ -122,7 +122,7 @@ send_it_nonblock(Email, Options, Callback) ->
 
 -spec send_it(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list()) -> binary() | {'error', any(), any()}.
 send_it(Email, Options) ->
-	RelayDomain = proplists:get_value(relay, Options),
+	RelayDomain = to_string(proplists:get_value(relay, Options)),
 	MXRecords = case proplists:get_value(no_mx_lookups, Options) of
 		true ->
 			[];
