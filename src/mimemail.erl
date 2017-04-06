@@ -683,6 +683,8 @@ guess_charset(Body) ->
 
 guess_best_encoding(<<Body:200/binary, Rest/binary>>) when Rest =/= <<>> ->
 	guess_best_encoding(Body);
+guess_best_encoding(<<>>) ->
+    <<"7bit">>;
 guess_best_encoding(Body) ->
 	Size = byte_size(Body),
 	% get only the allowed ascii characters
