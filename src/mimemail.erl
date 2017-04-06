@@ -55,9 +55,13 @@
 
 -export([encode/1, encode/2, decode/2, decode/1, get_header_value/2, get_header_value/3, parse_headers/1]).
 
+-define(DEFAULT_MIME_VERSION, <<"1.0">>).
+
 -define(DEFAULT_OPTIONS, [
 		{encoding, get_default_encoding()}, % default encoding is utf-8 if we can find the iconv module
-		{decode_attachments, true} % should we decode any base64/quoted printable attachments?
+		{decode_attachments, true}, % should we decode any base64/quoted printable attachments?
+		{allow_missing_version, true}, % should we assume default mime version
+		{default_mime_version, ?DEFAULT_MIME_VERSION} % default mime version
 	]).
 
 -type(mimetuple() :: {binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [{binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [tuple()]}] | tuple()}).
@@ -83,7 +87,11 @@ decode(OrigHeaders, Body, Options) ->
 	Headers = decode_headers(OrigHeaders, [], Encoding),
 	case parse_with_comments(get_header_value(<<"MIME-Version">>, Headers)) of
 		undefined ->
+			AllowMissingVersion = proplists:get_value(allow_missing_version, Options, false),
 			case parse_content_type(get_header_value(<<"Content-Type">>, Headers)) of
+				{<<"multipart">>, _SubType, _Parameters} when AllowMissingVersion ->
+					MimeVersion = proplists:get_value(default_mime_version, Options, ?DEFAULT_MIME_VERSION),
+					decode_component(Headers, Body, MimeVersion, Options);
 				{<<"multipart">>, _SubType, _Parameters} ->
 					erlang:error(non_mime_multipart);
 				{Type, SubType, Parameters} ->
