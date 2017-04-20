@@ -51,6 +51,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([rfc2047_utf8_encode/1]).
 -endif.
 
 -export([encode/1, encode/2, decode/2, decode/1, get_header_value/2, get_header_value/3, parse_headers/1]).
@@ -908,7 +909,7 @@ rfc2047_utf8_encode(Text) ->
 
 rfc2047_utf8_encode(T, Acc, WordLen, Char) when WordLen + length(Char) > 73 ->
     CloseLine = lists:reverse("?=\r\n "),
-    NewLine = Char ++ lists:reverse("=?UTF-9?Q?"),
+    NewLine = Char ++ lists:reverse("=?UTF-8?Q?"),
     %% Make sure that the individual encoded words are not longer than 76 chars (including charset etc)
     rfc2047_utf8_encode(T, NewLine ++ CloseLine ++ Acc, length(NewLine), []);
 
