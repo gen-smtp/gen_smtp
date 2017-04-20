@@ -88,4 +88,4 @@ rfc2047_utf8_encode_test() ->
             ++ " =?UTF-8?Q?4=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123=20?=\r\n"
             ++ " =?UTF-8?Q?=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123?=\r\n"
             ++ " =?UTF-8?Q?4=E2=82=AC?=",
-    ?assertEqual(mimemail:rfc2047_utf8_encode(UnicodeString), Encoded).
+    ?assertEqual(Encoded, mimemail:rfc2047_utf8_encode(UnicodeString)).
