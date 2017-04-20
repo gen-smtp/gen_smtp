@@ -51,6 +51,7 @@
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-export([rfc2047_utf8_encode/1]).
 -endif.
 
 -export([encode/1, encode/2, decode/2, decode/1, get_header_value/2, get_header_value/3, parse_headers/1]).
@@ -910,30 +911,60 @@ rfc2047_utf8_encode(B) when is_binary(B) ->
 rfc2047_utf8_encode([]) -> 
 	[];
 rfc2047_utf8_encode(Text) ->
-    rfc2047_utf8_encode(Text, Text).
+    %% Don't escape when all characters are ASCII printable
+    case is_ascii_printable(Text) of
+        'true' -> Text;
+        'false' -> rfc2047_utf8_encode(Text, lists:reverse("=?UTF-8?Q?"), 10, [])
+    end.
 
-%% Don't escape when all characters are ASCII printable
-rfc2047_utf8_encode([], Text) ->
-    Text;
-rfc2047_utf8_encode([H|T], Text) when H >= 32 andalso H =< 126 ->
-    rfc2047_utf8_encode(T, Text);
-rfc2047_utf8_encode(_, Text) ->
-    "=?UTF-8?Q?" ++ rfc2047_utf8_encode(Text, [], 0) ++ "?=".
-
-rfc2047_utf8_encode([], Acc, _WordLen) ->
-    lists:reverse(Acc);
-rfc2047_utf8_encode(T, Acc, WordLen) when WordLen >= 55 ->
+rfc2047_utf8_encode(T, Acc, WordLen, Char) when WordLen + length(Char) > 73 ->
+    CloseLine = lists:reverse("?=\r\n "),
+    NewLine = Char ++ lists:reverse("=?UTF-8?Q?"),
     %% Make sure that the individual encoded words are not longer than 76 chars (including charset etc)
-    rfc2047_utf8_encode(T, [$?,$Q,$?,$8,$-,$F,$T,$U,$?,$=,$\ ,$\n,$\r,$=,$?|Acc], 0);
-rfc2047_utf8_encode([C|T], Acc, WordLen) when C > 32 andalso C < 127 andalso C /= 32 
-    andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
-    rfc2047_utf8_encode(T, [C|Acc], WordLen+1);
-rfc2047_utf8_encode([C|T], Acc, WordLen) ->
-    rfc2047_utf8_encode(T, [hex(C rem 16), hex(C div 16), $= | Acc], WordLen+3).
+    rfc2047_utf8_encode(T, NewLine ++ CloseLine ++ Acc, length(NewLine), []);
 
+rfc2047_utf8_encode([], Acc, _WordLen, Char) ->
+    lists:reverse("=?" ++ Char ++ Acc);
+
+%% ASCII characters dont encode except space, ?, _, =, and .
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32 
+    andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
+    rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), [C]);
+%% Encode all other ASCII
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C >= 32 andalso C < 127 ->
+    rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), encode_byte(C));
+%% First byte of UTF-8 sequence
+%% ensure that encoded 2-4 byte UTF-8 characters keept in one line
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 192 andalso C =< 247 ->
+    UTFBytes = utf_char_bytes(C),
+    {Rest, ExtraUTFBytes} = encode_extra_utf_bytes(UTFBytes-1, T),
+    rfc2047_utf8_encode(Rest, Char ++ Acc, WordLen+length(Char), ExtraUTFBytes ++ encode_byte(C)).
+
+is_ascii_printable([]) -> 'true';
+is_ascii_printable([H|T]) when H >= 32 andalso H =< 126 ->
+    is_ascii_printable(T);
+is_ascii_printable(_) -> 'false'.
+
+encode_byte(C) -> [ hex(C rem 16), hex(C div 16), $= ].
 hex(N) when N >= 10 -> N + $A - 10;
 hex(N) -> N + $0.
 
+%% https://en.wikipedia.org/wiki/UTF-8#Description
+%% 240 - 247
+utf_char_bytes(C) when C >= 2#11110000 andalso C =< 2#11110111 -> 4;
+%% 224 - 239
+utf_char_bytes(C) when C >= 2#11100000 andalso C =< 2#11101111 -> 3;
+%% 192 - 223
+utf_char_bytes(C) when C >= 2#11000000 andalso C =< 2#11011111 -> 2;
+%% 0 - 127 (ASCII)
+utf_char_bytes(C) when C >= 2#00000000 andalso C =< 2#01111111 -> 1.
+
+encode_extra_utf_bytes(0, AccIn) -> {AccIn, []};
+encode_extra_utf_bytes(Bytes, AccIn) -> encode_extra_utf_bytes(Bytes, AccIn, []).
+
+encode_extra_utf_bytes(0, AccIn, AccOut) -> {AccIn, AccOut};
+encode_extra_utf_bytes(Bytes, [C|T], AccOut) when C >= 128 andalso C =< 191 ->
+    encode_extra_utf_bytes(Bytes-1, T, encode_byte(C) ++ AccOut).
 
 %% @doc
 %% DKIM sign functions

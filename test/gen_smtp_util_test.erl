@@ -82,4 +82,10 @@ rfc822_addresses_roundtrip_test() ->
     ?assertEqual(Addr, smtp_util:combine_rfc822_addresses(Parsed)),
     ok.
 
-    
+rfc2047_utf8_encode_test() ->
+    UnicodeString = unicode:characters_to_binary("€ € € € € 1234 € € € € 123 € € € € € 1234€"),
+    Encoded = "=?UTF-8?Q?=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123?=\r\n"
+            ++ " =?UTF-8?Q?4=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123=20?=\r\n"
+            ++ " =?UTF-8?Q?=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123?=\r\n"
+            ++ " =?UTF-8?Q?4=E2=82=AC?=",
+    ?assertEqual(Encoded, mimemail:rfc2047_utf8_encode(UnicodeString)).
