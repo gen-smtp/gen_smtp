@@ -46,7 +46,7 @@
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
 -else.
--export([send/2, send/3, send_blocking/2]).
+-export([send/2, send/4, send_blocking/2]).
 -endif.
 
 -type email() :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}.
@@ -55,13 +55,13 @@
 %% @doc Send an email in a non-blocking fashion via a spawned_linked process.
 %% The process will exit abnormally on a send failure.
 send(Email, Options) ->
-	send(Email, Options, undefined).
+	send(Email, Options, undefined, undefined).
 
 %% @doc Send an email nonblocking and invoke a callback with the result of the send.
-%% The callback will receive either `{ok, Receipt}' where Receipt is the SMTP server's receipt
-%% identifier,  `{error, Type, Message}' or `{exit, ExitReason}', as the single argument.
--spec send(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list(), Callback :: function() | 'undefined') -> {'ok', pid()} | {'error', any()}.
-send(Email, Options, Callback) ->
+%% The callback will receive either `{ok, Receipt}, CallbackArg' where Receipt is the SMTP server's receipt
+%% identifier,  `{error, Type, Message}, CallbackArg' or `{exit, ExitReason}, CallbackArg', as the single argument.
+-spec send(Email :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}, Options :: list(), Callback :: function() | 'undefined', CallbackArg :: any()) -> {'ok', pid()} | {'error', any()}.
+send(Email, Options, Callback, CallbackArg) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),
 	case check_options(NewOptions) of
@@ -69,7 +69,7 @@ send(Email, Options, Callback) ->
 			spawn(fun() ->
 						process_flag(trap_exit, true),
 						Pid = spawn_link(fun() ->
-									send_it_nonblock(Email, NewOptions, Callback)
+									send_it_nonblock(Email, NewOptions, Callback, CallbackArg)
 							end
 						),
 						receive
@@ -78,13 +78,13 @@ send(Email, Options, Callback) ->
 									X when X == normal; X == shutdown ->
 										ok;
 									Error ->
-										Callback({exit, Error})
+										Callback({exit, Error}, CallbackArg)
 								end
 						end
 				end);
 		ok ->
 			Pid = spawn_link(fun () ->
-						send_it_nonblock(Email, NewOptions, Callback)
+						send_it_nonblock(Email, NewOptions, Callback, CallbackArg)
 				end
 			),
 			{ok, Pid};
@@ -105,16 +105,16 @@ send_blocking(Email, Options) ->
 			{error, Reason}
 	end.
 
--spec send_it_nonblock(Email :: email(), Options :: list(), Callback :: function() | 'undefined') ->{'ok', binary()} | {'error', any(), any()}.
-send_it_nonblock(Email, Options, Callback) ->
+-spec send_it_nonblock(Email :: email(), Options :: list(), Callback :: function() | 'undefined', CallbackArg :: any()) ->{'ok', binary()} | {'error', any(), any()}.
+send_it_nonblock(Email, Options, Callback, CallbackArg) ->
 	case send_it(Email, Options) of
 		{error, Type, Message} when is_function(Callback) ->
-			Callback({error, Type, Message}),
+			Callback({error, Type, Message}, CallbackArg),
 			{error, Type, Message};
 		{error, Type, Message} ->
 			erlang:exit({error, Type, Message});
 		Receipt when is_function(Callback) ->
-			Callback({ok, Receipt}),
+			Callback({ok, Receipt}, CallbackArg),
 			{ok, Receipt};
 		Receipt ->
 			{ok, Receipt}
