@@ -122,23 +122,64 @@ unique_id() ->
 
 -define(is_whitespace(Ch), (Ch =< 32)).
 
+combine_rfc822_addresses([]) ->
+	<<>>;
 combine_rfc822_addresses(Addresses) ->
-	[_,_|Acc] = combine_rfc822_addresses(Addresses, []),
-	iolist_to_binary(lists:reverse(Acc)).
+	iolist_to_binary(combine_rfc822_addresses(Addresses, [])).
 
-combine_rfc822_addresses([], Acc) ->
-	Acc;
+combine_rfc822_addresses([], [32, $, | Acc]) ->
+	lists:reverse(Acc);
 combine_rfc822_addresses([{undefined, Email}|Rest], Acc) ->
 	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
+combine_rfc822_addresses([{"", Email}|Rest], Acc) ->
+	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
+combine_rfc822_addresses([{<<>>, Email}|Rest], Acc) ->
+	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
 combine_rfc822_addresses([{Name, Email}|Rest], Acc) ->
-	combine_rfc822_addresses(Rest, [32, $,, $>, Email, $<, 32, opt_quoted(Name)|Acc]).
+	Quoted = [ opt_quoted(Name)," <", Email, ">" ],
+	combine_rfc822_addresses(Rest, [32, $,, Quoted|Acc]).
 
-opt_quoted(N)  ->
-	case re:run(N, "\"") of
-		nomatch -> N;
-		{match, _} ->
-			[$", re:replace(N, "\"", "\\\\\"", [global]), $"]
-	end.
+opt_quoted(B) when is_binary(B) ->
+	opt_quoted(binary_to_list(B));
+opt_quoted(S) when is_list(S) ->
+    NoControls = lists:map(
+        fun
+            (C) when C < 32 -> 32;
+            (C) -> C
+        end,
+        S),
+    case lists:any(fun is_special/1, NoControls) of
+        false -> NoControls;
+        true ->
+            lists:flatten([
+                $",
+                lists:map(
+                    fun
+                        ($\") -> [$\\, $"];
+                        ($\\) -> [$\\, $\\];
+                        (C) -> C
+                    end,
+                    NoControls),
+                $"])
+    end.
+
+% See https://www.w3.org/Protocols/rfc822/3_Lexical.html#z2
+is_special($() -> true;
+is_special($)) -> true;
+is_special($<) -> true;
+is_special($>) -> true;
+is_special($@) -> true;
+is_special($,) -> true;
+is_special($;) -> true;
+is_special($:) -> true;
+is_special($\\) -> true;
+is_special($\") -> true;
+is_special($.) -> true;
+is_special($[) -> true;
+is_special($]) -> true;
+is_special($') -> true; % special for some smtp servers
+is_special(_) -> false.
+
 
 parse_rfc822_addresses(B) when is_binary(B) ->
 	parse_rfc822_addresses(binary_to_list(B));

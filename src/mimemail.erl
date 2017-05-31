@@ -743,8 +743,14 @@ escape_tspecial(<<C, Rest/binary>>, IsSpecial, Acc) ->
 encode_headers([]) ->
 	[];
 encode_headers([{Key, Value}|T] = _Headers) ->
-    EncodedHeader = encode_folded_header(list_to_binary([Key,": ",encode_header_value(Key, Value)]), <<>>),
+    EncodedHeader = maybe_encode_folded_header(Key, list_to_binary([Key,": ",encode_header_value(Key, Value)])),
 	[EncodedHeader | encode_headers(T)].
+
+maybe_encode_folded_header(H, Hdr) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc">>;
+									    H =:= <<"Reply-To">>; H =:= <<"From">> ->
+	Hdr;
+maybe_encode_folded_header(_H, Hdr) ->
+	encode_folded_header(Hdr, <<>>).
 
 encode_folded_header(Rest, Acc) ->
 	case binstr:split(Rest, <<$;>>, 2) of
@@ -766,7 +772,6 @@ encode_header_value(H, Value) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc"
 	{Names, Emails} = lists:unzip(Addresses),
 	NewNames = lists:map(fun rfc2047_utf8_encode/1, Names),
 	smtp_util:combine_rfc822_addresses(lists:zip(NewNames, Emails));
-
 encode_header_value(_, Value) ->
 	rfc2047_utf8_encode(Value).
 
@@ -1864,6 +1869,19 @@ encoding_test_() ->
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
 					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					?assertEqual(Result, encode(Email))
+			end
+		},
+		{"Email with special chars in From",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"\"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>">>},
+							{<<"Message-ID">>, <<"<abcd@example.com>">>},
+							{<<"MIME-Version">>, <<"1.0">>},
+							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
+						[],
+						<<"This is a plain message">>},
+					Result = <<"From: \"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
 		},
