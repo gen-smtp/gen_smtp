@@ -511,51 +511,51 @@ option_test_() ->
 	[
 		{"options removes bogus values",
 		fun() ->
-			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([{notvalid,whatever}]))
+			?assertEqual(lists:sort([list|?TCP_LISTEN_OPTIONS]), lists:sort(tcp_listen_options([{notvalid,whatever}])))
 		end
 		},
 		{"tcp_listen_options has defaults",
 		fun() ->
-			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([]))
+			?assertEqual(lists:sort([list|?TCP_LISTEN_OPTIONS]), lists:sort(tcp_listen_options([])))
 		end
 		},
 		{"tcp_connect_options has defaults",
 		fun() ->
-			?assertEqual([list|?TCP_CONNECT_OPTIONS], tcp_connect_options([]))
+			?assertEqual(lists:sort([list|?TCP_CONNECT_OPTIONS]), lists:sort(tcp_connect_options([])))
 		end
 		},
 		{"ssl_listen_options has defaults",
 		fun() ->
-			?assertEqual([list|?SSL_LISTEN_OPTIONS], ssl_listen_options([]))
+			?assertEqual(lists:sort([list|?SSL_LISTEN_OPTIONS]), lists:sort(ssl_listen_options([])))
 		end
 		},
 		{"ssl_connect_options has defaults",
 		fun() ->
-			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([]))
+			?assertEqual(lists:sort([list|?SSL_CONNECT_OPTIONS]), lists:sort(ssl_connect_options([])))
 		end
 		},
 		{"tcp_listen_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?TCP_LISTEN_OPTIONS], tcp_listen_options([{active,false}])),
-			?assertEqual([binary|?TCP_LISTEN_OPTIONS], tcp_listen_options([binary,{active,false}]))
+			?assertEqual(lists:sort([list|?TCP_LISTEN_OPTIONS]), lists:sort(tcp_listen_options([{active,false}]))),
+			?assertEqual(lists:sort([binary|?TCP_LISTEN_OPTIONS]), lists:sort(tcp_listen_options([binary,{active,false}])))
 		end
 		},
 		{"tcp_connect_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?TCP_CONNECT_OPTIONS], tcp_connect_options([{active,false}])),
-			?assertEqual([binary|?TCP_CONNECT_OPTIONS], tcp_connect_options([binary,{active,false}]))
+			?assertEqual(lists:sort([list|?TCP_CONNECT_OPTIONS]), lists:sort(tcp_connect_options([{active,false}]))),
+			?assertEqual(lists:sort([binary|?TCP_CONNECT_OPTIONS]), lists:sort(tcp_connect_options([binary,{active,false}])))
 		end
 		},
 		{"ssl_listen_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?SSL_LISTEN_OPTIONS], ssl_listen_options([{active,false}])),
-			?assertEqual([binary|?SSL_LISTEN_OPTIONS], ssl_listen_options([binary,{active,false}]))
+			?assertEqual(lists:sort([list|?SSL_LISTEN_OPTIONS]), lists:sort(ssl_listen_options([{active,false}]))),
+			?assertEqual(lists:sort([binary|?SSL_LISTEN_OPTIONS]), lists:sort(ssl_listen_options([binary,{active,false}])))
 		end
 		},
 		{"ssl_connect_options defaults to list type",
 		fun() ->
-			?assertEqual([list|?SSL_CONNECT_OPTIONS], ssl_connect_options([{active,false}])),
-			?assertEqual([binary|?SSL_CONNECT_OPTIONS], ssl_connect_options([binary,{active,false}]))
+			?assertEqual(lists:sort([list|?SSL_CONNECT_OPTIONS]), lists:sort(ssl_connect_options([{active,false}]))),
+			?assertEqual(lists:sort([binary|?SSL_CONNECT_OPTIONS]), lists:sort(ssl_connect_options([binary,{active,false}])))
 		end
 		},
 		{"tcp_listen_options merges provided proplist",
@@ -571,9 +571,11 @@ option_test_() ->
 		},
 		{"tcp_connect_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
-			                   {packet, 2}],
-			             tcp_connect_options([{active, true},{packet,2}]))
+			?assertEqual(lists:sort([list,{active, true},
+			                   {packet, 2},
+			                   {ip,{0,0,0,0}},
+			                   {port, 0}]),
+			             lists:sort(tcp_connect_options([{active, true},{packet,2}])))
 		end
 		},
 		{"ssl_listen_options merges provided proplist",
@@ -604,11 +606,13 @@ option_test_() ->
 		},
 		{"ssl_connect_options merges provided proplist",
 		fun() ->
-			?assertMatch([list,{active, true},
+			?assertEqual(lists:sort([list,{active, true},
 			                   {depth, 0},
+			                   {ip, {0,0,0,0}},
+			                   {port, 0},
 			                   {packet, 2},
-			                   {ssl_imp, new}],
-			             ssl_connect_options([{active, true},{packet,2}]))
+			                   {versions,[tlsv1,'tlsv1.1','tlsv1.2']}]),
+			             lists:sort(ssl_connect_options([{active, true},{packet,2}])))
 		end
 		}
 	].

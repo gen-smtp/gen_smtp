@@ -743,8 +743,14 @@ escape_tspecial(<<C, Rest/binary>>, IsSpecial, Acc) ->
 encode_headers([]) ->
 	[];
 encode_headers([{Key, Value}|T] = _Headers) ->
-    EncodedHeader = encode_folded_header(list_to_binary([Key,": ",encode_header_value(Key, Value)]), <<>>),
+    EncodedHeader = maybe_encode_folded_header(Key, list_to_binary([Key,": ",encode_header_value(Key, Value)])),
 	[EncodedHeader | encode_headers(T)].
+
+maybe_encode_folded_header(H, Hdr) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc">>;
+									    H =:= <<"Reply-To">>; H =:= <<"From">> ->
+	Hdr;
+maybe_encode_folded_header(_H, Hdr) ->
+	encode_folded_header(Hdr, <<>>).
 
 encode_folded_header(Rest, Acc) ->
 	case binstr:split(Rest, <<$;>>, 2) of
@@ -766,7 +772,6 @@ encode_header_value(H, Value) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc"
 	{Names, Emails} = lists:unzip(Addresses),
 	NewNames = lists:map(fun rfc2047_utf8_encode/1, Names),
 	smtp_util:combine_rfc822_addresses(lists:zip(NewNames, Emails));
-
 encode_header_value(_, Value) ->
 	rfc2047_utf8_encode(Value).
 
@@ -1269,8 +1274,8 @@ various_parsing_test_() ->
 		},
 		{"Headers with non-ASCII characters",
 			fun() ->
-					?assertEqual({[{<<"foo">>, <<"bar ?? baz">>}], <<>>}, parse_headers(<<"foo: bar ø baz\r\n">>)),
-					?assertEqual({[], <<"bär: bar baz\r\n">>}, parse_headers(<<"bär: bar baz\r\n">>))
+					?assertEqual({[{<<"foo">>, <<"bar ?? baz">>}], <<>>}, parse_headers(<<"foo: bar ø baz\r\n"/utf8>>)),
+					?assertEqual({[], <<"bär: bar baz\r\n"/utf8>>}, parse_headers(<<"bär: bar baz\r\n"/utf8>>))
 			end
 		},
 		{"Headers with tab characters",
@@ -1323,7 +1328,9 @@ parse_example_mails_test_() ->
 		},
 		{"parse a multipart email with no MIME header",
 			fun() ->
-					?assertError(non_mime_multipart, Getmail("rich-text-no-MIME.eml"))
+					% We now insert a default Mime for missing Mime headers
+					% ?assertError(non_mime_multipart, Getmail("rich-text-no-MIME.eml"))
+					?assertMatch({<<"multipart">>,<<"alternative">>, _, _, [{<<"text">>,<<"plain">>, _, _, _}, {<<"text">>,<<"html">>, _, _, _}]}, Getmail("rich-text-no-MIME.eml"))
 			end
 		},
 		{"rich text",
@@ -1734,7 +1741,7 @@ encode_quoted_printable_test_() ->
 		{"input with invisible non-ascii characters",
 			fun() ->
 					?assertEqual(<<"There's some stuff=C2=A0in=C2=A0here\r\n">>,
-						encode_quoted_printable(<<"There's some stuff in here\r\n">>, "", 0))
+						encode_quoted_printable(<<"There's some stuff in here\r\n"/utf8>>, "", 0))
 			end
 		},
 		{"add soft newlines",
@@ -1784,10 +1791,10 @@ rfc2047_decode_test_() ->
 	[
 		{"Simple tests",
 			fun() ->
-					?assertEqual(<<"Keith Moore <moore@cs.utk.edu>">>, decode_header(<<"=?US-ASCII?Q?Keith_Moore?= <moore@cs.utk.edu>">>, "utf-8")),
-					?assertEqual(<<"Keld Jørn Simonsen <keld@dkuug.dk>">>, decode_header(<<"=?ISO-8859-1?Q?Keld_J=F8rn_Simonsen?= <keld@dkuug.dk>">>, "utf-8")),
-					?assertEqual(<<"Olle Järnefors <ojarnef@admin.kth.se>">>, decode_header(<<"=?ISO-8859-1?Q?Olle_J=E4rnefors?= <ojarnef@admin.kth.se>">>, "utf-8")),
-					?assertEqual(<<"André Pirard <PIRARD@vm1.ulg.ac.be>">>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
+					?assertEqual(<<"Keith Moore <moore@cs.utk.edu>"/utf8>>, decode_header(<<"=?US-ASCII?Q?Keith_Moore?= <moore@cs.utk.edu>">>, "utf-8")),
+					?assertEqual(<<"Keld Jørn Simonsen <keld@dkuug.dk>"/utf8>>, decode_header(<<"=?ISO-8859-1?Q?Keld_J=F8rn_Simonsen?= <keld@dkuug.dk>">>, "utf-8")),
+					?assertEqual(<<"Olle Järnefors <ojarnef@admin.kth.se>"/utf8>>, decode_header(<<"=?ISO-8859-1?Q?Olle_J=E4rnefors?= <ojarnef@admin.kth.se>">>, "utf-8")),
+					?assertEqual(<<"André Pirard <PIRARD@vm1.ulg.ac.be>"/utf8>>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
 			end
 		},
 		{"encoded words seperated by whitespace should have whitespace removed",
@@ -1814,18 +1821,19 @@ rfc2047_decode_test_() ->
 		{"invalid character sequence handling",
 			fun() ->
 					?assertError({badmatch, {error, eilseq}}, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
-					?assertEqual(<<"this contains a copyright  symbol">>, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE")),
-					?assertEqual(<<"this contains a copyright © symbol">>, decode_header(<<"=?iso-8859-1?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE"))
+					?assertEqual(<<"this contains a copyright  symbol"/utf8>>, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE")),
+					?assertEqual(<<"this contains a copyright © symbol"/utf8>>, decode_header(<<"=?iso-8859-1?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE"))
 			end
 		},
 		{"multiple unicode email addresses",
 			fun() ->
-					?assertEqual(<<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>, Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>">>, decode_header(<<"=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>, =?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>">>, "utf-8"))
+					?assertEqual(<<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>, Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>"/utf8>>,
+					decode_header(<<"=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>, =?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>">>, "utf-8"))
 			end
 		},
 		{"decode something I encoded myself",
 			fun() ->
-				A = <<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>">>,
+				A = <<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>"/utf8>>,
 				?assertEqual(A, decode_header(list_to_binary(rfc2047_utf8_encode(A)), "utf-8"))
 			end
 		}
@@ -1853,8 +1861,8 @@ encoding_test_() ->
 		{"Email with UTF-8 characters",
 			fun() ->
 					Email = {<<"text">>, <<"plain">>, [
-							{<<"Subject">>, <<"Fræderik Hølljen">>},
-							{<<"From">>, <<"Fræderik Hølljen <me@example.com>">>},
+							{<<"Subject">>, <<"Fræderik Hølljen"/utf8>>},
+							{<<"From">>, <<"Fræderik Hølljen <me@example.com>"/utf8>>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Message-ID">>, <<"<abcd@example.com>">>},
 							{<<"MIME-Version">>, <<"1.0">>},
@@ -1864,6 +1872,19 @@ encoding_test_() ->
 								{<<"disposition">>,<<"inline">>}}],
 						<<"This is a plain message">>},
 					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					?assertEqual(Result, encode(Email))
+			end
+		},
+		{"Email with special chars in From",
+			fun() ->
+					Email = {<<"text">>, <<"plain">>, [
+							{<<"From">>, <<"\"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>">>},
+							{<<"Message-ID">>, <<"<abcd@example.com>">>},
+							{<<"MIME-Version">>, <<"1.0">>},
+							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
+						[],
+						<<"This is a plain message">>},
+					Result = <<"From: \"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
 		},
@@ -2019,7 +2040,7 @@ encoding_test_() ->
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
 						[],
-						<<"This is a plain message with some non-ascii characters øÿ\r\nso there">>},
+						<<"This is a plain message with some non-ascii characters øÿ\r\nso there"/utf8>>},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
 					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result))),
@@ -2050,7 +2071,7 @@ encoding_test_() ->
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
 						[],
-						<<"This is a HTML message with some non-ascii characters øÿ\r\nso there">>},
+						<<"This is a HTML message with some non-ascii characters øÿ\r\nso there"/utf8>>},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
 					?assertEqual(<<"quoted-printable">>, proplists:get_value(<<"Content-Transfer-Encoding">>, element(3, Result))),
