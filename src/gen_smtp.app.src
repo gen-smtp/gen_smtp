@@ -1,6 +1,6 @@
 {application,gen_smtp,
  [{description,"A generic Erlang SMTP server/client framework"},
-  {vsn,"0.11.0"},
+  {vsn,"0.12.0"},
   {modules,[binstr,gen_smtp_client,gen_smtp_server,
             gen_smtp_server_session,mimemail,smtp_util,socket,
             smtp_server_example]},
