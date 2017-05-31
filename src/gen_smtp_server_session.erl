@@ -113,8 +113,16 @@ start(Socket, Module, Options) ->
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
 init([Socket, Module, Options]) ->
-	{ok, {PeerName, _Port}} = socket:peername(Socket),
-	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, [])) of
+	PeerName = case socket:peername(Socket) of
+		{ok, {IPaddr, _Port}} -> IPaddr;
+		{'error', _} -> 'error'
+	end,
+	case PeerName =/= 'error'
+		andalso Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, []))
+	of
+		false ->
+			socket:close(Socket),
+			ignore;
 		{ok, Banner, CallbackState} ->
 			socket:send(Socket, ["220 ", Banner, "\r\n"]),
 			socket:active_once(Socket),
@@ -2200,7 +2208,7 @@ stray_newline_test_() ->
 					?assertEqual(<<"fo\r\no\r\n\r">>, check_bare_crlf(<<"fo\ro\n\r">>, <<>>, fix, 0)),
 					?assertEqual(<<"foo\r\n">>, check_bare_crlf(<<"foo\r\n">>, <<>>, fix, 0))
 			end
-		},	
+		},
 		{"Stripping them should work",
 			fun() ->
 					?assertEqual(<<"foo">>, check_bare_crlf(<<"foo">>, <<>>, strip, 0)),
