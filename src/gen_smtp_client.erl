@@ -28,7 +28,7 @@
 -define(DEFAULT_OPTIONS, [
 		{ssl, false}, % whether to connect on 465 in ssl mode
 		{tls, if_available}, % always, never, if_available
-		{tls_options, [{versions, ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]}, % used in ssl:connect, http://erlang.org/doc/man/ssl.html
+		{tls_options, [{versions, ['tlsv1.2']}]}, % used in ssl:connect, http://erlang.org/doc/man/ssl.html
 		{auth, if_available},
 		{hostname, smtp_util:guess_FQDN()},
 		{retries, 1} % how many retries per smtp host on temporary failure
