@@ -37,7 +37,8 @@
 -define(AUTH_PREFERENCE, [
 		"CRAM-MD5",
 		"LOGIN",
-		"PLAIN"
+		"PLAIN",
+		"XOAUTH2"
 	]).
 
 -define(TIMEOUT, 1200000).
@@ -369,6 +370,15 @@ do_AUTH_each(Socket, Username, Password, ["CRAM-MD5" | Tail]) ->
 			end;
 		{ok, _Something} ->
 			%io:format("got ~s~n", [Something]),
+			do_AUTH_each(Socket, Username, Password, Tail)
+	end;
+do_AUTH_each(Socket, Username, Password, ["XOAUTH2" | Tail]) ->
+	Str = base64:encode(list_to_binary(["user=", Username, 1, "auth=Bearer ", Password, 1, 1])),
+	socket:send(Socket, ["AUTH XOAUTH2 ", Str, "\r\n"]),
+	case read_possible_multiline_reply(Socket) of
+		{ok, <<"235", _Rest/binary>>} ->
+			true;
+		{ok, _Msg} ->
 			do_AUTH_each(Socket, Username, Password, Tail)
 	end;
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail]) ->
