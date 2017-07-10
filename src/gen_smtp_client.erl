@@ -50,6 +50,8 @@
 -export([send/2, send/3, send_blocking/2, open/1, deliver/2]).
 -endif.
 
+-export_type([smtp_client_socket/0]).
+
 -type email() :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}.
 
 -spec send(Email :: email(), Options :: list()) -> {'ok', pid()} | {'error', any()}.
@@ -121,6 +123,10 @@ send_it_nonblock(Email, Options, Callback) ->
 			{ok, Receipt}
 	end.
 
+-opaque smtp_client_socket() :: {socket:socket(), list(), list()}.
+-spec open(Options :: list()) -> SocketDescriptor :: smtp_client_socket() | {error, any()}.
+%% @doc Open a SMTP client socket with the provided options
+%% Once the socket has been opened, you can use it with deliver/2.
 open(Options) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 															 lists:sort(?DEFAULT_OPTIONS)),
@@ -145,8 +151,16 @@ open(Options) ->
 			{error, bad_option, Reason}
 	end.
 
+-spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> Receipt :: binary() | {error, any()}.
+%% @doc Deliver an email on an open smtp client socket.
+%% For use with a socket opened with open/1.
 deliver({Socket, Extensions, Options}, Email) ->
-	try_sending_it(Email, Socket, Extensions, Options).
+	try try_sending_it(Email, Socket, Extensions, Options) of
+		Receipt -> Receipt
+	catch
+		throw:FailMsg ->
+			{error, FailMsg}
+	end.
 
 -spec send_it(Email :: email(), Options :: list()) -> binary() | {'error', any(), any()}.
 send_it(Email, Options) ->
