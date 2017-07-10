@@ -47,9 +47,10 @@
 -include_lib("eunit/include/eunit.hrl").
 -compile(export_all).
 -else.
--export([send/2, send/3, send_blocking/2, open/1, deliver/2]).
+-export([send/2, send/3, send_blocking/2, open/1, deliver/2, close/1]).
 -endif.
 
+-opaque smtp_client_socket() :: {socket:socket(), list(), list()}.
 -export_type([smtp_client_socket/0]).
 
 -type email() :: {string() | binary(), [string() | binary(), ...], string() | binary() | function()}.
@@ -123,8 +124,7 @@ send_it_nonblock(Email, Options, Callback) ->
 			{ok, Receipt}
 	end.
 
--opaque smtp_client_socket() :: {socket:socket(), list(), list()}.
--spec open(Options :: list()) -> SocketDescriptor :: smtp_client_socket() | {error, any()}.
+-spec open(Options :: list()) -> {ok, SocketDescriptor :: smtp_client_socket()} | {error, any()}.
 %% @doc Open a SMTP client socket with the provided options
 %% Once the socket has been opened, you can use it with deliver/2.
 open(Options) ->
@@ -146,21 +146,29 @@ open(Options) ->
 								_ ->
 									MXRecords
 							end,
-			try_smtp_sessions(Hosts, NewOptions, []);
+			case try_smtp_sessions(Hosts, NewOptions, []) of
+				{error, _, _} = Error -> Error;
+				SocketDescriptor -> {ok, SocketDescriptor}
+			end;
 		{error, Reason} ->
 			{error, bad_option, Reason}
 	end.
 
--spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> Receipt :: binary() | {error, any()}.
+-spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> {'ok', Receipt :: binary()} | {error, any()}.
 %% @doc Deliver an email on an open smtp client socket.
-%% For use with a socket opened with open/1.
+%% For use with a socket opened with open/1. The socket can be reused as long as the previous call to deliver/2 returned `{ok, Receipt}'.
 deliver({Socket, Extensions, Options}, Email) ->
 	try try_sending_it(Email, Socket, Extensions, Options) of
-		Receipt -> Receipt
+		Receipt -> {ok, Receipt}
 	catch
 		throw:FailMsg ->
 			{error, FailMsg}
 	end.
+
+-spec close(Socker:: smtp_client_socket()) -> ok.
+%% @doc Close an open smtp client socket opened with open/1.
+close({Socket, _Extensions, _Options}) ->
+	quit(Socket).
 
 -spec send_it(Email :: email(), Options :: list()) -> binary() | {'error', any(), any()}.
 send_it(Email, Options) ->
@@ -187,7 +195,7 @@ send_it(Email, Options) ->
 			Error
 	end.
 
--spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Options :: list(), RetryList :: list()) -> binary() | {'error', any(), any()}.
+-spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Options :: list(), RetryList :: list()) -> smtp_client_socket() | {'error', any(), any()}.
 try_smtp_sessions([{_Distance, Host} | _Tail] = Hosts, Options, RetryList) ->
 	try open_smtp_session(Host, Options) of
 		Res -> Res
@@ -242,7 +250,7 @@ fetch_next_host(Retries, _RetryCount, [{Distance, Host} | Tail], RetryList, Opti
 	{Tail ++ [{Distance, Host}], lists:keydelete(Host, 1, RetryList) ++ [{Host, 1}]}.
 
 
--spec open_smtp_session(Host :: string(), Options :: list()) -> {socket:socket(), list(), list()}.
+-spec open_smtp_session(Host :: string(), Options :: list()) -> smtp_client_socket().
 open_smtp_session(Host, Options) ->
 	{ok, Socket, _Host2, Banner} = connect(Host, Options),
 	trace(Options, "connected to ~s; banner was ~s~n", [Host, Banner]),
