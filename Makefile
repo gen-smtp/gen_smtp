@@ -1,5 +1,3 @@
-FILES = $(shell ls ebin/*.beam | grep -v smtp_rfc822_parse)
-
 compile:
 	@./rebar3 compile
 
@@ -11,6 +9,9 @@ test:
 	./rebar3 eunit
 
 dialyze:
-	dialyzer $(FILES)
+	./rebar3 dialyzer
+
+xref:
+	./rebar3 xref
 
 .PHONY: compile clean test dialyze
