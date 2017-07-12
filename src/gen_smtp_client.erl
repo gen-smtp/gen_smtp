@@ -651,23 +651,26 @@ quit(Socket) ->
 
 % TODO - more checking
 check_options(Options) ->
-	case proplists:get_value(relay, Options) of
-		undefined ->
-			{error, no_relay};
-		_ ->
-			case proplists:get_value(auth, Options) of
-				Atom when Atom =:= always ->
-					case proplists:is_defined(username, Options) and
-						proplists:is_defined(password, Options) of
-						false ->
-							{error, no_credentials};
-						true ->
-							ok
-					end;
-				_ ->
-					ok
-			end
-	end.
+	CheckedOptions = [relay, auth],
+	lists:foldl(fun(Option, State) ->
+		Value = proplists:get_value(Option, Options),
+		case State of
+			ok -> check_option({Option, Value}, Options);
+			Other -> Other
+		end
+	end, ok, CheckedOptions).
+
+check_option({relay, Relay}, _Options) when is_binary(Relay) -> ok;
+check_option({relay, _}, _Options) -> {error, no_relay};
+check_option({auth, Auth}, Options) when Auth =:= always ->
+	case proplists:is_defined(username, Options) and
+		proplists:is_defined(password, Options) of
+		false ->
+			{error, no_credentials};
+		true ->
+			ok
+	end;
+check_option({auth, _}, _Options) -> ok.
 
 -spec parse_extensions(Reply :: binary(), Options :: list()) -> [{binary(), binary()}].
 parse_extensions(Reply, Options) ->
