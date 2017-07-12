@@ -484,6 +484,9 @@ decode_body(Type, Body, _InEncoding, none) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
+decode_body(Type, Body, <<"x-binaryenc">>, _OutEncoding) ->
+	% Not IANA and does not represent text, so we pass it through
+	decode_body(Type, Body);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	InEncodingFixed = fix_encoding(InEncoding),
