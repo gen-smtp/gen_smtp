@@ -651,7 +651,7 @@ quit(Socket) ->
 
 % TODO - more checking
 check_options(Options) ->
-	CheckedOptions = [relay, auth],
+	CheckedOptions = [relay, port, auth],
 	lists:foldl(fun(Option, State) ->
 		Value = proplists:get_value(Option, Options),
 		case State of
@@ -662,6 +662,9 @@ check_options(Options) ->
 
 check_option({relay, Relay}, _Options) when is_binary(Relay) -> ok;
 check_option({relay, _}, _Options) -> {error, no_relay};
+check_option({port, undefined}, _Options) -> ok;
+check_option({port, Port}, _Options) when is_integer(Port) -> ok;
+check_option({port, _}, _Options) -> {error, invalid_port};
 check_option({auth, Auth}, Options) when Auth =:= always ->
 	case proplists:is_defined(username, Options) and
 		proplists:is_defined(password, Options) of
