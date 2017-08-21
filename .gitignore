@@ -12,3 +12,4 @@ deps/
 _build
 .rebar
 compile_commands.json
+rebar3.crashdump
