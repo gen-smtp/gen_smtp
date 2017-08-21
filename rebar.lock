@@ -1,4 +1,1 @@
-[{<<"eiconv">>,
-  {git,"git://github.com/zotonic/eiconv.git",
-       {ref,"bf2421e7ced68e2654321f3b02494ccf3653a33c"}},
-  0}].
+[].
