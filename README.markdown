@@ -1,5 +1,4 @@
-Mission
-=======
+# Mission
 
 Provide a generic Erlang SMTP server framework that can be extended via
 callback modules in the OTP style. A pure Erlang SMTP client is also included.
@@ -18,15 +17,13 @@ I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
 copies of all my email for several months and its been able to handle over 100
 thousand emails without leaking any RAM or crashing the erlang virtual machine.
 
-Current Participants
-====================
+## Current Participants
 
 + Andrew Thompson (andrew AT hijacked.us)
 + Jack Danger Canty (code AT jackcanty.com)
 + Micah Warren (micahw AT lordnull.com)
 
-Who is using it?
-================
+## Who is using it?
 
 + gen_smtp is used to provide the email functionality of [OpenACD](https://github.com/OpenACD/OpenACD)
 + gen_smtp will be used as both the SMTP server and SMTP client for [Zotonic](http://zotonic.com) as of version 0.7
@@ -35,8 +32,50 @@ Who is using it?
 
 If you'd like to share your usage of gen_smtp, please contact me.
 
-Client Example
-==============
+# Usage
+
+## Dependency on iconv
+
+gen_smtp relies on iconv for text encoding and decoding when parsing is activated.
+
+To use gen_smtp, a `eiconv` module must be loaded, with a `convert/3` function.
+
+You can use [Zotonic/eiconv](https://github.com/zotonic/eiconv), which is used
+for tests on the project.
+
+For that, you can add the following lines to your `rebar.config` file:
+
+```
+{deps, [
+  {eiconv, ".*", {git, "git://github.com/zotonic/eiconv.git", {branch, "master"}}}
+]}.
+{overrides,
+ [{override, eiconv,
+   [
+    {plugins, [pc]},
+    {port_env, [{"darwin|freebsd|openbsd", "LDFLAGS", "$LDFLAGS -liconv"},
+                {"freebsd|openbsd", "CFLAGS", "$CFLAGS -I/usr/local/include"},
+                {"freebsd|openbsd", "LDFLAGS", "$LDFLAGS -L/usr/local/lib"}]},
+
+    {port_specs, [{"priv/eiconv_nif.so", ["c_src/*.c"]}]},
+    {artifacts, ["priv/eiconv_nif.so"]},
+
+    {provider_hooks, [
+                      {post,
+                       [
+                        {compile, {pc, compile}},
+                        {clean, {pc, clean}}
+                       ]
+                      }]
+    }
+   ]}
+]}.
+```
+
+TODO Allows to use either a module named `eiconv` or `iconv` providing the `convert/3` function.
+([Zotonic/eiconv](https://github.com/zotonic/eiconv) provides `eiconv:convert/3` but [processone/eiconv](https://github.com/processone/iconv) `iconv:convert/3`)
+
+## Client Example
 
 Here's an example usage of the client:
 
@@ -111,8 +150,7 @@ v=DKIM1; g=*; k=rsa; p=MIGfMA0GCSqGSIb3DQEBA......
 ```
 See RFC6376 for more details.
 
-Server Example
-==============
+## Server Example
 
 gen_smtp ships with a simple callback server example, smtp_server_example. To start the SMTP server with this as the callback module, issue the following command:
 
@@ -175,7 +213,6 @@ gen_smtp_client:send({"whatever@test.com", ["andrew@hijacked.us"], "Subject: tes
 
 If you want to listen on IPv6, you can use the {family, inet6} and {address, "::"} options to enable listening on IPv6.
 
-Live Instance
-=============
+## Live Instance
 
 If you want, you can connect to a live instance at mail.cataclysm-software.net (its also the MX record for cataclysm-software.net). Its listening on both IPv4 and v6.
