@@ -21,7 +21,7 @@
 %%% SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 %% @doc A module for decoding/encoding MIME 1.0 email.
-%% The encoder and decoder operate on the same datastructure, which is as follows:
+%% The encoder and decoder operate on the same data structure, which is as follows:
 %% A 5-tuple with the following elements: `{Type, SubType, Headers, Parameters, Body}'.
 %%
 %% `Type' and `SubType' are the MIME type of the email, examples are `text/plain' or
@@ -45,8 +45,10 @@
 %% For a simple email, the body will usually be a binary consisting of the message body, In the
 %% case of a multipart email, its a list of these 5-tuple MIME structures. The third possibility,
 %% in the case of a message/rfc822 attachment, body can be a single 5-tuple MIME structure.
-%% 
+%%
 %% You should see the relevant RFCs (2045, 2046, 2047, etc.) for more information.
+
+% TODO Allows by configuration debugging/verbosity of the module.
 
 -module(mimemail).
 
@@ -914,7 +916,7 @@ fix_encoding(Encoding) ->
 rfc2047_utf8_encode(undefined) -> undefined;
 rfc2047_utf8_encode(B) when is_binary(B) ->
 	rfc2047_utf8_encode(binary_to_list(B));
-rfc2047_utf8_encode([]) -> 
+rfc2047_utf8_encode([]) ->
 	[];
 rfc2047_utf8_encode(Text) ->
     %% Don't escape when all characters are ASCII printable
@@ -933,7 +935,7 @@ rfc2047_utf8_encode([], Acc, _WordLen, Char) ->
     lists:reverse("=?" ++ Char ++ Acc);
 
 %% ASCII characters dont encode except space, ?, _, =, and .
-rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32 
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32
     andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
     rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), [C]);
 %% Encode all other ASCII
@@ -1214,7 +1216,7 @@ parse_with_comments_test_() ->
 			end
 		}
 	].
-	
+
 parse_content_type_test_() ->
 	[
 		{"parsing content types",
@@ -1302,6 +1304,15 @@ parse_example_mails_test_() ->
 				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
 				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
+			end
+		},
+		{"parse a Python smtplib plain text email",
+			fun() ->
+				Decoded = Getmail("python-smtp-lib.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
+				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
+				?assertEqual(<<"Hello world Python.\r\n">>, Body)
 			end
 		},
 		{"parse a plain text email with no content type",
@@ -1438,12 +1449,12 @@ parse_example_mails_test_() ->
 				?assertMatch({<<"message">>, <<"rfc822">>, _, _, _}, Message),
 				Submessage = element(5, Message),
 				?assertMatch({<<"text">>, <<"plain">>, _, _, <<"This message contains only plain text.\r\n">>}, Submessage),
-				
+
 				?assertMatch({<<"text">>, <<"rtf">>, _, _, _}, Rtf),
 				?assertEqual(<<"{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}">>, element(5, Rtf)),
-				
+
 				?assertMatch({<<"image">>, <<"jpeg">>, _, _, _}, Image),
-				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))				
+				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))
 			end
 		},
 		{"Outlook 2007 with leading tabs in quoted-printable.",
@@ -1480,17 +1491,17 @@ parse_example_mails_test_() ->
 				[Html, Messagewithin, _Brhtml, _Message, _Brhtml, Image, _Brhtml, Rtf, _Brhtml] = element(5, Topmultipart),
 				?assertMatch({<<"text">>, <<"html">>, _, _, _}, Html),
 				?assertEqual(<<"<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This</b> is <i>rich</i> text.<div><br></div><div>The list is html.</div><div><br></div><div>Attchments:</div><div><ul class=\"MailOutline\"><li>an email containing an attachment of an email.</li><li>an email of only plain text.</li><li>an image</li><li>an rtf file.</li></ul></div><div></div></body></html>">>, element(5, Html)),
-				
+
 				?assertMatch({<<"message">>, <<"rfc822">>, _, _, _}, Messagewithin),
 				%?assertEqual(1, length(element(5, Messagewithin))),
 				?assertMatch({<<"multipart">>, <<"mixed">>, _, _, [{<<"message">>, <<"rfc822">>, _, _, {<<"text">>, <<"plain">>, _, _, <<"This message contains only plain text.\r\n">>}}]}, element(5, Messagewithin)),
-				
+
 				?assertMatch({<<"image">>, <<"jpeg">>, _, _, _}, Image),
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image))),
-				
+
 				?assertMatch({<<"text">>, <<"rtf">>, _, _, _}, Rtf),
 				?assertEqual(<<"{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}">>, element(5, Rtf))
-				
+
 			end
 		},
 		{"Plain text and 2 identical attachments",
