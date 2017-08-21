@@ -48,8 +48,6 @@
 %%
 %% You should see the relevant RFCs (2045, 2046, 2047, etc.) for more information.
 
-% TODO Allows by configuration debugging/verbosity of the module.
-
 -module(mimemail).
 
 -ifdef(TEST).
@@ -75,7 +73,6 @@
 -type(options() :: [{'encoding', binary()} | {'decode_attachment', boolean()} | {'dkim', [{atom(), any()}]}]).
 
 load_iconv() ->
-	io:format("iconv:load_nif()~n"),
 	ok = iconv:load_nif().
 
 -spec decode(Email :: binary()) -> mimetuple().
@@ -249,10 +246,7 @@ decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
 
 
 convert(To, From, Data) ->
-	io:format("To Convert ~s > ~s ~s ~n", [From,To,Data]),
-	Converted = iconv:convert(From, To, Data),
-	io:format("Converted ~s ~n", [Converted]),
-	{ok, Converted}.
+	{ok, iconv:convert(From, To, Data)}.
 
 
 decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
@@ -490,9 +484,7 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	InEncodingFixed = fix_encoding(InEncoding),
-	Result = iconv:convert(InEncodingFixed, OutEncoding, NewBody),
-	io:format("Result ~s ~n", [Result]),
-	Result.
+	iconv:convert(InEncodingFixed, OutEncoding, NewBody).
 
 -spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
 decode_body(undefined, Body) ->
@@ -1303,7 +1295,6 @@ parse_example_mails_test_() ->
 				?assertEqual(5, tuple_size(Decoded)),
 				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
-				io:format("Body ~s ~n", [Body]),
 				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
 			end
 		},
