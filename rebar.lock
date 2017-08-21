@@ -1,10 +1,4 @@
-{"1.1.0",
-[{<<"iconv">>,
-  {git,"git://github.com/processone/iconv.git",
-       {ref,"888cbaa256bd8eff17ba73742a4b2f5706135cc6"}},
-  0},
- {<<"p1_utils">>,{pkg,<<"p1_utils">>,<<"1.0.9">>},1}]}.
-[
-{pkg_hash,[
- {<<"p1_utils">>, <<"C33C230EFBEB4DCC02911161E3CB1A93231A92DF15E3FC97DE655A9271A26D9F">>}]}
-].
+[{<<"eiconv">>,
+  {git,"git://github.com/zotonic/eiconv.git",
+       {ref,"bf2421e7ced68e2654321f3b02494ccf3653a33c"}},
+  0}].

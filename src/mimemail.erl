@@ -57,8 +57,6 @@
 
 -export([encode/1, encode/2, decode/2, decode/1, get_header_value/2, get_header_value/3, parse_headers/1]).
 
--on_load(load_iconv/0).
-
 -define(DEFAULT_MIME_VERSION, <<"1.0">>).
 
 -define(DEFAULT_OPTIONS, [
@@ -71,9 +69,6 @@
 -type(mimetuple() :: {binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [{binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [tuple()]}] | tuple()}).
 
 -type(options() :: [{'encoding', binary()} | {'decode_attachment', boolean()} | {'dkim', [{atom(), any()}]}]).
-
-load_iconv() ->
-	ok = iconv:load_nif().
 
 -spec decode(Email :: binary()) -> mimetuple().
 %% @doc Decode a MIME email from a binary.
@@ -145,12 +140,10 @@ decode_headers([{Key, Value} | Headers], Acc, Charset) ->
 	decode_headers(Headers, [{Key, decode_header(Value, Charset)} | Acc], Charset).
 
 decode_header(Value, Charset) ->
-	io:format("decode_header ~s ~s~n", [Value,Charset]),
 	RTokens = tokenize_header(Value, []),
 	Tokens = lists:reverse(RTokens),
 	Decoded = try decode_header_tokens_strict(Tokens, Charset)
 		catch Type:Reason ->
-			io:format("Error decode_header_tokens_strict ~s ~n", [Type]),
 			case decode_header_tokens_permissive(Tokens, Charset, []) of
 				{ok, Dec} -> Dec;
 				error ->
@@ -159,7 +152,6 @@ decode_header(Value, Charset) ->
 					erlang:Type(Reason)
 			end
 		end,
-	io:format("Decoded ~s~n", [Decoded]),
 	iolist_to_binary(Decoded).
 
 -type hdr_token() :: binary() | {Encoding::binary(), Data::binary()}.
@@ -246,7 +238,7 @@ decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
 
 
 convert(To, From, Data) ->
-	{ok, iconv:convert(From, To, Data)}.
+	eiconv:convert(From, To, Data).
 
 
 decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
@@ -484,7 +476,8 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	InEncodingFixed = fix_encoding(InEncoding),
-	iconv:convert(InEncodingFixed, OutEncoding, NewBody).
+	{ok, Result} = eiconv:convert(InEncodingFixed, OutEncoding, NewBody),
+	Result.
 
 -spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
 decode_body(undefined, Body) ->
@@ -1514,16 +1507,17 @@ parse_example_mails_test_() ->
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		},
-		% FIXME segfault by processone/iconv (iconv (Ubuntu GLIBC 2.24-9ubuntu2.2) 2.24).
-		% {"permissive malformed folded multibyte header decoder",
-		% 	fun() ->
-		% 		{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
-		% 		?assertEqual(<<"Hello world\n">>, Body),
-		% 		Subject = <<78,79,68,51,50,32,83,109,97,114,116,32,83,101,99,117, 114,105,116,121,32,45,32,208,177,208,181,209,129,208,
-		% 					191,208,187,208,176,209,130,208,189,208,176,209,143,32, 208,187,208,184,209,134,208,181,208,189,208,183,208,184,209,143>>,
-		% 		?assertEqual(Subject, proplists:get_value(<<"Subject">>, Headers))
-		% 	end
-		% },
+		% This trigger a segfault when using processone/iconv #888cbaa
+		% (iconv (Ubuntu GLIBC 2.24-9ubuntu2.2) 2.24).
+		{"permissive malformed folded multibyte header decoder",
+			fun() ->
+				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
+				?assertEqual(<<"Hello world\n">>, Body),
+				Subject = <<78,79,68,51,50,32,83,109,97,114,116,32,83,101,99,117, 114,105,116,121,32,45,32,208,177,208,181,209,129,208,
+							191,208,187,208,176,209,130,208,189,208,176,209,143,32, 208,187,208,184,209,134,208,181,208,189,208,183,208,184,209,143>>,
+				?assertEqual(Subject, proplists:get_value(<<"Subject">>, Headers))
+			end
+		},
 		{"decode headers of multipart messages",
 			fun() ->
 				{<<"multipart">>, _, _, _, [Inline, Attachment]} = Getmail("utf-attachment-name.eml"),
