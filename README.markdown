@@ -72,9 +72,6 @@ For that, you can add the following lines to your `rebar.config` file:
 ]}.
 ```
 
-TODO Allows to use either a module named `eiconv` or `iconv` providing the `convert/3` function.
-([Zotonic/eiconv](https://github.com/zotonic/eiconv) provides `eiconv:convert/3` but [processone/eiconv](https://github.com/processone/iconv) `iconv:convert/3`)
-
 ## Client Example
 
 Here's an example usage of the client:
