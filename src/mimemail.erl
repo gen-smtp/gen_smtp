@@ -238,7 +238,8 @@ decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
 
 
 convert(To, From, Data) ->
-	eiconv:convert(From, To, Data).
+	Result = iconv:convert(From, To, Data),
+	{ok, Result}.
 
 
 decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
@@ -476,8 +477,7 @@ decode_body(Type, Body, undefined, _OutEncoding) ->
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	InEncodingFixed = fix_encoding(InEncoding),
-	{ok, Result} = eiconv:convert(InEncodingFixed, OutEncoding, NewBody),
-	Result.
+	iconv:convert(InEncodingFixed, OutEncoding, NewBody).
 
 -spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
 decode_body(undefined, Body) ->
@@ -1819,7 +1819,7 @@ rfc2047_decode_test_() ->
 		},
 		{"invalid character sequence handling",
 			fun() ->
-					?assertError({badmatch, {error, eilseq}}, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
+					?assertException(throw, eilseq, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
 					%?assertEqual(<<"this contains a copyright  symbol"/utf8>>, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE")),
 					?assertEqual(<<"this contains a copyright © symbol"/utf8>>, decode_header(<<"=?iso-8859-1?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE"))
 			end
