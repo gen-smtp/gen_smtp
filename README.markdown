@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/Vagabond/gen_smtp.svg?branch=master)](https://travis-ci.org/Vagabond/gen_smtp)
+[![Hex pm](http://img.shields.io/hexpm/v/gen_smtp.svg?style=flat)](https://hex.pm/packages/gen_smtp)
+
 # Mission
 
 Provide a generic Erlang SMTP server framework that can be extended via
