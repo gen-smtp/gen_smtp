@@ -46,32 +46,11 @@ To use gen_smtp, a `eiconv` module must be loaded, with a `convert/3` function.
 You can use [Zotonic/eiconv](https://github.com/zotonic/eiconv), which is used
 for tests on the project.
 
-For that, you can add the following lines to your `rebar.config` file:
+For that, you can add the following line to your `rebar.config` file:
 
 ```
 {deps, [
-  {eiconv, ".*", {git, "git://github.com/zotonic/eiconv.git", {branch, "master"}}}
-]}.
-{overrides,
- [{override, eiconv,
-   [
-    {plugins, [pc]},
-    {port_env, [{"darwin|freebsd|openbsd", "LDFLAGS", "$LDFLAGS -liconv"},
-                {"freebsd|openbsd", "CFLAGS", "$CFLAGS -I/usr/local/include"},
-                {"freebsd|openbsd", "LDFLAGS", "$LDFLAGS -L/usr/local/lib"}]},
-
-    {port_specs, [{"priv/eiconv_nif.so", ["c_src/*.c"]}]},
-    {artifacts, ["priv/eiconv_nif.so"]},
-
-    {provider_hooks, [
-                      {post,
-                       [
-                        {compile, {pc, compile}},
-                        {clean, {pc, clean}}
-                       ]
-                      }]
-    }
-   ]}
+  {eiconv, "1.0.0-alpha1"}
 ]}.
 ```
 
