@@ -1507,8 +1507,6 @@ parse_example_mails_test_() ->
 				?assertEqual(2, length(element(5, Decoded)))
 			end
 		},
-		% This trigger a segfault when using processone/iconv #888cbaa
-		% (iconv (Ubuntu GLIBC 2.24-9ubuntu2.2) 2.24).
 		{"permissive malformed folded multibyte header decoder",
 			fun() ->
 				{_, _, Headers, _, Body} = Getmail("malformed-folded-multibyte-header.eml"),
@@ -1668,7 +1666,7 @@ decode_quoted_printable_test_() ->
 					?assertThrow(badchar, decode_quoted_printable(<<"=21=D1 = g ">>))
 			end
 		},
-		%% TODO zotonic's iconv throws eilseq here. processon's iconv a segfault.
+		%% TODO zotonic's iconv throws eilseq here.
 		% {"out of range characters should be stripped",
 		% 	fun() ->
 		% 		% character 150 is en-dash in windows 1252
