@@ -704,8 +704,8 @@ parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
 
 -spec has_extension(Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false'.
 has_extension(Exts, Ext) ->
-	Extension = string:to_upper(Ext),
-	Extensions = [{string:to_upper(X), Y} || {X, Y} <- Exts],
+	Extension = string:uppercase(Ext),
+	Extensions = [{string:uppercase(X), Y} || {X, Y} <- Exts],
 	%io:format("extensions ~p~n", [Extensions]),
 	case proplists:get_value(Extension, Extensions) of
 		undefined ->
