@@ -666,7 +666,7 @@ check_option({relay, _}, _Options) -> ok;
 check_option({port, undefined}, _Options) -> ok;
 check_option({port, Port}, _Options) when is_integer(Port) -> ok;
 check_option({port, _}, _Options) -> {error, invalid_port};
-check_option({auth, Auth}, Options) when Auth =:= always ->
+check_option({auth, always}, Options) ->
 	case proplists:is_defined(username, Options) and
 		proplists:is_defined(password, Options) of
 		false ->
