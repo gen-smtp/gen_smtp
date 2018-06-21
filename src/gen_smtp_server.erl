@@ -116,7 +116,7 @@ sessions(Pid) ->
 %% ports are privileged and only bindable by root. The default protocol is
 %% `tcp', the default listen address is `0.0.0.0' and the default address family
 %% is `inet'. Anything passed in the `sessionoptions' option, is passed through
-%% to `gen_server_smtp_session'.
+%% to `gen_smtp_server_session'.
 %% @see gen_smtp_server_session
 -spec init(Args :: list()) -> {'ok', #state{}} | {'stop', any()}.
 init([Module, Configurations]) ->
