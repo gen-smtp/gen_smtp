@@ -187,12 +187,12 @@ send_it(Email, Options) ->
 			MXRecords
 	end,
 	case try_smtp_sessions(Hosts, Options, []) of
-		{Socket, Extensions, Options} ->
-			Receipt = try_sending_it(Email, Socket, Extensions, Options),
-			quit(Socket),
-			Receipt;
 		{error, _, _} = Error ->
-			Error
+			Error;
+		{Socket, Extensions, Options1} ->
+			Receipt = try_sending_it(Email, Socket, Extensions, Options1),
+			quit(Socket),
+			Receipt
 	end.
 
 -spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Options :: list(), RetryList :: list()) -> smtp_client_socket() | {'error', any(), any()}.
@@ -551,6 +551,10 @@ do_STARTTLS(Socket, Options) ->
 				{'EXIT', Reason} ->
 					quit(Socket),
 					error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
+					erlang:throw({temporary_failure, tls_failed});
+				{error, closed} ->
+					quit(Socket),
+					error_logger:error_msg("Error in ssl upgrade: socket closed.~n"),
 					erlang:throw({temporary_failure, tls_failed});
 				{error, ssl_not_started} ->
 					quit(Socket),
