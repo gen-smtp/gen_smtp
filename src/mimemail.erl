@@ -897,7 +897,7 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $!, H =< $< ->
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $>, H =< $~ ->
 	encode_quoted_printable(T, [H | Acc], L+1);
 encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, _L) when H == $\s; H == $\t ->
-	[[A, B]] = io_lib:format("~2.16.0B", [H]),
+	[A, B] = lists:flatten(io_lib:format("~2.16.0B", [H])),
 	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H == $\s; H == $\t ->
 	encode_quoted_printable(T, [H | Acc], L+1);
