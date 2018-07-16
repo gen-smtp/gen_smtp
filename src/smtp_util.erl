@@ -55,9 +55,11 @@ mxlookup(Domain) ->
 %% @doc guess the current host's fully qualified domain name
 guess_FQDN() ->
 	{ok, Hostname} = inet:gethostname(),
-	{ok, Hostent} = inet:gethostbyname(Hostname),
-	{hostent, FQDN, _Aliases, inet, _, _Addresses} = Hostent,
-	FQDN.
+	case inet:gethostbyname(Hostname) of 
+		{ok, {hostent, FQDN, _Aliases, inet, _, _Addresses}} -> FQDN;
+		{error, nxdomain} -> "Non-Existent Domain.";
+		{error, _} -> "Error getting DNS Record."
+	end.
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
 -spec compute_cram_digest(Key :: binary(), Data :: binary()) -> binary().
