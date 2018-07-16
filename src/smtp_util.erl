@@ -57,8 +57,8 @@ guess_FQDN() ->
 	{ok, Hostname} = inet:gethostname(),
 	case inet:gethostbyname(Hostname) of 
 		{ok, {hostent, FQDN, _Aliases, inet, _, _Addresses}} -> FQDN;
-		{error, nxdomain} -> "Non-Existent Domain.";
-		{error, _} -> "Error getting DNS Record."
+		{error, nxdomain} -> {error, {nxdomain, "Non-Existent Domain."}};
+		{error, Error} -> {error, {Error, "Error getting DNS Record."}}
 	end.
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
