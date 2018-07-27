@@ -114,7 +114,7 @@ generate_message_boundary() ->
 
 -ifdef(deprecated_now).
 unique_id() ->
-    erlang:unique_integer().
+    {erlang:system_time(), erlang:unique_integer()}.
 -else.
 unique_id() ->
     erlang:now().
