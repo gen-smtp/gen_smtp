@@ -28,6 +28,7 @@
 
 -module(gen_smtp_server_session).
 -behaviour(gen_server).
+-behaviour(ranch_protocol).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -38,7 +39,8 @@
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/3, start/3]).
+-export([start_link/4]).
+-export([ranch_init/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
@@ -58,6 +60,8 @@
 	{
 		socket = erlang:error({undefined, socket}) :: port() | tuple(),
 		module = erlang:error({undefined, module}) :: atom(),
+        transport :: module(),
+        ranch_ref :: ranch:ref(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
 		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
@@ -70,28 +74,28 @@
 ).
 
 -type(state() :: any()).
--type(error_message() :: {'error', string(), state()}).
+-type(error_message() :: {error, string(), state()}).
 
--callback code_change(OldVsn :: any(), State :: state(), Extra :: any()) ->  {'ok', state()}.
+-callback code_change(OldVsn :: any(), State :: state(), Extra :: any()) ->  {ok, state()}.
 -callback handle_HELO(Hostname :: binary(), State :: state()) ->
-    {'ok', pos_integer(), state()} | {'ok', state()} | error_message().
+    {ok, pos_integer(), state()} | {ok, state()} | error_message().
 -callback handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: state()) ->
-    {'ok', list(), state()} | error_message().
+    {ok, list(), state()} | error_message().
 -callback handle_MAIL(From :: binary(), State :: state()) ->
-    {'ok', state()} | {'error', string(), state()}.
+    {ok, state()} | {error, string(), state()}.
 -callback handle_MAIL_extension(Extension :: binary(), State :: state()) ->
-    {'ok', state()} | 'error'.
+    {ok, state()} | error.
 -callback handle_RCPT(To :: binary(), State :: state()) ->
-    {'ok', state()} | {'error', string(), state()}.
+    {ok, state()} | {error, string(), state()}.
 -callback handle_RCPT_extension(Extension :: binary(), State :: state()) ->
-    {'ok', state()} | 'error'.
+    {ok, state()} | error.
 -callback handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: state()) ->
-    {'ok', string(), state()} | {'error', string(), state()}.
+    {ok, string(), state()} | {error, string(), state()}.
 -callback handle_RSET(State :: state()) -> state().
 -callback handle_VRFY(Address :: binary(), State :: state()) ->
-    {'ok', string(), state()} | {'error', string(), state()}.
+    {ok, string(), state()} | {error, string(), state()}.
 -callback handle_other(Verb :: binary(), Args :: binary(), state()) ->
-                          {string() | 'noreply', state()}.
+                          {string() | noreply, state()}.
 -callback handle_info(Info :: term(), State :: term()) ->
     {noreply, NewState :: term()} |
     {noreply, NewState :: term(), timeout() | hibernate} |
@@ -101,47 +105,71 @@
 
 %% @doc Start a SMTP session linked to the calling process.
 %% @see start/3
--spec start_link(Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start_link(Socket, Module, Options) ->
-	gen_server:start_link(?MODULE, [Socket, Module, Options], []).
+-spec start_link(Ref :: ranch:ref(), _Socket :: _, Transport :: module(), Options :: [tuple()]) ->
+                        {'ok', pid()}.
+start_link(Ref, _Socket, Transport, Options) ->
+    {ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Transport, Options}])}.
 
-%% @doc Start a SMTP session. Arguments are `Socket' (probably opened via
-%% `gen_smtp_server' or an analogue), which is an abstract socket implemented
-%% via the `socket' module, `Module' is the name of the callback module
-%% implementing the SMTP session behaviour that you'd like to use and `Options'
-%% is the optional arguments provided by the accept server.
--spec start(Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start(Socket, Module, Options) ->
-	gen_server:start(?MODULE, [Socket, Module, Options], []).
+%% %% @doc Start a SMTP session. Arguments are `Socket' (probably opened via
+%% %% `gen_smtp_server' or an analogue), which is an abstract socket implemented
+%% %% via the `socket' module, `Module' is the name of the callback module
+%% %% implementing the SMTP session behaviour that you'd like to use and `Options'
+%% %% is the optional arguments provided by the accept server.
+%% -spec start(Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
+%% start(Socket, Module, Options) ->
+%% 	gen_server:start(?MODULE, [Socket, Module, Options], []).
+
+ranch_init({Ref, Transport, Opts}) ->
+    {ok, Socket} = ranch:handshake(Ref),
+    case init([Ref, Transport, Socket, Opts]) of
+        {ok, State, Timeout} ->
+            %% ok = Transport:setopts(Socket,
+            %%                        [{active, once},
+            %%                         {recbuf, ?MAX_SOCK_BUF_SIZE},
+            %%                         {sndbuf, ?MAX_SOCK_BUF_SIZE},
+            %%                         {buffer, ?MAX_SOCK_BUF_SIZE}
+            %%                        ]),
+            gen_server:enter_loop(?MODULE, [], State, Timeout);
+        {stop, Reason} ->
+            exit(Reason)
+    end.
 
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
-init([Socket, Module, Options]) ->
-	PeerName = case smtp_socket:peername(Socket) of
+init([Ref, Transport, Socket, Options]) ->
+    Module = proplists:get_value(callback, Options),
+	PeerName = case Transport:peername(Socket) of
 		{ok, {IPaddr, _Port}} -> IPaddr;
-		{'error', _} -> 'error'
+		{error, _} -> error
 	end,
-	case PeerName =/= 'error'
-		andalso Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, []))
+	case PeerName =/= error
+		andalso Module:init(hostname(Options),
+                            proplists:get_value(sessioncount, Options, 0), %FIXME
+                            PeerName,
+                            proplists:get_value(callbackoptions, Options, []))
 	of
 		false ->
-			smtp_socket:close(Socket),
+			Transport:close(Socket),
 			ignore;
 		{ok, Banner, CallbackState} ->
-			smtp_socket:send(Socket, ["220 ", Banner, "\r\n"]),
-			smtp_socket:active_once(Socket),
-			{ok, #state{socket = Socket, module = Module, options = Options, callbackstate = CallbackState}, ?TIMEOUT};
+			Transport:send(Socket, ["220 ", Banner, "\r\n"]),
+            ok = Transport:setopts(Socket, [{active, once}]),
+			{ok, #state{socket = Socket,
+                        transport = Transport,
+                        module = Module,
+                        ranch_ref = Ref,
+                        options = Options,
+                        callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
-			smtp_socket:send(Socket, [Message, "\r\n"]),
-			smtp_socket:close(Socket),
+			Transport:send(Socket, [Message, "\r\n"]),
+			Transport:close(Socket),
 			{stop, Reason};
 		ignore ->
-			smtp_socket:close(Socket),
+			Transport:close(Socket),
 			ignore
 	end.
 
 %% @hidden
--spec handle_call(Message :: any(), From :: {pid(), reference()}, #state{}) -> {'stop', 'normal', 'ok', #state{}} | {'reply', {'unknown_call', any()}, #state{}}.
 handle_call(stop, _From, State) ->
 	{stop, normal, ok, State};
 
@@ -149,29 +177,28 @@ handle_call(Request, _From, State) ->
 	{reply, {unknown_call, Request}, State}.
 
 %% @hidden
--spec handle_cast(Message :: any(), State :: #state{}) -> {'noreply', #state{}}.
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
 %% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
-handle_info({receive_data, {error, size_exceeded}}, #state{socket = Socket, readmessage = true} = State) ->
-	smtp_socket:send(Socket, "552 Message too large\r\n"),
-	smtp_socket:active_once(Socket),
+handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
+	send(State, "552 Message too large\r\n"),
+    setopts(State, [{active, once}]),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-handle_info({receive_data, {error, bare_newline}}, #state{socket = Socket, readmessage = true} = State) ->
-	smtp_socket:send(Socket, "451 Bare newline detected\r\n"),
-	io:format("bare newline detected: ~p~n", [self()]),
-	smtp_socket:active_once(Socket),
+handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = State) ->
+	send(State, "451 Bare newline detected\r\n"),
+    setopts(State, [{active, once}]),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = true, envelope = Env, module=Module,
-		callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+handle_info({receive_data, Body, Rest},
+            #state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
+                   callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	% send the remainder of the data...
 	case Rest of
 		<<>> -> ok; % no remaining data
-		_ -> self() ! {smtp_socket:get_proto(Socket), Socket, Rest}
+		_ -> self() ! {get_proto(Transport), Socket, Rest}
 	end,
-	smtp_socket:setopts(Socket, [{packet, line}]),
+	setopts(State, [{packet, line}]),
 	%% Unescape periods at start of line (rfc5321 4.5.2)
 	UnescapedBody = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
 	Envelope = Env#envelope{data = UnescapedBody},% size = length(Body)},
@@ -179,8 +206,8 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 		{true, Value} ->
 			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
 				true ->
-					smtp_socket:send(Socket, "552 Message too large\r\n"),
-					smtp_socket:active_once(Socket),
+					send(State, "552 Message too large\r\n"),
+					setopts(State, [{active, once}]),
 					false;
 				false ->
 					true
@@ -192,19 +219,25 @@ handle_info({receive_data, Body, Rest}, #state{socket = Socket, readmessage = tr
 		true ->
 			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
 				{ok, Reference, CallbackState} ->
-					smtp_socket:send(Socket, io_lib:format("250 queued as ~s\r\n", [Reference])),
-					smtp_socket:active_once(Socket),
-					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT};
+					send(State, io_lib:format("250 queued as ~s\r\n", [Reference])),
+					setopts(State, [{active, once}]),
+					{noreply, State#state{readmessage = false,
+                                          envelope = #envelope{},
+                                          callbackstate = CallbackState}, ?TIMEOUT};
 				{error, Message, CallbackState} ->
-					smtp_socket:send(Socket, [Message, "\r\n"]),
-					smtp_socket:active_once(Socket),
-					{noreply, State#state{readmessage = false, envelope = #envelope{}, callbackstate = CallbackState}, ?TIMEOUT}
+					send(State, [Message, "\r\n"]),
+					setopts(State, [{active, once}]),
+					{noreply, State#state{readmessage = false,
+                                          envelope = #envelope{},
+                                          callbackstate = CallbackState}, ?TIMEOUT}
 			end;
 		false ->
 			% might not even be able to get here anymore...
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
-handle_info({SocketType, Socket, Packet}, State) when SocketType =:= 'tcp'; SocketType =:= 'ssl' ->
+handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport} = State)
+  when SocketType =:= tcp; SocketType =:= ssl ->
+    %% io:format("data: ~p~n", [Packet]),
 	case handle_request(parse_request(Packet), State) of
 		{ok,  #state{extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
 			MaxSize = case has_extension(Extensions, "SIZE") of
@@ -215,13 +248,16 @@ handle_info({SocketType, Socket, Packet}, State) when SocketType =:= 'tcp'; Sock
 			end,
 			Session = self(),
 			Size = 0,
-			smtp_socket:setopts(Socket, [{packet, raw}]),
-			spawn_opt(fun() -> receive_data([],
-							Socket, 0, Size, MaxSize, Session, Options) end,
-				[link, {fullsweep_after, 0}]),
+			setopts(NewState, [{packet, raw}]),
+            %% TODO: change to receive asynchronously in the same process
+			spawn_opt(fun() ->
+                              receive_data(
+                                [], Transport, Socket, 0, Size, MaxSize, Session, Options)
+                      end,
+                      [link, {fullsweep_after, 0}]),
 			{noreply, NewState, ?TIMEOUT};
 		{ok, NewState} ->
-			smtp_socket:active_once(NewState#state.socket),
+			setopts(NewState, [{active, once}]),
 			{noreply, NewState, ?TIMEOUT};
 		{stop, Reason, NewState} ->
 			{stop, Reason, NewState}
@@ -230,11 +266,9 @@ handle_info({tcp_closed, _Socket}, State) ->
 	{stop, normal, State};
 handle_info({ssl_closed, _Socket}, State) ->
 	{stop, normal, State};
-handle_info({SocketError, _TCPSocket, Reason}, State) when SocketError =:= tcp_error; SocketError =:= ssl_error ->
-	{stop, {SocketError, Reason}, State};
-handle_info(timeout, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "421 Error: timeout exceeded\r\n"),
-	smtp_socket:close(Socket),
+handle_info(timeout, #state{socket = Socket, transport = Transport} = State) ->
+	send(State, "421 Error: timeout exceeded\r\n"),
+	Transport:close(Socket),
 	{stop, normal, State};
 handle_info(Info, #state{module=Module, callbackstate = OldCallbackState} = State) ->
 	case erlang:function_exported(Module, handle_info, 2) of
@@ -253,18 +287,19 @@ handle_info(Info, #state{module=Module, callbackstate = OldCallbackState} = Stat
 
 %% @hidden
 -spec terminate(Reason :: any(), State :: #state{}) -> 'ok'.
-terminate(Reason, State) ->
-	smtp_socket:close(State#state.socket),
-	(State#state.module):terminate(Reason, State#state.callbackstate).
+terminate(Reason, #state{socket = Socket, transport = Transport, module = Module,
+                         callbackstate = CallbackState}) ->
+	ok = Transport:close(Socket),
+	Module:terminate(Reason, CallbackState).
 
 %% @hidden
 -spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) ->  {'ok', #state{}}.
-code_change(OldVsn, #state{module = Module} = State, Extra) ->
+code_change(OldVsn, #state{module = Module, callbackstate = CallbackState} = State, Extra) ->
 	% TODO - this should probably be the callback module's version or its checksum
 	CallbackState =
-		case catch Module:code_change(OldVsn, State#state.callbackstate, Extra) of
+		case catch Module:code_change(OldVsn, CallbackState, Extra) of
 			{ok, NewCallbackState} -> NewCallbackState;
-			_                      -> State#state.callbackstate
+			_                      -> CallbackState
 		end,
 	{ok, State#state{callbackstate = CallbackState}}.
 
@@ -288,33 +323,39 @@ parse_request(Packet) ->
 	end.
 
 -spec handle_request({Verb :: binary(), Args :: binary()}, State :: #state{}) -> {'ok', #state{}} | {'stop', any(), #state{}}.
-handle_request({<<>>, _Any}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "500 Error: bad syntax\r\n"),
+handle_request({<<>>, _Any}, State) ->
+	send(State, "500 Error: bad syntax\r\n"),
 	{ok, State};
-handle_request({<<"HELO">>, <<>>}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "501 Syntax: HELO hostname\r\n"),
+handle_request({<<"HELO">>, <<>>}, State) ->
+	send(State, "501 Syntax: HELO hostname\r\n"),
 	{ok, State};
-handle_request({<<"HELO">>, Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
+handle_request({<<"HELO">>, Hostname},
+               #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
 		{ok, MaxSize, CallbackState} when is_integer(MaxSize) ->
-			smtp_socket:send(Socket,["250 ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
-			{ok, State#state{extensions = [{"SIZE", integer_to_list(MaxSize)}], envelope = #envelope{}, callbackstate = CallbackState}};
+            Data = ["250 ", hostname(Options), "\r\n"],
+			send(State, Data),
+			{ok, State#state{extensions = [{"SIZE", integer_to_list(MaxSize)}],
+                             envelope = #envelope{},
+                             callbackstate = CallbackState}};
 		{ok, CallbackState} ->
-			smtp_socket:send(Socket, ["250 ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
+            Data = ["250 ", hostname(Options), "\r\n"],
+			send(State, Data),
 			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
-			smtp_socket:send(Socket, [Message, "\r\n"]),
+			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
-handle_request({<<"EHLO">>, <<>>}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "501 Syntax: EHLO hostname\r\n"),
+handle_request({<<"EHLO">>, <<>>}, State) ->
+	send(State, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({<<"EHLO">>, Hostname}, #state{socket = Socket, options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+handle_request({<<"EHLO">>, Hostname}, #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, Extensions, CallbackState} ->
 			case Extensions of
 				[] ->
-					smtp_socket:send(Socket, ["250 ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
+                    Data = ["250 ", hostname(Options), "\r\n"],
+					send(State, Data),
 					{ok, State#state{extensions = Extensions, callbackstate = CallbackState}};
 				_Else ->
 					F =
@@ -333,20 +374,24 @@ handle_request({<<"EHLO">>, Hostname}, #state{socket = Socket, options = Options
 						false ->
 							Extensions
 					end,
-					{_, _, Response} = lists:foldl(F, {1, length(Extensions2), [["250-", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]]}, Extensions2),
+					{_, _, Response} = lists:foldl(
+                                         F,
+                                         {1, length(Extensions2),
+                                          [["250-", hostname(Options), "\r\n"]]},
+                                         Extensions2),
 					%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
-					smtp_socket:send(Socket, lists:reverse(Response)),
+					send(State, lists:reverse(Response)),
 					{ok, State#state{extensions = Extensions2, envelope = #envelope{}, callbackstate = CallbackState}}
 			end;
 		{error, Message, CallbackState} ->
-			smtp_socket:send(Socket, [Message, "\r\n"]),
+			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
-handle_request({<<"AUTH">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
-	smtp_socket:send(Socket, "503 Error: send EHLO first\r\n"),
+handle_request({<<"AUTH">>, _Args}, #state{envelope = undefined} = State) ->
+	send(State, "503 Error: send EHLO first\r\n"),
 	{ok, State};
-handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensions, envelope = Envelope, options = Options} = State) ->
+handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = Envelope, options = Options} = State) ->
 	case binstr:strchr(Args, $\s) of
 		0 ->
 			AuthType = Args,
@@ -358,18 +403,19 @@ handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensio
 
 	case has_extension(Extensions, "AUTH") of
 		false ->
-			smtp_socket:send(Socket, "502 Error: AUTH not implemented\r\n"),
+			send(State, "502 Error: AUTH not implemented\r\n"),
 			{ok, State};
 		{true, AvailableTypes} ->
-			case lists:member(string:to_upper(binary_to_list(AuthType)), string:tokens(AvailableTypes, " ")) of
+			case lists:member(string:to_upper(binary_to_list(AuthType)),
+                              string:tokens(AvailableTypes, " ")) of
 				false ->
-					smtp_socket:send(Socket, "504 Unrecognized authentication type\r\n"),
+					send(State, "504 Unrecognized authentication type\r\n"),
 					{ok, State};
 				true ->
 					case binstr:to_upper(AuthType) of
 						<<"LOGIN">> ->
 							% smtp_socket:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
-							smtp_socket:send(Socket, "334 VXNlcm5hbWU6\r\n"),
+							send(State, "334 VXNlcm5hbWU6\r\n"),
 							{ok, State#state{waitingauth = 'login', envelope = Envelope#envelope{auth = {<<>>, <<>>}}}};
 						<<"PLAIN">> when Parameters =/= false ->
 							% TODO - duplicated below in handle_request waitingauth PLAIN
@@ -383,12 +429,12 @@ handle_request({<<"AUTH">>, Args}, #state{socket = Socket, extensions = Extensio
 									{ok, State}
 							end;
 						<<"PLAIN">> ->
-							smtp_socket:send(Socket, "334\r\n"),
+							send(State, "334\r\n"),
 							{ok, State#state{waitingauth = 'plain', envelope = Envelope#envelope{auth = {<<>>, <<>>}}}};
 						<<"CRAM-MD5">> ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
-							String = smtp_util:get_cram_string(proplists:get_value(hostname, Options, smtp_util:guess_FQDN())),
-							smtp_socket:send(Socket, ["334 ", String, "\r\n"]),
+							String = smtp_util:get_cram_string(hostname(Options)),
+							send(State, ["334 ", String, "\r\n"]),
 							{ok, State#state{waitingauth = 'cram-md5', authdata=base64:decode(String), envelope = Envelope#envelope{auth = {<<>>, <<>>}}}}
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
 							%crypto:start(), % ensure crypto is started, we're gonna need it
@@ -423,11 +469,11 @@ handle_request({Username64, <<>>}, #state{waitingauth = 'plain', envelope = #env
 	end;
 
 % the client sends a username response to auth-login
-handle_request({Username64, <<>>}, #state{socket = Socket, waitingauth = 'login', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
+handle_request({Username64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
 	Envelope = State#state.envelope,
 	Username = base64:decode(Username64),
 	% smtp_socket:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
-	smtp_socket:send(Socket, "334 UGFzc3dvcmQ6\r\n"),
+	send(State, "334 UGFzc3dvcmQ6\r\n"),
 	% store the provided username in envelope.auth
 	NewState = State#state{envelope = Envelope#envelope{auth = {Username, <<>>}}},
 	{ok, NewState};
@@ -437,10 +483,10 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	Password = base64:decode(Password64),
 	try_auth('login', Username, Password, State);
 
-handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
-	smtp_socket:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
+handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined} = State) ->
+	send(State, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
-handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+handle_request({<<"MAIL">>, Args}, #state{module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
 			case binstr:strpos(binstr:to_upper(Args), "FROM:") of
@@ -448,16 +494,16 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
 					case parse_encoded_address(Address) of
 						error ->
-							smtp_socket:send(Socket, "501 Bad sender address syntax\r\n"),
+							send(State, "501 Bad sender address syntax\r\n"),
 							{ok, State};
 						{ParsedAddress, <<>>} ->
 							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
-									smtp_socket:send(Socket, "250 sender Ok\r\n"),
+									send(State, "250 sender Ok\r\n"),
 									{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 								{error, Message, CallbackState} ->
-									smtp_socket:send(Socket, [Message, "\r\n"]),
+									send(State, [Message, "\r\n"]),
 									{ok, State#state{callbackstate = CallbackState}}
 							end;
 						{ParsedAddress, ExtraInfo} ->
@@ -496,113 +542,113 @@ handle_request({<<"MAIL">>, Args}, #state{socket = Socket, module = Module, enve
 							case lists:foldl(F, State, Options) of
 								{error, Message} ->
 									%io:format("error: ~s~n", [Message]),
-									smtp_socket:send(Socket, Message),
+									send(State, Message),
 									{ok, State};
 								NewState ->
 									%io:format("OK~n"),
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
-											smtp_socket:send(Socket, "250 sender Ok\r\n"),
+											send(State, "250 sender Ok\r\n"),
 											{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 										{error, Message, CallbackState} ->
-											smtp_socket:send(Socket, [Message, "\r\n"]),
+											send(State, [Message, "\r\n"]),
 											{ok, NewState#state{callbackstate = CallbackState}}
 									end
 							end
 					end;
 				_Else ->
-					smtp_socket:send(Socket, "501 Syntax: MAIL FROM:<address>\r\n"),
+					send(State, "501 Syntax: MAIL FROM:<address>\r\n"),
 					{ok, State}
 			end;
 		_Other ->
-			smtp_socket:send(Socket, "503 Error: Nested MAIL command\r\n"),
+			send(State, "503 Error: Nested MAIL command\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"RCPT">>, _Args}, #state{envelope = undefined, socket = Socket} = State) ->
-	smtp_socket:send(Socket, "503 Error: need MAIL command\r\n"),
+handle_request({<<"RCPT">>, _Args}, #state{envelope = undefined} = State) ->
+	send(State, "503 Error: need MAIL command\r\n"),
 	{ok, State};
-handle_request({<<"RCPT">>, Args}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
+handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
 	case binstr:strpos(binstr:to_upper(Args), "TO:") of
 		1 ->
 			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
 			case parse_encoded_address(Address) of
 				error ->
-					smtp_socket:send(Socket, "501 Bad recipient address syntax\r\n"),
+					send(State, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
 				{<<>>, _} ->
 					% empty rcpt to addresses aren't cool
-					smtp_socket:send(Socket, "501 Bad recipient address syntax\r\n"),
+					send(State, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
 				{ParsedAddress, <<>>} ->
 					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, OldCallbackState) of
 						{ok, CallbackState} ->
-							smtp_socket:send(Socket, "250 recipient Ok\r\n"),
+							send(State, "250 recipient Ok\r\n"),
 							{ok, State#state{envelope = Envelope#envelope{to = Envelope#envelope.to ++ [ParsedAddress]}, callbackstate = CallbackState}};
 						{error, Message, CallbackState} ->
-							smtp_socket:send(Socket, [Message, "\r\n"]),
+							send(State, [Message, "\r\n"]),
 							{ok, State#state{callbackstate = CallbackState}}
 					end;
 				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
 					io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-					smtp_socket:send(Socket, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
+					send(State, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
 					{ok, State}
 			end;
 		_Else ->
-			smtp_socket:send(Socket, "501 Syntax: RCPT TO:<address>\r\n"),
+			send(State, "501 Syntax: RCPT TO:<address>\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"DATA">>, <<>>}, #state{socket = Socket, envelope = undefined} = State) ->
-	smtp_socket:send(Socket, "503 Error: send HELO/EHLO first\r\n"),
+handle_request({<<"DATA">>, <<>>}, #state{envelope = undefined} = State) ->
+	send(State, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
-handle_request({<<"DATA">>, <<>>}, #state{socket = Socket, envelope = Envelope} = State) ->
+handle_request({<<"DATA">>, <<>>}, #state{envelope = Envelope} = State) ->
 	case {Envelope#envelope.from, Envelope#envelope.to} of
 		{undefined, _} ->
-			smtp_socket:send(Socket, "503 Error: need MAIL command\r\n"),
+			send(State, "503 Error: need MAIL command\r\n"),
 			{ok, State};
 		{_, []} ->
-			smtp_socket:send(Socket, "503 Error: need RCPT command\r\n"),
+			send(State, "503 Error: need RCPT command\r\n"),
 			{ok, State};
 		_Else ->
-			smtp_socket:send(Socket, "354 enter mail, end with line containing only '.'\r\n"),
+			send(State, "354 enter mail, end with line containing only '.'\r\n"),
 			%io:format("switching to data read mode~n", []),
 
 			{ok, State#state{readmessage = true}}
 	end;
-handle_request({<<"RSET">>, _Any}, #state{socket = Socket, envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
-	smtp_socket:send(Socket, "250 Ok\r\n"),
+handle_request({<<"RSET">>, _Any}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
+	send(State, "250 Ok\r\n"),
 	% if the client sends a RSET before a HELO/EHLO don't give them a valid envelope
 	NewEnvelope = case Envelope of
 		undefined -> undefined;
 		_Something -> #envelope{}
 	end,
 	{ok, State#state{envelope = NewEnvelope, callbackstate = Module:handle_RSET(OldCallbackState)}};
-handle_request({<<"NOOP">>, _Any}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "250 Ok\r\n"),
+handle_request({<<"NOOP">>, _Any}, State) ->
+	send(State, "250 Ok\r\n"),
 	{ok, State};
-handle_request({<<"QUIT">>, _Any}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "221 Bye\r\n"),
+handle_request({<<"QUIT">>, _Any}, State) ->
+	send(State, "221 Bye\r\n"),
 	{stop, normal, State};
-handle_request({<<"VRFY">>, Address}, #state{module= Module, socket = Socket, callbackstate = OldCallbackState} = State) ->
+handle_request({<<"VRFY">>, Address}, #state{module= Module, callbackstate = OldCallbackState} = State) ->
 	case parse_encoded_address(Address) of
 		{ParsedAddress, <<>>} ->
 			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
-					smtp_socket:send(Socket, ["250 ", Reply, "\r\n"]),
+					send(State, ["250 ", Reply, "\r\n"]),
 					{ok, State#state{callbackstate = CallbackState}};
 				{error, Message, CallbackState} ->
-					smtp_socket:send(Socket, [Message, "\r\n"]),
+					send(State, [Message, "\r\n"]),
 					{ok, State#state{callbackstate = CallbackState}}
 			end;
 		_Other ->
-			smtp_socket:send(Socket, "501 Syntax: VRFY username/address\r\n"),
+			send(State, "501 Syntax: VRFY username/address\r\n"),
 			{ok, State}
 	end;
 handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, tls=false, extensions = Extensions, callbackstate = OldCallbackState, options = Options} = State) ->
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
-			smtp_socket:send(Socket, "220 OK\r\n"),
+			send(State, "220 OK\r\n"),
 			Options1 = case proplists:get_value(certfile, Options) of
 				undefined ->
 					[];
@@ -615,37 +661,40 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 				KeyFile ->
 					[{keyfile, KeyFile} | Options1]
 			end,
+            %% Assert that socket is in passive state
+            {ok, [{active, false}]} = inet:getopts(Socket, [active]),
 			% TODO: certfile and keyfile should be at configurable locations
-			case smtp_socket:to_ssl_server(Socket, Options2, 5000) of
+			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | Options2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					%io:format("SSL negotiation sucessful~n"),
-					{ok, State#state{socket = NewSocket, envelope=undefined,
+                    ranch_ssl:setopts(NewSocket, [{packet, line}]),
+					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
 				{error, Reason} ->
 					io:format("SSL handshake failed : ~p~n", [Reason]),
-					smtp_socket:send(Socket, "454 TLS negotiation failed\r\n"),
+					send(State, "454 TLS negotiation failed\r\n"),
 					{ok, State}
 			end;
 		false ->
-			smtp_socket:send(Socket, "500 Command unrecognized\r\n"),
+			send(State, "500 Command unrecognized\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "500 TLS already negotiated\r\n"),
+handle_request({<<"STARTTLS">>, <<>>}, State) ->
+	send(State, "500 TLS already negotiated\r\n"),
 	{ok, State};
-handle_request({<<"STARTTLS">>, _Args}, #state{socket = Socket} = State) ->
-	smtp_socket:send(Socket, "501 Syntax error (no parameters allowed)\r\n"),
+handle_request({<<"STARTTLS">>, _Args}, State) ->
+	send(State, "501 Syntax error (no parameters allowed)\r\n"),
 	{ok, State};
-handle_request({Verb, Args}, #state{socket = Socket, module = Module, callbackstate = OldCallbackState} = State) ->
-	{Message, CallbackState} = Module:handle_other(Verb, Args, OldCallbackState),
-	maybe_reply(Message, Socket),
+handle_request({Verb, Args}, #state{module = Module, callbackstate = OldCallbackState} = State) ->
+    CallbackState =
+        case Module:handle_other(Verb, Args, OldCallbackState) of
+            {noreply, CState1} -> CState1;
+            {Message, CState1} ->
+                send(State, [Message, "\r\n"]),
+                CState1
+        end,
 	{ok, State#state{callbackstate = CallbackState}}.
-
--spec maybe_reply(Message :: string() | 'noreply', Socket :: smtp_socket:socket()) -> 'ok' | {'error', any()}.
-maybe_reply('noreply', _) -> 'ok';
-maybe_reply(Message, Socket) ->
-	smtp_socket:send(Socket, [Message, "\r\n"]).
 
 -spec parse_encoded_address(Address :: binary()) -> {binary(), binary()} | 'error'.
 parse_encoded_address(<<>>) ->
@@ -718,23 +767,23 @@ has_extension(Exts, Ext) ->
 
 
 -spec try_auth(AuthType :: 'login' | 'plain' | 'cram-md5', Username :: binary(), Credential :: binary() | {binary(), binary()}, State :: #state{}) -> {'ok', #state{}}.
-try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket, envelope = Envelope, callbackstate = OldCallbackState} = State) ->
+try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Envelope, callbackstate = OldCallbackState} = State) ->
 	% clear out waiting auth
 	NewState = State#state{waitingauth = false, envelope = Envelope#envelope{auth = {<<>>, <<>>}}},
 	case erlang:function_exported(Module, handle_AUTH, 4) of
 		true ->
 			case Module:handle_AUTH(AuthType, Username, Credential, OldCallbackState) of
 				{ok, CallbackState} ->
-					smtp_socket:send(Socket, "235 Authentication successful.\r\n"),
+					send(State, "235 Authentication successful.\r\n"),
 					{ok, NewState#state{callbackstate = CallbackState,
 					                    envelope = Envelope#envelope{auth = {Username, Credential}}}};
 				_Other ->
-					smtp_socket:send(Socket, "535 Authentication failed.\r\n"),
+					send(State, "535 Authentication failed.\r\n"),
 					{ok, NewState}
 				end;
 		false ->
 			io:format("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
-			smtp_socket:send(Socket, "535 authentication failed (#5.7.1)\r\n"),
+			send(State, "535 authentication failed (#5.7.1)\r\n"),
 			{ok, NewState}
 	end.
 
@@ -745,11 +794,11 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 
 
 %% @doc a tight loop to receive the message body
-receive_data(_Acc, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize > 0, Size > MaxSize ->
+receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize > 0, Size > MaxSize ->
 	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
-receive_data(Acc, Socket, RecvSize, Size, MaxSize, Session, Options) ->
-	case smtp_socket:recv(Socket, RecvSize, 1000) of
+receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) ->
+	case Transport:recv(Socket, RecvSize, 1000) of
 		{ok, Packet} when Acc == [] ->
 			case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
 				error ->
@@ -759,7 +808,7 @@ receive_data(Acc, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([FixedPacket | Acc], Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+							receive_data([FixedPacket | Acc], Transport, Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
@@ -779,7 +828,7 @@ receive_data(Acc, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
-							receive_data([FixedPacket | Acc], Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
+							receive_data([FixedPacket | Acc], Transport, Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
@@ -798,7 +847,7 @@ receive_data(Acc, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 					% uh-oh
 					%io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
-					receive_data(Acc, Socket, 0, Size, MaxSize, Session, Options);
+					receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
@@ -808,7 +857,7 @@ receive_data(Acc, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 					Session ! {receive_data, Result, Rest}
 			end;
 		{error, timeout} ->
-			receive_data(Acc, Socket, 0, Size, MaxSize, Session, Options);
+			receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
 			io:format("receive error: ~p~n", [Reason]),
 			exit(receive_error)
@@ -874,6 +923,17 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
+send(#state{transport = Transport, socket = Sock}, Data) ->
+    ok = Transport:send(Sock, Data).
+
+setopts(#state{transport = Transport, socket = Sock}, Opts) ->
+    ok = Transport:setopts(Sock, Opts).
+
+hostname(Opts) ->
+    proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).    
+
+get_proto(ranch_tcp) -> tcp;
+get_proto(ranch_ssl) -> ssl.
 
 -ifdef(TEST).
 parse_encoded_address_test_() ->
@@ -974,23 +1034,15 @@ smtp_session_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				Self = self(),
-				spawn(fun() ->
-							{ok, ListenSock} = smtp_socket:listen(tcp, 9876, [binary]),
-							{ok, X} = smtp_socket:accept(ListenSock),
-							smtp_socket:controlling_process(X, Self),
-							Self ! X
-					end),
+				{ok, Pid} = gen_smtp_server:start(
+                              smtp_server_example,
+                              [{sessionoptions, [{hostname, "localhost"}]},
+                               {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
-				receive
-					SSock when is_port(SSock) ->
-						ok
-				end,
-				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, [{hostname, "localhost"}, {sessioncount, 1}]),
-				smtp_socket:controlling_process(SSock, Pid),
 				{CSock, Pid}
 		end,
 		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
 				smtp_socket:close(CSock),
 				timer:sleep(10)
 		end,
@@ -1280,23 +1332,17 @@ smtp_session_auth_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				Self = self(),
-				spawn(fun() ->
-							{ok, ListenSock} = smtp_socket:listen(tcp, 9876, [binary]),
-							{ok, X} = smtp_socket:accept(ListenSock),
-							smtp_socket:controlling_process(X, Self),
-							Self ! X
-					end),
+				{ok, Pid} = gen_smtp_server:start(
+                              smtp_server_example,
+                              [{sessionoptions,
+                                [{hostname, "localhost"},
+                                 {callbackoptions, [{auth, true}]}]},
+                               {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
-				receive
-					SSock when is_port(SSock) ->
-						ok
-				end,
-				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, [{hostname, "localhost"}, {sessioncount, 1}, {callbackoptions, [{auth, true}]}]),
-				smtp_socket:controlling_process(SSock, Pid),
 				{CSock, Pid}
 		end,
 		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
 				smtp_socket:close(CSock),
 				timer:sleep(10)
 		end,
@@ -1787,24 +1833,19 @@ smtp_session_tls_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				gen_smtp_application:ensure_all_started(gen_smtp),
-				Self = self(),
-				spawn(fun() ->
-							{ok, ListenSock} = smtp_socket:listen(tcp, 9876, [binary]),
-							{ok, X} = smtp_socket:accept(ListenSock),
-							smtp_socket:controlling_process(X, Self),
-							Self ! X
-					end),
+				{ok, Pid} = gen_smtp_server:start(
+                              smtp_server_example,
+                              [{sessionoptions,
+                                [{keyfile, "test/fixtures/server.key"},
+                                 {certfile, "test/fixtures/server.crt"},
+                                 {hostname, "localhost"},
+                                 {callbackoptions, [{auth, true}]}]},
+                               {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
-				receive
-					SSock when is_port(SSock) ->
-						ok
-				end,
-				{ok, Pid} = gen_smtp_server_session:start(SSock, smtp_server_example, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}, {hostname, "localhost"}, {sessioncount, 1}, {callbackoptions, [{auth, true}]}]),
-				smtp_socket:controlling_process(SSock, Pid),
 				{CSock, Pid}
 		end,
 		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
 				smtp_socket:close(CSock),
 				timer:sleep(10)
 		end,

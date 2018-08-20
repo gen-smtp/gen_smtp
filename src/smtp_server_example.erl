@@ -208,6 +208,7 @@ handle_STARTTLS(State) ->
     {noreply, NewState :: term(), timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: term()}.
 handle_info(_Info, State) ->
+    io:format("handle_info(~p, ~p)", [_Info, State]),
 	{noreply, State}.
 
 -spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {ok, #state{}}.
