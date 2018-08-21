@@ -45,6 +45,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
+-export_type([options/0]).
 
 -record(envelope,
 	{
@@ -60,8 +61,8 @@
 	{
 		socket = erlang:error({undefined, socket}) :: port() | tuple(),
 		module = erlang:error({undefined, module}) :: atom(),
-        transport :: module(),
-        ranch_ref :: ranch:ref(),
+		transport :: module(),
+		ranch_ref :: ranch:ref(),
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
 		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
@@ -72,15 +73,27 @@
 		options = [] :: [tuple()]
 	}
 ).
+-type options() :: [{callback, module()}
+					| {callbackoptions, any()}
+					| {certfile, file:name_all()}
+					| {keyfile, file:name_all()}
+					| {allow_bare_newlines, boolean()}
+					| {hostname, inet:hostname()}].
 
 -type(state() :: any()).
 -type(error_message() :: {error, string(), state()}).
 
+-callback init(Hostname :: inet:hostname(), _SessionCount,
+			   Peername :: inet:ip_address(), Opts :: any()) ->
+	{ok, Banner :: iodata(), CallbackState :: state()} | {stop, Reason :: any(), Message :: iodata()} | ignore.
 -callback code_change(OldVsn :: any(), State :: state(), Extra :: any()) ->  {ok, state()}.
 -callback handle_HELO(Hostname :: binary(), State :: state()) ->
     {ok, pos_integer(), state()} | {ok, state()} | error_message().
 -callback handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: state()) ->
     {ok, list(), state()} | error_message().
+-callback handle_AUTH(AuthType :: login | plain | 'cram-md5', Username :: binary(),
+					  Credential :: binary() | {binary(), binary()}, State :: state()) ->
+    {ok, state()} | any().
 -callback handle_MAIL(From :: binary(), State :: state()) ->
     {ok, state()} | {error, string(), state()}.
 -callback handle_MAIL_extension(Extension :: binary(), State :: state()) ->
@@ -101,65 +114,49 @@
     {noreply, NewState :: term(), timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: term()}.
 
--optional_callbacks([handle_info/2]).
+-optional_callbacks([handle_info/2, handle_AUTH/4]).
 
 %% @doc Start a SMTP session linked to the calling process.
 %% @see start/3
--spec start_link(Ref :: ranch:ref(), _Socket :: _, Transport :: module(), Options :: [tuple()]) ->
-                        {'ok', pid()}.
+-spec start_link(Ref :: ranch:ref(), _Socket :: _, Transport :: module(), Options :: options()) ->
+						{'ok', pid()}.
 start_link(Ref, _Socket, Transport, Options) ->
-    {ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Transport, Options}])}.
-
-%% %% @doc Start a SMTP session. Arguments are `Socket' (probably opened via
-%% %% `gen_smtp_server' or an analogue), which is an abstract socket implemented
-%% %% via the `socket' module, `Module' is the name of the callback module
-%% %% implementing the SMTP session behaviour that you'd like to use and `Options'
-%% %% is the optional arguments provided by the accept server.
-%% -spec start(Socket :: port(), Module :: atom(), Options :: [tuple()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-%% start(Socket, Module, Options) ->
-%% 	gen_server:start(?MODULE, [Socket, Module, Options], []).
+	{ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Transport, Options}])}.
 
 ranch_init({Ref, Transport, Opts}) ->
-    {ok, Socket} = ranch:handshake(Ref),
-    case init([Ref, Transport, Socket, Opts]) of
-        {ok, State, Timeout} ->
-            %% ok = Transport:setopts(Socket,
-            %%                        [{active, once},
-            %%                         {recbuf, ?MAX_SOCK_BUF_SIZE},
-            %%                         {sndbuf, ?MAX_SOCK_BUF_SIZE},
-            %%                         {buffer, ?MAX_SOCK_BUF_SIZE}
-            %%                        ]),
-            gen_server:enter_loop(?MODULE, [], State, Timeout);
-        {stop, Reason} ->
-            exit(Reason)
-    end.
+	{ok, Socket} = ranch:handshake(Ref),
+	case init([Ref, Transport, Socket, Opts]) of
+		{ok, State, Timeout} ->
+			gen_server:enter_loop(?MODULE, [], State, Timeout);
+		{stop, Reason} ->
+			exit(Reason)
+	end.
 
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
-init([Ref, Transport, Socket, Options]) ->
-    Module = proplists:get_value(callback, Options),
+init([Ref, Transport, Socket, [{callback, Module} | Options]]) ->
 	PeerName = case Transport:peername(Socket) of
 		{ok, {IPaddr, _Port}} -> IPaddr;
 		{error, _} -> error
 	end,
 	case PeerName =/= error
 		andalso Module:init(hostname(Options),
-                            proplists:get_value(sessioncount, Options, 0), %FIXME
-                            PeerName,
-                            proplists:get_value(callbackoptions, Options, []))
+							proplists:get_value(sessioncount, Options, 0), %FIXME
+							PeerName,
+							proplists:get_value(callbackoptions, Options, []))
 	of
 		false ->
 			Transport:close(Socket),
 			ignore;
 		{ok, Banner, CallbackState} ->
 			Transport:send(Socket, ["220 ", Banner, "\r\n"]),
-            ok = Transport:setopts(Socket, [{active, once}]),
+			ok = Transport:setopts(Socket, [{active, once}]),
 			{ok, #state{socket = Socket,
-                        transport = Transport,
-                        module = Module,
-                        ranch_ref = Ref,
-                        options = Options,
-                        callbackstate = CallbackState}, ?TIMEOUT};
+						transport = Transport,
+						module = Module,
+						ranch_ref = Ref,
+						options = Options,
+						callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
 			Transport:send(Socket, [Message, "\r\n"]),
 			Transport:close(Socket),
@@ -184,15 +181,15 @@ handle_cast(_Msg, State) ->
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
 	send(State, "552 Message too large\r\n"),
-    setopts(State, [{active, once}]),
+	setopts(State, [{active, once}]),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = State) ->
 	send(State, "451 Bare newline detected\r\n"),
-    setopts(State, [{active, once}]),
+	setopts(State, [{active, once}]),
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, Body, Rest},
-            #state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
-                   callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+			#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
+				   callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
 	% send the remainder of the data...
 	case Rest of
 		<<>> -> ok; % no remaining data
@@ -222,14 +219,14 @@ handle_info({receive_data, Body, Rest},
 					send(State, io_lib:format("250 queued as ~s\r\n", [Reference])),
 					setopts(State, [{active, once}]),
 					{noreply, State#state{readmessage = false,
-                                          envelope = #envelope{},
-                                          callbackstate = CallbackState}, ?TIMEOUT};
+										  envelope = #envelope{},
+										  callbackstate = CallbackState}, ?TIMEOUT};
 				{error, Message, CallbackState} ->
 					send(State, [Message, "\r\n"]),
 					setopts(State, [{active, once}]),
 					{noreply, State#state{readmessage = false,
-                                          envelope = #envelope{},
-                                          callbackstate = CallbackState}, ?TIMEOUT}
+										  envelope = #envelope{},
+										  callbackstate = CallbackState}, ?TIMEOUT}
 			end;
 		false ->
 			% might not even be able to get here anymore...
@@ -237,7 +234,6 @@ handle_info({receive_data, Body, Rest},
 	end;
 handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport} = State)
   when SocketType =:= tcp; SocketType =:= ssl ->
-    %% io:format("data: ~p~n", [Packet]),
 	case handle_request(parse_request(Packet), State) of
 		{ok,  #state{extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
 			MaxSize = case has_extension(Extensions, "SIZE") of
@@ -249,12 +245,12 @@ handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Tr
 			Session = self(),
 			Size = 0,
 			setopts(NewState, [{packet, raw}]),
-            %% TODO: change to receive asynchronously in the same process
+			%% TODO: change to receive asynchronously in the same process
 			spawn_opt(fun() ->
-                              receive_data(
-                                [], Transport, Socket, 0, Size, MaxSize, Session, Options)
-                      end,
-                      [link, {fullsweep_after, 0}]),
+							  receive_data(
+								[], Transport, Socket, 0, Size, MaxSize, Session, Options)
+					  end,
+					  [link, {fullsweep_after, 0}]),
 			{noreply, NewState, ?TIMEOUT};
 		{ok, NewState} ->
 			setopts(NewState, [{active, once}]),
@@ -299,7 +295,7 @@ code_change(OldVsn, #state{module = Module, callbackstate = CallbackState} = Sta
 	CallbackState =
 		case catch Module:code_change(OldVsn, CallbackState, Extra) of
 			{ok, NewCallbackState} -> NewCallbackState;
-			_                      -> CallbackState
+			_					   -> CallbackState
 		end,
 	{ok, State#state{callbackstate = CallbackState}}.
 
@@ -330,16 +326,16 @@ handle_request({<<"HELO">>, <<>>}, State) ->
 	send(State, "501 Syntax: HELO hostname\r\n"),
 	{ok, State};
 handle_request({<<"HELO">>, Hostname},
-               #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
+			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
 		{ok, MaxSize, CallbackState} when is_integer(MaxSize) ->
-            Data = ["250 ", hostname(Options), "\r\n"],
+			Data = ["250 ", hostname(Options), "\r\n"],
 			send(State, Data),
 			{ok, State#state{extensions = [{"SIZE", integer_to_list(MaxSize)}],
-                             envelope = #envelope{},
-                             callbackstate = CallbackState}};
+							 envelope = #envelope{},
+							 callbackstate = CallbackState}};
 		{ok, CallbackState} ->
-            Data = ["250 ", hostname(Options), "\r\n"],
+			Data = ["250 ", hostname(Options), "\r\n"],
 			send(State, Data),
 			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
@@ -354,7 +350,7 @@ handle_request({<<"EHLO">>, Hostname}, #state{options = Options, module = Module
 		{ok, Extensions, CallbackState} ->
 			case Extensions of
 				[] ->
-                    Data = ["250 ", hostname(Options), "\r\n"],
+					Data = ["250 ", hostname(Options), "\r\n"],
 					send(State, Data),
 					{ok, State#state{extensions = Extensions, callbackstate = CallbackState}};
 				_Else ->
@@ -375,10 +371,10 @@ handle_request({<<"EHLO">>, Hostname}, #state{options = Options, module = Module
 							Extensions
 					end,
 					{_, _, Response} = lists:foldl(
-                                         F,
-                                         {1, length(Extensions2),
-                                          [["250-", hostname(Options), "\r\n"]]},
-                                         Extensions2),
+										 F,
+										 {1, length(Extensions2),
+										  [["250-", hostname(Options), "\r\n"]]},
+										 Extensions2),
 					%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
 					send(State, lists:reverse(Response)),
 					{ok, State#state{extensions = Extensions2, envelope = #envelope{}, callbackstate = CallbackState}}
@@ -661,13 +657,13 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 				KeyFile ->
 					[{keyfile, KeyFile} | Options1]
 			end,
-            %% Assert that socket is in passive state
-            {ok, [{active, false}]} = inet:getopts(Socket, [active]),
+			%% Assert that socket is in passive state
+			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
 			% TODO: certfile and keyfile should be at configurable locations
 			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | Options2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					%io:format("SSL negotiation sucessful~n"),
-                    ranch_ssl:setopts(NewSocket, [{packet, line}]),
+					ranch_ssl:setopts(NewSocket, [{packet, line}]),
 					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
@@ -930,7 +926,7 @@ setopts(#state{transport = Transport, socket = Sock}, Opts) ->
     ok = Transport:setopts(Sock, Opts).
 
 hostname(Opts) ->
-    proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).    
+    proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
 
 get_proto(ranch_tcp) -> tcp;
 get_proto(ranch_ssl) -> ssl.
@@ -1034,10 +1030,11 @@ smtp_session_test_() ->
 	{foreach,
 		local,
 		fun() ->
+				gen_smtp_application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
-                              smtp_server_example,
-                              [{sessionoptions, [{hostname, "localhost"}]},
-                               {port, 9876}]),
+							  smtp_server_example,
+							  [{domain, "localhost"},
+							   {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
 				{CSock, Pid}
 		end,
@@ -1332,12 +1329,13 @@ smtp_session_auth_test_() ->
 	{foreach,
 		local,
 		fun() ->
+				gen_smtp_application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
-                              smtp_server_example,
-                              [{sessionoptions,
-                                [{hostname, "localhost"},
-                                 {callbackoptions, [{auth, true}]}]},
-                               {port, 9876}]),
+							  smtp_server_example,
+							  [{sessionoptions,
+								[{callbackoptions, [{auth, true}]}]},
+							   {domain, "localhost"},
+							   {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
 				{CSock, Pid}
 		end,
@@ -1833,14 +1831,15 @@ smtp_session_tls_test_() ->
 	{foreach,
 		local,
 		fun() ->
+				gen_smtp_application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
-                              smtp_server_example,
-                              [{sessionoptions,
-                                [{keyfile, "test/fixtures/server.key"},
-                                 {certfile, "test/fixtures/server.crt"},
-                                 {hostname, "localhost"},
-                                 {callbackoptions, [{auth, true}]}]},
-                               {port, 9876}]),
+							  smtp_server_example,
+							  [{sessionoptions,
+								[{keyfile, "test/fixtures/server.key"},
+								 {certfile, "test/fixtures/server.crt"},
+								 {callbackoptions, [{auth, true}]}]},
+							   {domain, "localhost"},
+							   {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
 				{CSock, Pid}
 		end,
