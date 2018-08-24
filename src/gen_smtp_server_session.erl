@@ -63,6 +63,7 @@
 		module = erlang:error({undefined, module}) :: atom(),
 		transport :: module(),
 		ranch_ref :: ranch:ref(),
+		ranch_version :: lt16 | gte16,
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
 		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
@@ -73,8 +74,7 @@
 		options = [] :: [tuple()]
 	}
 ).
--type options() :: [{callback, module()}
-					| {callbackoptions, any()}
+-type options() :: [  {callbackoptions, any()}
 					| {certfile, file:name_all()}
 					| {keyfile, file:name_all()}
 					| {allow_bare_newlines, boolean() | fix | strip}
@@ -118,14 +118,16 @@
 
 %% @doc Start a SMTP session linked to the calling process.
 %% @see start/3
--spec start_link(Ref :: ranch:ref(), _Socket :: _, Transport :: module(), Options :: options()) ->
+-spec start_link(Ref :: ranch:ref(), _Socket :: _, Transport :: module(),
+				 {Callback :: module(), RanchVer :: lt16 | gte16, Options :: options()}) ->
 						{'ok', pid()}.
-start_link(Ref, _Socket, Transport, Options) ->
-	{ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Transport, Options}])}.
+start_link(Ref, Socket, Transport, Options) ->
+	%% TODO: drop Socket when support for ranch < 1.6 no longer needed
+	{ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Socket, Transport, Options}])}.
 
-ranch_init({Ref, Transport, Opts}) ->
-	{ok, Socket} = ranch:handshake(Ref),
-	case init([Ref, Transport, Socket, Opts]) of
+ranch_init({Ref, Socket, Transport, {Callback, RanchVer, Opts}}) ->
+	{ok, Socket} = ranch_handshake(RanchVer, Ref, Socket),
+	case init([Ref, Transport, Socket, Callback, RanchVer, Opts]) of
 		{ok, State, Timeout} ->
 			gen_server:enter_loop(?MODULE, [], State, Timeout);
 		{stop, Reason} ->
@@ -134,7 +136,7 @@ ranch_init({Ref, Transport, Opts}) ->
 
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
-init([Ref, Transport, Socket, [{callback, Module} | Options]]) ->
+init([Ref, Transport, Socket, Module, RanchVer, Options]) ->
 	PeerName = case Transport:peername(Socket) of
 		{ok, {IPaddr, _Port}} -> IPaddr;
 		{error, _} -> error
@@ -150,11 +152,13 @@ init([Ref, Transport, Socket, [{callback, Module} | Options]]) ->
 			ignore;
 		{ok, Banner, CallbackState} ->
 			Transport:send(Socket, ["220 ", Banner, "\r\n"]),
-			ok = Transport:setopts(Socket, [{active, once}]),
+			ok = Transport:setopts(Socket, [{active, once},
+											{packet, line}]),
 			{ok, #state{socket = Socket,
 						transport = Transport,
 						module = Module,
 						ranch_ref = Ref,
+						ranch_version = RanchVer,
 						options = Options,
 						callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
@@ -660,7 +664,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			%% Assert that socket is in passive state
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
 			% TODO: certfile and keyfile should be at configurable locations
-			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | Options2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
+			case to_ssl(State, [{packet, line}, {mode, list}, {ssl_imp, new} | Options2]) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					%io:format("SSL negotiation sucessful~n"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
@@ -919,11 +923,29 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
+ranch_handshake(gte16, Ref, _Sock) ->
+	ranch:handshake(Ref);
+ranch_handshake(lt16, Ref, Sock) ->
+	ok = ranch:accept_ack(Ref),
+	{ok, Sock}.
+
 send(#state{transport = Transport, socket = Sock}, Data) ->
     ok = Transport:send(Sock, Data).
 
 setopts(#state{transport = Transport, socket = Sock}, Opts) ->
     ok = Transport:setopts(Sock, Opts).
+
+to_ssl(#state{ranch_version = gte16, socket = Socket}, Opts) ->
+	ranch_ssl:handshake(Socket, Opts, 5000);
+to_ssl(#state{ranch_version = lt16, socket = Socket}, Opts) ->
+	case ssl:ssl_accept(Socket, Opts, 5000) of
+		ok ->
+			{ok, Socket};
+		{ok, NewSocket} ->
+			{ok, NewSocket};
+		Error = {error, _} ->
+			Error
+	end.
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
