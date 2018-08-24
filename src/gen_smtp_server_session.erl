@@ -77,7 +77,7 @@
 					| {callbackoptions, any()}
 					| {certfile, file:name_all()}
 					| {keyfile, file:name_all()}
-					| {allow_bare_newlines, boolean()}
+					| {allow_bare_newlines, boolean() | fix | strip}
 					| {hostname, inet:hostname()}].
 
 -type(state() :: any()).
@@ -193,7 +193,7 @@ handle_info({receive_data, Body, Rest},
 	% send the remainder of the data...
 	case Rest of
 		<<>> -> ok; % no remaining data
-		_ -> self() ! {get_proto(Transport), Socket, Rest}
+		_ -> self() ! {Transport:name(), Socket, Rest}
 	end,
 	setopts(State, [{packet, line}]),
 	%% Unescape periods at start of line (rfc5321 4.5.2)
@@ -927,9 +927,6 @@ setopts(#state{transport = Transport, socket = Sock}, Opts) ->
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
-
-get_proto(ranch_tcp) -> tcp;
-get_proto(ranch_ssl) -> ssl.
 
 -ifdef(TEST).
 parse_encoded_address_test_() ->

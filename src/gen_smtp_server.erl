@@ -20,8 +20,7 @@
 %%% (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 %%% SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-%% @doc A non-blocking tcp listener for SMTP connections. Based on the tcp_listener module by Serge
-%% Aleynikov [http://www.trapexit.org/Building_a_Non-blocking_TCP_server_using_OTP_principles]
+%% @doc Setup ranch socket acceptor for gen_smtp_server_session
 
 -module(gen_smtp_server).
 
