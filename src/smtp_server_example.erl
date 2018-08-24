@@ -31,7 +31,8 @@
 %% to ALL subsequent calls to the callback module, so it can be used to keep track of the SMTP
 %% session. You can also return `{stop, Reason, Message}' where the session will exit with Reason
 %% and send Message to the client.
--spec init(Hostname :: binary(), SessionCount :: non_neg_integer(), Address :: tuple(), Options :: list()) -> {'ok', string(), #state{}} | {'stop', any(), string()}.
+-spec init(Hostname :: inet:hostname(), SessionCount :: non_neg_integer(),
+           Address :: inet:ip_address(), Options :: list()) -> {'ok', iodata(), #state{}} | {'stop', any(), iodata()}.
 init(Hostname, SessionCount, Address, Options) ->
 	io:format("peer: ~p~n", [Address]),
 	case SessionCount > 20 of

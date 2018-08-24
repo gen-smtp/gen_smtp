@@ -14,6 +14,9 @@ Also included is a MIME encoder/decoder, sorta according to RFC204{5,6,7}.
 
 IPv6 is also supported (at least serverside).
 
+SMTP server uses ranch as socket acceptor. It can use Ranch 1.3 to be compatible
+with cowboy 1.x, but Ranch 1.6+ is preferred.
+
 I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
 copies of all my email for several months and its been able to handle over 100
 thousand emails without leaking any RAM or crashing the erlang virtual machine.
@@ -114,7 +117,7 @@ See RFC6376 for more details.
 Server Example
 ==============
 
-gen_smtp ships with a simple callback server example, smtp_server_example. To start the SMTP server with this as the callback module, issue the following command:
+`gen_smtp` ships with a simple callback server example, `smtp_server_example`. To start the SMTP server with this as the callback module, issue the following command:
 
 <pre>
 gen_smtp_server:start(smtp_server_example).
@@ -153,27 +156,41 @@ Connection closed by foreign host.
 
 You can configure the server in general, each SMTP session, and the callback module, for example:
 
-<pre>
-gen_smtp_server:start(smtp_server_example, [[{sessionoptions, [{allow_bare_newlines, fix}, {callbackoptions, [{parse, true}]}]}]]).
-</pre>
+```erlang
+gen_smtp_server:start(
+    smtp_server_example,
+    [{sessionoptions, [{allow_bare_newlines, fix},
+                       {callbackoptions, [{parse, true}]}]}]).
+```
 
-This configures the session to fix bare newlines (other options are 'strip', 'true' and 'false', false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options; relay - whether to relay email on, auth - whether to do SMTP authentication and parse - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own callback options.
+This configures the session to fix bare newlines (other options are `strip`, `true` and `false`, false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options: `relay` - whether to relay email on, `auth` - whether to do SMTP authentication and `parse` - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own callback options.
+In general, following options can be specified `gen_smtp_server:options()`:
 
-You can also start multiple SMTP listeners at once by passing more than 1 configuration:
+* `{domain, string()}` - is used as server hostname (it's placed to SMTP server banner and HELO/EHLO response), default - guess from machine hostname
+* `{address, inet:ip4_address()}` - IP address to listen on, default `{0, 0, 0, 0}`
+* `{port, inet:port_number()}` - port to listen on, default `2525`
+* `{family, inet | inet6}` - IP address type (IPv4/IPv6), default `inet`
+* `{protocol, tcp | ssl}` - listen in tcp or ssl mode, default `tcp`
+* `{ranch_opts, [ranch:opt()] | ranch:opts()}` - format depends on ranch version. Consult Ranch documentation. List form used for Ranch<1.6 and map for Ranch>=1.6
+* `{ranch_version, gte16 | lt16}` - is Ranch version before 1.6 or not, default - autodetected
+* `{sessionoptions, gen_smtp_server_session:options()}` - see below
 
-<pre>
-gen_smtp_server:start(smtp_server_example, [[], [{protocol, ssl}, {port, 1465}]]).
-</pre>
+Session options are:
 
-This starts 2 listeners, one with the default config, and one with the default config except that its running in SSL mode on port 1465.
+* `{certfile, file:name_all()}` - path to SSL certificate used for STARTTLS command
+* `{keyfile, file:name_all()}` - path to SSL certificate key used for STARTTLS command
+* `{allow_bare_newlines, true | false | fix | strip}` - see above
+* `{callbackoptions, any()}` - value will be passed as 4th argument to callback module's `init/4`
 
-You can connect and test this using the gen_smtp_client via something like:
+You can connect and test this using the `gen_smtp_client` via something like:
 
-<pre>
-gen_smtp_client:send({"whatever@test.com", ["andrew@hijacked.us"], "Subject: testing\r\nFrom: Andrew Thompson \r\nTo: Some Dude \r\n\r\nThis is the email body"}, [{relay, "localhost"}, {port, 1465}, {ssl, true}]).
-</pre>
+```erlang
+gen_smtp_client:send(
+    {"whatever@test.com", ["andrew@hijacked.us"], "Subject: testing\r\nFrom: Andrew Thompson \r\nTo: Some Dude \r\n\r\nThis is the email body"},
+    [{relay, "localhost"}, {port, 2525}]).
+```
 
-If you want to listen on IPv6, you can use the {family, inet6} and {address, "::"} options to enable listening on IPv6.
+If you want to listen on IPv6, you can use the `{family, inet6}` and `{address, "::"}` options to enable listening on IPv6.
 
 Live Instance
 =============
