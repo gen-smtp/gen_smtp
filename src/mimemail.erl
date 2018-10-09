@@ -66,7 +66,7 @@
 		{default_mime_version, ?DEFAULT_MIME_VERSION} % default mime version
 	]).
 
--type(mimetuple() :: {binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [{binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [tuple()]}] | tuple()}).
+-type(mimetuple() :: {binary(), binary(), [{binary(), binary()}], [{binary(), binary() | [{binary(), binary()}]}], binary() | [{binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [tuple()]}] | tuple()}).
 
 -type(options() :: [{'encoding', binary()} | {'decode_attachment', boolean()} | {'dkim', [{atom(), any()}]}]).
 
