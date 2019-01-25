@@ -222,15 +222,15 @@ handle_inet_async(ListenObject, ClientSocket, Options) ->
 	end.
 
 %% @doc Upgrade a TCP connection to SSL
--spec to_ssl_server(Socket :: socket()) -> {'ok', ssl:socket()} | {'error', any()}.
+-spec to_ssl_server(Socket :: socket()) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket) ->
 	to_ssl_server(Socket, []).
 
--spec to_ssl_server(Socket :: socket(), Options :: list()) -> {'ok', ssl:socket()} | {'error', any()}.
+-spec to_ssl_server(Socket :: socket(), Options :: list()) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket, Options) ->
 	to_ssl_server(Socket, Options, infinity).
 
--spec to_ssl_server(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:socket()} | {'error', any()}.
+-spec to_ssl_server(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
 to_ssl_server(_Socket, _Options, _Timeout) ->
