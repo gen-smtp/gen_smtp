@@ -75,6 +75,8 @@
 -type address() :: inet:ip_address() | string() | binary().
 -type socket() :: ssl:sslsocket() | gen_tcp:socket().
 
+-export_type([socket/0]).
+
 %%%-----------------------------------------------------------------
 %%% API
 %%%-----------------------------------------------------------------
