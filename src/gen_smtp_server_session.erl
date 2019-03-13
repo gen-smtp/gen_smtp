@@ -230,6 +230,8 @@ handle_info({tcp_closed, _Socket}, State) ->
 	{stop, normal, State};
 handle_info({ssl_closed, _Socket}, State) ->
 	{stop, normal, State};
+handle_info({SocketError, _TCPSocket, Reason}, State) when SocketError =:= tcp_error; SocketError =:= ssl_error ->
+	{stop, {SocketError, Reason}, State};
 handle_info(timeout, #state{socket = Socket} = State) ->
 	socket:send(Socket, "421 Error: timeout exceeded\r\n"),
 	socket:close(Socket),
