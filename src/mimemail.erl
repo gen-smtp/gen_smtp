@@ -241,7 +241,7 @@ decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
 
 %% x-binaryenc is not a real encoding and is not used for text, so let it pass through
 convert(_To, <<"x-binaryenc">>, Data) ->
-	Data;
+    {ok, Data};
 convert(To, From, Data) ->
 	CD = case iconv:open(To, From) of
 			 {ok, Res} -> Res;
