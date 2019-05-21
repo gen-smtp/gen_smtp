@@ -6,8 +6,6 @@
             smtp_server_example]},
   {applications,[kernel,stdlib,crypto,asn1,public_key,ssl]},
   {registered,[]},
-  {maintainers,["Arjan Scherpenisse","Marc Worrell",
-                "Andrew Thompson"]},
   {licenses,["BSD 2-clause"]},
   {links,[{"GitHub","https://github.com/Vagabond/gen_smtp"}]},
   {exclude_files, ["src/smtp_rfc822_parse.erl"]}]
