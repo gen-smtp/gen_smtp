@@ -629,13 +629,13 @@ ssl_upgrade_test_() ->
 			      	{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			      	{ok, ServerSocket} = accept(ListenSocket),
 							{ok, NewServerSocket} = smtp_socket:to_ssl_server(ServerSocket, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
-			      	Self ! NewServerSocket
+			        Self ! {sock, NewServerSocket}
 			      end),
 			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
 			?assert(is_port(ClientSocket)),
 			{ok, NewClientSocket} = to_ssl_client(ClientSocket),
 			?assertMatch([sslsocket|_], tuple_to_list(NewClientSocket)),
-			receive NewServerSocket -> ok end,
+			receive {sock, NewServerSocket} -> ok end,
 			?assertMatch({sslsocket, _, _}, NewServerSocket),
 			close(NewClientSocket),
 			close(NewServerSocket)
@@ -661,10 +661,10 @@ ssl_upgrade_test_() ->
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 						{ok, ServerSocket} = accept(ListenSocket),
-						Self ! ServerSocket
+						Self ! {sock, ServerSocket}
 				end),
 			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT),
-			receive ServerSocket -> ok end,
+			receive {sock, ServerSocket} -> ok end,
 			?assertMatch({error, already_ssl}, to_ssl_client(ClientSocket)),
 			close(ClientSocket),
 			close(ServerSocket)
