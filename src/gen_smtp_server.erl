@@ -46,7 +46,7 @@
 %% @doc Start the listener as a registered process with callback module `Module' with options `Options' linked to no process.
 -spec start(ServerName :: server_name(),
 			CallbackModule :: module(),
-			Options :: [options()]) -> {'ok', pid()} | {'error', any()}.
+			Options :: options()) -> {'ok', pid()} | {'error', any()}.
 start(ServerName, CallbackModule, Options) when is_list(Options) ->
 	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
 		= convert_options(CallbackModule, Options),
@@ -108,7 +108,7 @@ convert_options(CallbackModule, Options) ->
 
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
--spec start(CallbackModule :: module(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
+-spec start(CallbackModule :: module(), Options :: options()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start(CallbackModule, Options) when is_list(Options) ->
 	start(?MODULE, CallbackModule, Options).
 
