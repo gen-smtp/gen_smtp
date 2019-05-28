@@ -342,14 +342,15 @@ connect_test_() ->
 		{"listen and connect via tcp",
 		fun() ->
 			Self = self(),
+			Port = ?TEST_PORT + 1,
 			spawn(fun() ->
-						{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+						{ok, ListenSocket} = listen(tcp, Port),
 						?assert(is_port(ListenSocket)),
 						{ok, ServerSocket} = accept(ListenSocket),
 						controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
-			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
+			{ok, ClientSocket} = connect(tcp, "localhost", Port),
 			receive ListenSocket when is_port(ListenSocket) -> ok end,
 			?assert(is_port(ClientSocket)),
 			close(ListenSocket)
@@ -358,15 +359,16 @@ connect_test_() ->
 		{"listen and connect via ssl",
 		fun() ->
 			Self = self(),
+			Port = ?TEST_PORT + 2,
 	        gen_smtp_application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
-						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 						?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
 						{ok, ServerSocket} = accept(ListenSocket),
 						controlling_process(ServerSocket, Self),
 						Self ! ListenSocket
 				end),
-			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT,  []),
+			{ok, ClientSocket} = connect(ssl, "localhost", Port,  []),
 			receive {sslsocket,_,_} = ListenSocket -> ok end,
 			?assertMatch([sslsocket|_], tuple_to_list(ClientSocket)),
 			close(ListenSocket)
@@ -378,9 +380,10 @@ evented_connections_test_() ->
 	[
 		{"current process receives connection to TCP listen sockets",
 		fun() ->
-			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			Port = ?TEST_PORT + 3,
+			{ok, ListenSocket} = listen(tcp, Port),
 			begin_inet_async(ListenSocket),
-			spawn(fun()-> connect(tcp, "localhost", ?TEST_PORT) end),
+			spawn(fun()-> connect(tcp, "localhost", Port) end),
 			receive
 				{inet_async, ListenSocket, _, {ok,ServerSocket}} -> ok
 			end,
@@ -389,7 +392,7 @@ evented_connections_test_() ->
 			?assertEqual(ServerSocket, NewServerSocket), %% only true for TCP
 			?assert(is_port(ListenSocket)),
 			% Stop the async
-			spawn(fun()-> connect(tcp, "localhost", ?TEST_PORT) end),
+			spawn(fun()-> connect(tcp, "localhost", Port) end),
 			receive _Ignored -> ok end,
 			close(NewServerSocket),
 			close(ListenSocket)
@@ -397,10 +400,11 @@ evented_connections_test_() ->
 		},
 		{"current process receives connection to SSL listen sockets",
 		fun() ->
+			Port = ?TEST_PORT + 4,
 			gen_smtp_application:ensure_all_started(gen_smtp),
-			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+			{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 			begin_inet_async(ListenSocket),
-			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			spawn(fun()-> connect(ssl, "localhost", Port) end),
 			receive
 				{inet_async, _ListenPort, _, {ok,ServerSocket}} -> ok
 			end,
@@ -409,7 +413,7 @@ evented_connections_test_() ->
 			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
 			 %Stop the async
-			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			spawn(fun()-> connect(ssl, "localhost", Port) end),
 			receive _Ignored -> ok end,
 			close(ListenSocket),
 			close(NewServerSocket),
@@ -422,10 +426,11 @@ evented_connections_test_() ->
 		%% can respond to either ssl or tcp connections.
 		{"current TCP listener receives SSL connection",
 		fun() ->
+			Port = ?TEST_PORT + 5,
 			gen_smtp_application:ensure_all_started(gen_smtp),
-			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			{ok, ListenSocket} = listen(tcp, Port),
 			begin_inet_async(ListenSocket),
-			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			spawn(fun()-> connect(ssl, "localhost", Port) end),
 			ServerSocket = receive
 				{inet_async, _ListenPort, _, {ok,ServerSocket0}} -> ServerSocket0
 			end,
@@ -435,7 +440,7 @@ evented_connections_test_() ->
 			{ok, NewServerSocket} = to_ssl_server(ServerSocket, [{certfile, "test/fixtures/server.crt"}, {keyfile, "test/fixtures/server.key"}]),
 			?assertMatch([sslsocket|_], tuple_to_list(NewServerSocket)),
 			% Stop the async
-			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT) end),
+			spawn(fun()-> connect(ssl, "localhost", Port) end),
 			receive _Ignored -> ok end,
 			close(ListenSocket),
 			close(NewServerSocket)
@@ -447,9 +452,10 @@ accept_test_() ->
 	[
 		{"Accept via tcp",
 		fun() ->
-			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+			Port = ?TEST_PORT + 6,
+			{ok, ListenSocket} = listen(tcp, Port, tcp_listen_options([])),
 			?assert(is_port(ListenSocket)),
-			spawn(fun()-> connect(ssl, "localhost", ?TEST_PORT, tcp_connect_options([])) end),
+			spawn(fun()-> connect(ssl, "localhost", Port, tcp_connect_options([])) end),
 			{ok, ServerSocket} = accept(ListenSocket),
 			?assert(is_port(ListenSocket)),
  			close(ServerSocket),
@@ -458,10 +464,11 @@ accept_test_() ->
 		},
 		{"Accept via ssl",
 		fun() ->
+			Port = ?TEST_PORT + 7,
 			gen_smtp_application:ensure_all_started(gen_smtp),
-			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+			{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
-			spawn(fun()->connect(ssl, "localhost", ?TEST_PORT) end),
+			spawn(fun()->connect(ssl, "localhost", Port) end),
 			accept(ListenSocket),
 			close(ListenSocket)
 		end
@@ -472,7 +479,7 @@ type_test_() ->
 	[
 		{"a tcp socket returns 'tcp'",
 		fun() ->
-			{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT + 8),
 			?assertMatch(tcp, type(ListenSocket)),
 			close(ListenSocket)
 		end
@@ -480,7 +487,7 @@ type_test_() ->
 		{"an ssl socket returns 'ssl'",
 		fun() ->
 			gen_smtp_application:ensure_all_started(gen_smtp),
-			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT + 9, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 			?assertMatch(ssl, type(ListenSocket)),
 			close(ListenSocket)
 		end
@@ -491,7 +498,7 @@ active_once_test_() ->
 	[
 		{"socket is set to active:once on tcp",
 		fun() ->
-			{ok, ListenSocket} = listen(tcp, ?TEST_PORT, tcp_listen_options([])),
+			{ok, ListenSocket} = listen(tcp, ?TEST_PORT + 10, tcp_listen_options([])),
 			?assertEqual({ok, [{active,false}]}, inet:getopts(ListenSocket, [active])),
 			active_once(ListenSocket),
 			?assertEqual({ok, [{active,once}]}, inet:getopts(ListenSocket, [active])),
@@ -500,7 +507,7 @@ active_once_test_() ->
 		},
 		{"socket is set to active:once on ssl",
 		fun() ->
-			{ok, ListenSocket} = listen(ssl, ?TEST_PORT, ssl_listen_options([{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}])),
+			{ok, ListenSocket} = listen(ssl, ?TEST_PORT + 11, ssl_listen_options([{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}])),
 			?assertEqual({ok, [{active,false}]}, ssl:getopts(ListenSocket, [active])),
 			active_once(ListenSocket),
 			?assertEqual({ok, [{active,once}]}, ssl:getopts(ListenSocket, [active])),
@@ -624,18 +631,22 @@ ssl_upgrade_test_() ->
 		{"TCP connection can be upgraded to ssl",
 		fun() ->
 			Self = self(),
+			Port = ?TEST_PORT + 12,
 			gen_smtp_application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
-			      	{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
+			        {ok, ListenSocket} = listen(tcp, Port),
+			        Self ! listening,
 			      	{ok, ServerSocket} = accept(ListenSocket),
 							{ok, NewServerSocket} = smtp_socket:to_ssl_server(ServerSocket, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
-			      	Self ! NewServerSocket
+			        Self ! {sock, NewServerSocket}
 			      end),
-			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
+			receive listening -> ok end,
+			erlang:yield(),
+			{ok, ClientSocket} = connect(tcp, "localhost", Port),
 			?assert(is_port(ClientSocket)),
 			{ok, NewClientSocket} = to_ssl_client(ClientSocket),
 			?assertMatch([sslsocket|_], tuple_to_list(NewClientSocket)),
-			receive NewServerSocket -> ok end,
+			receive {sock, NewServerSocket} -> ok end,
 			?assertMatch({sslsocket, _, _}, NewServerSocket),
 			close(NewClientSocket),
 			close(NewServerSocket)
@@ -643,28 +654,37 @@ ssl_upgrade_test_() ->
 		},
 		{"SSL server connection can't be upgraded again",
 		fun() ->
+			Self = self(),
+			Port = ?TEST_PORT + 13,
 			gen_smtp_application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
-						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+						Self ! listening,
 						{ok, ServerSocket} = accept(ListenSocket),
 						?assertMatch({error, already_ssl}, to_ssl_server(ServerSocket)),
 						close(ServerSocket)
 				end),
-			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
+			receive listening -> ok end,
+			erlang:yield(),
+			{ok, ClientSocket} = connect(tcp, "localhost", Port),
 			close(ClientSocket)
 		end
 		},
 		{"SSL client connection can't be upgraded again",
 		fun() ->
 			Self = self(),
+			Port = ?TEST_PORT + 14,
 			gen_smtp_application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
-						{ok, ListenSocket} = listen(ssl, ?TEST_PORT, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+						Self ! listening,
 						{ok, ServerSocket} = accept(ListenSocket),
-						Self ! ServerSocket
+						Self ! {sock, ServerSocket}
 				end),
-			{ok, ClientSocket} = connect(ssl, "localhost", ?TEST_PORT),
-			receive ServerSocket -> ok end,
+			receive listening -> ok end,
+			erlang:yield(),
+			{ok, ClientSocket} = connect(ssl, "localhost", Port),
+			receive {sock, ServerSocket} -> ok end,
 			?assertMatch({error, already_ssl}, to_ssl_client(ClientSocket)),
 			close(ClientSocket),
 			close(ServerSocket)
