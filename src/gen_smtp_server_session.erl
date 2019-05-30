@@ -131,7 +131,9 @@ ranch_init({Ref, Socket, Transport, {Callback, RanchVer, Opts}}) ->
 		{ok, State, Timeout} ->
 			gen_server:enter_loop(?MODULE, [], State, Timeout);
 		{stop, Reason} ->
-			exit(Reason)
+			exit(Reason);
+		ignore ->
+			ok
 	end.
 
 %% @private
