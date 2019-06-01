@@ -109,10 +109,11 @@
     {ok, string(), state()} | {error, string(), state()}.
 -callback handle_other(Verb :: binary(), Args :: binary(), state()) ->
                           {string() | noreply, state()}.
--callback handle_info(Info :: term(), State :: term()) ->
-    {noreply, NewState :: term()} |
-    {noreply, NewState :: term(), timeout() | hibernate} |
+-callback handle_info(Info :: term(), State :: state()) ->
+    {noreply, NewState :: state()} |
+    {noreply, NewState :: state(), timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: term()}.
+-callback terminate(Reason :: any(), state()) -> {ok, Reason :: any(), state()}.
 
 -optional_callbacks([handle_info/2, handle_AUTH/4]).
 
@@ -932,7 +933,8 @@ ranch_handshake(lt16, Ref, Sock) ->
 	{ok, Sock}.
 
 send(#state{transport = Transport, socket = Sock}, Data) ->
-    ok = Transport:send(Sock, Data).
+    %% TODO: handle send errors
+    Transport:send(Sock, Data).
 
 setopts(#state{transport = Transport, socket = Sock}, Opts) ->
     ok = Transport:setopts(Sock, Opts).
