@@ -220,13 +220,8 @@ terminate(Reason, State) ->
 
 %%% Internal Functions %%%
 
--ifdef(deprecated_now).
 unique_id() ->
     erlang:unique_integer().
--else.
-unique_id() ->
-    erlang:now().
--endif.
 
 -spec relay(binary(), [binary()], binary()) -> ok.
 relay(_, [], _) ->

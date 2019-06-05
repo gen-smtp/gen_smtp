@@ -2,6 +2,8 @@ language: erlang
 notifications:
   email: you@example.org
 otp_release:
-  - 18.0
-  - 17.4
-  - R16B
+  - 22.0
+  - 21.3
+  - 20.3
+  - 19.3
+  - 18.3
