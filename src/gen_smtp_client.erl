@@ -55,7 +55,11 @@
               email/0,
               email_address/0,
               options/0,
-              callback/0]).
+              callback/0,
+              smtp_session_error/0,
+              host_failure/0,
+              failure/0,
+              validate_options_error/0]).
 
 -type email_address() :: string() | binary().
 -type email() :: {From :: email_address(),
@@ -82,10 +86,36 @@
 -opaque smtp_client_socket() :: {smtp_socket:socket(), extensions(), options()}.
 
 -type callback() :: fun( ({exit, any()} |
-                          {error, atom, binary()} |
+                          smtp_session_error() |
                           {ok, binary()}) -> any() ).
 
--spec send(Email :: email(), Options :: options()) -> {'ok', pid()} | {'error', any()}.
+%% Smth that is thrown from inner SMTP functions
+-type permanent_failure_reason() :: binary() |  % server's 5xx response
+                                    auth_failed |
+                                    ssl_not_started.
+-type temporary_failure_reason() :: binary() |  %server's 4xx response
+                                    tls_failed.
+-type validate_options_error() :: no_relay |
+                                  invalid_port |
+                                  no_credentials.
+-type failure() :: {temporary_failure, temporary_failure_reason()} |
+                   {permanent_failure, permanent_failure_reason()} |
+                   {missing_requirement, auth | tls} |
+                   {unexpected_response, [binary()]} |
+                   {network_failure, {error, timeout | inet:posix()}}.
+-type smtp_host() :: inet:hostname().
+-type host_failure() ::
+        {temporary_failure, smtp_host(), temporary_failure_reason()} |
+        {permanent_failure, smtp_host(), permanent_failure_reason()} |
+        {missing_requirement, smtp_host(), auth | tls} |
+        {unexpected_response, smtp_host(), [binary()]} |
+        {network_failure, smtp_host(), {error, timeout | inet:posix()}}.
+-type smtp_session_error() ::
+        {error, no_more_hosts, {permanent_failure, smtp_host(), permanent_failure_reason()}} |
+        {error, retries_exceeded, host_failure()}.
+
+
+-spec send(Email :: email(), Options :: options()) -> {'ok', pid()} | {'error', validate_options_error()}.
 %% @doc Send an email in a non-blocking fashion via a spawned_linked process.
 %% The process will exit abnormally on a send failure.
 send(Email, Options) ->
@@ -94,7 +124,7 @@ send(Email, Options) ->
 %% @doc Send an email nonblocking and invoke a callback with the result of the send.
 %% The callback will receive either `{ok, Receipt}' where Receipt is the SMTP server's receipt
 %% identifier,  `{error, Type, Message}' or `{exit, ExitReason}', as the single argument.
--spec send(Email :: email(), Options :: options(), Callback :: callback() | 'undefined') -> {'ok', pid()} | {'error', any()}.
+-spec send(Email :: email(), Options :: options(), Callback :: callback() | 'undefined') -> {'ok', pid()} | {'error', validate_options_error()}.
 send(Email, Options, Callback) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),
@@ -126,7 +156,10 @@ send(Email, Options, Callback) ->
 			{error, Reason}
 	end.
 
--spec send_blocking(Email :: email(), Options :: options()) -> binary() | {'error', atom(), any()} | {'error', any()}.
+-spec send_blocking(Email :: email(), Options :: options()) ->
+                           binary() |
+                           smtp_session_error() |
+                           {error, validate_options_error()}.
 %% @doc Send an email and block waiting for the reply. Returns either a binary that contains
 %% the SMTP server's receipt or `{error, Type, Message}' or `{error, Reason}'.
 send_blocking(Email, Options) ->
@@ -139,7 +172,9 @@ send_blocking(Email, Options) ->
 			{error, Reason}
 	end.
 
--spec send_it_nonblock(Email :: email(), Options :: options(), Callback :: callback() | 'undefined') ->{'ok', binary()} | {'error', any(), any()}.
+-spec send_it_nonblock(Email :: email(), Options :: options(), Callback :: callback() | 'undefined') ->
+                              {'ok', binary()} |
+                              smtp_session_error().
 send_it_nonblock(Email, Options, Callback) ->
 	case send_it(Email, Options) of
 		{error, Type, Message} when is_function(Callback) ->
@@ -154,7 +189,10 @@ send_it_nonblock(Email, Options, Callback) ->
 			{ok, Receipt}
 	end.
 
--spec open(Options :: options()) -> {ok, SocketDescriptor :: smtp_client_socket()} | {error, any()}.
+-spec open(Options :: options()) ->
+                  {ok, SocketDescriptor :: smtp_client_socket()} |
+                  smtp_session_error() |
+                  {error, bad_option, validate_options_error()}.
 %% @doc Open a SMTP client socket with the provided options
 %% Once the socket has been opened, you can use it with deliver/2.
 open(Options) ->
@@ -184,7 +222,7 @@ open(Options) ->
 			{error, bad_option, Reason}
 	end.
 
--spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> {'ok', Receipt :: binary()} | {error, any()}.
+-spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> {'ok', Receipt :: binary()} | {error, failure()}.
 %% @doc Deliver an email on an open smtp client socket.
 %% For use with a socket opened with open/1. The socket can be reused as long as the previous call to deliver/2 returned `{ok, Receipt}'.
 deliver({Socket, Extensions, Options}, Email) ->
@@ -200,7 +238,8 @@ deliver({Socket, Extensions, Options}, Email) ->
 close({Socket, _Extensions, _Options}) ->
 	quit(Socket).
 
--spec send_it(Email :: email(), Options :: options()) -> binary() | {'error', any(), any()}.
+-spec send_it(Email :: email(), Options :: options()) -> binary() |
+                                                         smtp_session_error().
 send_it(Email, Options) ->
 	RelayDomain = to_string(proplists:get_value(relay, Options)),
 	MXRecords = case proplists:get_value(no_mx_lookups, Options) of
@@ -225,7 +264,9 @@ send_it(Email, Options) ->
 			Receipt
 	end.
 
--spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Options :: options(), RetryList :: list()) -> smtp_client_socket() | {'error', any(), any()}.
+-spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Options :: options(), RetryList :: list()) ->
+                               smtp_client_socket() |
+                               smtp_session_error().
 try_smtp_sessions([{_Distance, Host} | _Tail] = Hosts, Options, RetryList) ->
 	try open_smtp_session(Host, Options) of
 		Res -> Res
@@ -234,6 +275,9 @@ try_smtp_sessions([{_Distance, Host} | _Tail] = Hosts, Options, RetryList) ->
 			handle_smtp_throw(FailMsg, Hosts, Options, RetryList)
 	end.
 
+-spec handle_smtp_throw(failure(), [{non_neg_integer(), smtp_host()}], options(), list()) ->
+                               smtp_client_socket() |
+                               smtp_session_error().
 handle_smtp_throw({permanent_failure, Message}, [{_Distance, Host} | _Tail], _Options, _RetryList) ->
 	% permanent failure means no retries, and don't even continue with other hosts
 	{error, no_more_hosts, {permanent_failure, Host, Message}};
@@ -512,7 +556,7 @@ do_AUTH_each(Socket, Username, Password, [Type | Tail], Options) ->
 	trace(Options, "unsupported AUTH type ~s~n", [Type]),
 	do_AUTH_each(Socket, Username, Password, Tail, Options).
 
--spec try_EHLO(Socket :: smtp_socket:socket(), Options :: options()) -> {ok, list()}.
+-spec try_EHLO(Socket :: smtp_socket:socket(), Options :: options()) -> {ok, extensions()}.
 try_EHLO(Socket, Options) ->
 	ok = smtp_socket:send(Socket, ["EHLO ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"]),
 	case read_possible_multiline_reply(Socket) of
@@ -541,7 +585,7 @@ try_HELO(Socket, Options) ->
 	end.
 
 % check if we should try to do TLS
--spec try_STARTTLS(Socket :: smtp_socket:socket(), Options :: options(), Extensions :: extensions()) -> {smtp_socket:socket(), list()}.
+-spec try_STARTTLS(Socket :: smtp_socket:socket(), Options :: options(), Extensions :: extensions()) -> {smtp_socket:socket(), extensions()}.
 try_STARTTLS(Socket, Options, Extensions) ->
 	case {proplists:get_value(tls, Options),
 			proplists:get_value(<<"STARTTLS">>, Extensions)} of
@@ -568,7 +612,7 @@ try_STARTTLS(Socket, Options, Extensions) ->
 	end.
 
 %% attempt to upgrade socket to TLS
--spec do_STARTTLS(Socket :: smtp_socket:socket(), Options :: options()) -> {smtp_socket:socket(), list()} | false.
+-spec do_STARTTLS(Socket :: smtp_socket:socket(), Options :: options()) -> {smtp_socket:socket(), extensions()} | false.
 do_STARTTLS(Socket, Options) ->
 	smtp_socket:send(Socket, "STARTTLS\r\n"),
 	case read_possible_multiline_reply(Socket) of
