@@ -1,11 +1,11 @@
 language: erlang
-sudo: false
-script:
-  - "make dialyze"
-  - "make test"
 otp_release:
-  - 20.0
+  - 22.0
+  - 21.3
+  - 20.3
   - 19.3
-  - 18.0
-  - 17.4
-  - R16B
+  - 18.3
+script:
+  - make test
+  #- make xref
+  - make dialyze

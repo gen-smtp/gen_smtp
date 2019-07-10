@@ -20,7 +20,7 @@
 -type(error_message() :: {'error', string(), #state{}}).
 
 %% @doc Initialize the callback module's state for a new session.
-%% The arguments to the function are the SMTP server's hostname (for use in the SMTP anner),
+%% The arguments to the function are the SMTP server's hostname (for use in the SMTP banner),
 %% The number of current sessions (eg. so you can do session limiting), the IP address of the
 %% connecting client, and a freeform list of options for the module. The Options are extracted
 %% from the `callbackoptions' parameter passed into the `gen_smtp_server_session' when it was
@@ -220,13 +220,8 @@ terminate(Reason, State) ->
 
 %%% Internal Functions %%%
 
--ifdef(deprecated_now).
 unique_id() ->
     erlang:unique_integer().
--else.
-unique_id() ->
-    erlang:now().
--endif.
 
 -spec relay(binary(), [binary()], binary()) -> ok.
 relay(_, [], _) ->
