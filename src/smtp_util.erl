@@ -35,7 +35,7 @@ mxlookup(Domain) ->
 	case whereis(inet_db) of
 		P when is_pid(P) ->
 			ok;
-		_ -> 
+		_ ->
 			inet_db:start()
 	end,
 	case lists:keyfind(nameserver, 1, inet_db:get_rc()) of
@@ -68,7 +68,7 @@ compute_cram_digest(Key, Data) ->
 %% @doc Generate a seed string for CRAM.
 -spec get_cram_string(Hostname :: string()) -> string().
 get_cram_string(Hostname) ->
-	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
+	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [rand:uniform(4294967295), rand:uniform(4294967295), Hostname])))).
 
 %% @doc Trim \r\n from `String'
 -spec trim_crlf(String :: string()) -> string().
@@ -101,7 +101,7 @@ zone(Val) when Val < 0 ->
 zone(Val) when Val >= 0 ->
 	io_lib:format("+~4..0w", [trunc(abs(Val))]).
 
-%% @doc Generate a unique message ID 
+%% @doc Generate a unique message ID
 generate_message_id() ->
 	FQDN = guess_FQDN(),
     Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))],

@@ -739,8 +739,8 @@ try_auth(AuthType, Username, Credential, #state{module = Module, socket = Socket
 	end.
 
 %get_digest_nonce() ->
-	%A = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
-	%B = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(crypto:rand_uniform(0, 4294967295)))],
+	%A = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(rand:uniform(4294967295)))],
+	%B = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(integer_to_list(rand:uniform(4294967295)))],
 	%binary_to_list(base64:encode(lists:flatten(A ++ B))).
 
 
