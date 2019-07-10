@@ -259,12 +259,8 @@ decode_header_tokens_permissive([], _, Stack) ->
 	end;
 decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
 	NewData = iolist_to_binary([PrevData, Data]),
-	case convert(Charset, Enc, NewData) of
-		{ok, S} ->
-			decode_header_tokens_permissive(Tokens, Charset, [S | Stack]);
-		_ ->
-			decode_header_tokens_permissive(Tokens, Charset, [{Enc, NewData} | Stack])
-	end;
+	{ok, S} = convert(Charset, Enc, NewData),
+	decode_header_tokens_permissive(Tokens, Charset, [S | Stack]);
 decode_header_tokens_permissive([NextToken | _] = Tokens, Charset, [{_, _} | Stack])
   when is_binary(NextToken) orelse is_tuple(NextToken) ->
 	%% practicaly very rare case "=?utf-8?Q?BROKEN?=\r\n\t=?windows-1251?Q?maybe-broken?="
@@ -521,7 +517,8 @@ decode_body(Type, Body, <<"x-binaryenc">>, _OutEncoding) ->
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	InEncodingFixed = fix_encoding(InEncoding),
-	iconv:convert(InEncodingFixed, OutEncoding, NewBody).
+	{ok, ConvertedBody} = convert(OutEncoding, InEncodingFixed, NewBody),
+	ConvertedBody.
 
 -spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
 decode_body(undefined, Body) ->
