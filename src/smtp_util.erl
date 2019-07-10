@@ -112,13 +112,8 @@ generate_message_boundary() ->
 	FQDN = guess_FQDN(),
     ["_=", [io_lib:format("~2.36.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))], "=_"].
 
--ifdef(deprecated_now).
 unique_id() ->
     {erlang:system_time(), erlang:unique_integer()}.
--else.
-unique_id() ->
-    erlang:now().
--endif.
 
 -define(is_whitespace(Ch), (Ch =< 32)).
 
