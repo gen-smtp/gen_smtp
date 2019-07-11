@@ -942,14 +942,24 @@ setopts(#state{transport = Transport, socket = Sock}, Opts) ->
 to_ssl(#state{ranch_version = gte16, socket = Socket}, Opts) ->
 	ranch_ssl:handshake(Socket, Opts, 5000);
 to_ssl(#state{ranch_version = lt16, socket = Socket}, Opts) ->
-	case ssl:ssl_accept(Socket, Opts, 5000) of
-		ok ->
-			{ok, Socket};
-		{ok, NewSocket} ->
-			{ok, NewSocket};
-		Error = {error, _} ->
-			Error
-	end.
+	ssl_handshake(Socket, Opts, 5000).
+
+-spec ssl_handshake(gen_tcp:socket() | ssl:sslsocket(),
+                    [{packet, line} |
+                     {mode, list} |
+                     {ssl_imp, new} |
+                     {keyfile, file:name_all()} |
+                     {certfile, file:name_all()}],
+                    timeout()) ->
+                           {ok, ssl:sslsocket()} |
+                           {error, any()}.
+-ifdef(OTP_RELEASE).
+ssl_handshake(Socket, Opts, Timeout) ->
+    ssl:handshake(Socket, Opts, Timeout).
+-else.
+ssl_handshake(Socket, Opts, Timeout) ->
+	ssl:ssl_accept(Socket, Opts, Timeout).
+-endif.
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
