@@ -1,6 +1,4 @@
 language: erlang
-notifications:
-  email: you@example.org
 otp_release:
   - 22.0
   - 21.3

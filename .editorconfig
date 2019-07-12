@@ -1,0 +1,19 @@
+# EditorConfig is awesome: http://EditorConfig.org
+
+# top-most EditorConfig file
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+indent_style = tab
+indent_size = 4
+
+[*.eml]
+end_of_line = crlf
+insert_final_newline = false
+trim_trailing_whitespace = false
+
+[*.{conf,src,config,markdown}]
+indent_style = space

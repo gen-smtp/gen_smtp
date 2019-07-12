@@ -21,7 +21,7 @@
 %%% SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 %% @doc A module for decoding/encoding MIME 1.0 email.
-%% The encoder and decoder operate on the same datastructure, which is as follows:
+%% The encoder and decoder operate on the same data structure, which is as follows:
 %% A 5-tuple with the following elements: `{Type, SubType, Headers, Parameters, Body}'.
 %%
 %% `Type' and `SubType' are the MIME type of the email, examples are `text/plain' or
@@ -45,7 +45,7 @@
 %% For a simple email, the body will usually be a binary consisting of the message body, In the
 %% case of a multipart email, its a list of these 5-tuple MIME structures. The third possibility,
 %% in the case of a message/rfc822 attachment, body can be a single 5-tuple MIME structure.
-%% 
+%%
 %% You should see the relevant RFCs (2045, 2046, 2047, etc.) for more information.
 
 -module(mimemail).
@@ -181,15 +181,15 @@ decode_header(Value, Charset) ->
 	RTokens = tokenize_header(Value, []),
 	Tokens = lists:reverse(RTokens),
 	Decoded = try decode_header_tokens_strict(Tokens, Charset)
-			  catch Type:Reason ->
-					  case decode_header_tokens_permissive(Tokens, Charset, []) of
-						  {ok, Dec} -> Dec;
-						  error ->
-							  % re-throw original error
-							  % may also use erlang:raise/3 to preserve original traceback
-							  erlang:Type(Reason)
-					  end
-			  end,
+		catch Type:Reason ->
+			case decode_header_tokens_permissive(Tokens, Charset, []) of
+				{ok, Dec} -> Dec;
+				error ->
+					% re-throw original error
+					% may also use erlang:raise/3 to preserve original traceback
+					erlang:Type(Reason)
+			end
+		end,
 	iolist_to_binary(Decoded).
 
 -type hdr_token() :: binary() | {Encoding::binary(), Data::binary()}.
@@ -221,8 +221,6 @@ tokenize_header(Value, Acc) ->
 					<<"b">> ->
 						decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
 				end,
-
-			%% iconv:close(CD),
 
 
 			Offset = case re:run(binstr:substr(Value, AllStart + AllLen + 1), "^([\s\t\n\r]+)=\\?[-A-Za-z0-9_]+\\?[^\s]\\?[^\s]+\\?=", [ungreedy]) of
@@ -261,12 +259,8 @@ decode_header_tokens_permissive([], _, Stack) ->
 	end;
 decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData} | Stack]) ->
 	NewData = iolist_to_binary([PrevData, Data]),
-	case convert(Charset, Enc, NewData) of
-		{ok, S} ->
-			decode_header_tokens_permissive(Tokens, Charset, [S | Stack]);
-		_ ->
-			decode_header_tokens_permissive(Tokens, Charset, [{Enc, NewData} | Stack])
-	end;
+	{ok, S} = convert(Charset, Enc, NewData),
+	decode_header_tokens_permissive(Tokens, Charset, [S | Stack]);
 decode_header_tokens_permissive([NextToken | _] = Tokens, Charset, [{_, _} | Stack])
   when is_binary(NextToken) orelse is_tuple(NextToken) ->
 	%% practicaly very rare case "=?utf-8?Q?BROKEN?=\r\n\t=?windows-1251?Q?maybe-broken?="
@@ -281,13 +275,8 @@ decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
 convert(_To, <<"x-binaryenc">>, Data) ->
     {ok, Data};
 convert(To, From, Data) ->
-	CD = case iconv:open(To, From) of
-			 {ok, Res} -> Res;
-			 {error, einval} -> throw({bad_charset, From})
-		 end,
-	Converted = iconv:conv(CD, Data),
-	iconv:close(CD),
-	Converted.
+	Result = iconv:convert(From, To, Data),
+	{ok, Result}.
 
 
 decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
@@ -528,13 +517,8 @@ decode_body(Type, Body, <<"x-binaryenc">>, _OutEncoding) ->
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	NewBody = decode_body(Type, Body),
 	InEncodingFixed = fix_encoding(InEncoding),
-	CD = case iconv:open(OutEncoding, InEncodingFixed) of
-		{ok, Res} -> Res;
-		{error, einval} -> throw({bad_charset, InEncodingFixed})
-	end,
-	{ok, Result} = iconv:conv(CD, NewBody),
-	iconv:close(CD),
-	Result.
+	{ok, ConvertedBody} = convert(OutEncoding, InEncodingFixed, NewBody),
+	ConvertedBody.
 
 -spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
 decode_body(undefined, Body) ->
@@ -958,7 +942,7 @@ fix_encoding(Encoding) ->
 rfc2047_utf8_encode(undefined) -> undefined;
 rfc2047_utf8_encode(B) when is_binary(B) ->
 	rfc2047_utf8_encode(binary_to_list(B));
-rfc2047_utf8_encode([]) -> 
+rfc2047_utf8_encode([]) ->
 	[];
 rfc2047_utf8_encode(Text) ->
     %% Don't escape when all characters are ASCII printable
@@ -977,7 +961,7 @@ rfc2047_utf8_encode([], Acc, _WordLen, Char) ->
     lists:reverse("=?" ++ Char ++ Acc);
 
 %% ASCII characters dont encode except space, ?, _, =, and .
-rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32 
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32
     andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
     rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), [C]);
 %% Encode all other ASCII
@@ -1248,7 +1232,7 @@ parse_with_comments_test_() ->
 			end
 		}
 	].
-	
+
 parse_content_type_test_() ->
 	[
 		{"parsing content types",
@@ -1336,6 +1320,15 @@ parse_example_mails_test_() ->
 				{Type, SubType, _Headers, _Properties, Body} = Decoded,
 				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
 				?assertEqual(<<"This message contains only plain text.\r\n">>, Body)
+			end
+		},
+		{"parse a Python smtplib plain text email",
+			fun() ->
+				Decoded = Getmail("python-smtp-lib.eml"),
+				?assertEqual(5, tuple_size(Decoded)),
+				{Type, SubType, _Headers, _Properties, Body} = Decoded,
+				?assertEqual({<<"text">>, <<"plain">>}, {Type, SubType}),
+				?assertEqual(<<"Hello world Python.\r\n">>, Body)
 			end
 		},
 		{"parse a plain text email with no content type",
@@ -1472,12 +1465,12 @@ parse_example_mails_test_() ->
 				?assertMatch({<<"message">>, <<"rfc822">>, _, _, _}, Message),
 				Submessage = element(5, Message),
 				?assertMatch({<<"text">>, <<"plain">>, _, _, <<"This message contains only plain text.\r\n">>}, Submessage),
-				
+
 				?assertMatch({<<"text">>, <<"rtf">>, _, _, _}, Rtf),
 				?assertEqual(<<"{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}">>, element(5, Rtf)),
-				
+
 				?assertMatch({<<"image">>, <<"jpeg">>, _, _, _}, Image),
-				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))				
+				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))
 			end
 		},
 		{"Outlook 2007 with leading tabs in quoted-printable.",
@@ -1514,17 +1507,17 @@ parse_example_mails_test_() ->
 				[Html, Messagewithin, _Brhtml, _Message, _Brhtml, Image, _Brhtml, Rtf, _Brhtml] = element(5, Topmultipart),
 				?assertMatch({<<"text">>, <<"html">>, _, _, _}, Html),
 				?assertEqual(<<"<html><body style=\"word-wrap: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-space; \"><b>This</b> is <i>rich</i> text.<div><br></div><div>The list is html.</div><div><br></div><div>Attchments:</div><div><ul class=\"MailOutline\"><li>an email containing an attachment of an email.</li><li>an email of only plain text.</li><li>an image</li><li>an rtf file.</li></ul></div><div></div></body></html>">>, element(5, Html)),
-				
+
 				?assertMatch({<<"message">>, <<"rfc822">>, _, _, _}, Messagewithin),
 				%?assertEqual(1, length(element(5, Messagewithin))),
 				?assertMatch({<<"multipart">>, <<"mixed">>, _, _, [{<<"message">>, <<"rfc822">>, _, _, {<<"text">>, <<"plain">>, _, _, <<"This message contains only plain text.\r\n">>}}]}, element(5, Messagewithin)),
-				
+
 				?assertMatch({<<"image">>, <<"jpeg">>, _, _, _}, Image),
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image))),
-				
+
 				?assertMatch({<<"text">>, <<"rtf">>, _, _, _}, Rtf),
 				?assertEqual(<<"{\\rtf1\\ansi\\ansicpg1252\\cocoartf949\\cocoasubrtf460\r\n{\\fonttbl\\f0\\fswiss\\fcharset0 Helvetica;}\r\n{\\colortbl;\\red255\\green255\\blue255;}\r\n\\margl1440\\margr1440\\vieww9000\\viewh8400\\viewkind0\r\n\\pard\\tx720\\tx1440\\tx2160\\tx2880\\tx3600\\tx4320\\tx5040\\tx5760\\tx6480\\tx7200\\tx7920\\tx8640\\ql\\qnatural\\pardirnatural\r\n\r\n\\f0\\fs24 \\cf0 This is a basic rtf file.}">>, element(5, Rtf))
-				
+
 			end
 		},
 		{"Plain text and 2 identical attachments",
@@ -1704,13 +1697,13 @@ decode_quoted_printable_test_() ->
 					?assertThrow(badchar, decode_quoted_printable(<<"=21=D1 = g ">>))
 			end
 		},
-		%% TODO zotonic's iconv throws eilseq here
-		%{"out of range characters should be stripped",
-			%fun() ->
-				% character 150 is en-dash in windows 1252
-				%?assertEqual(<<"Foo  bar"/utf8>>, decode_body(<<"quoted-printable">>, <<"Foo ", 150, " bar">>, "US-ASCII", "UTF-8//IGNORE"))
-			%end
-		%},
+		%% TODO zotonic's iconv throws eilseq here.
+		% {"out of range characters should be stripped",
+		% 	fun() ->
+		% 		% character 150 is en-dash in windows 1252
+		% 		?assertEqual(<<"Foo  bar"/utf8>>, decode_body(<<"quoted-printable">>, <<"Foo ", 150, " bar">>, "US-ASCII", "UTF-8//IGNORE"))
+		% 	end
+		% },
 		{"out of range character in alternate charset should be converted",
 			fun() ->
 				% character 150 is en-dash in windows 1252
@@ -1855,7 +1848,7 @@ rfc2047_decode_test_() ->
 		},
 		{"invalid character sequence handling",
 			fun() ->
-					?assertError({badmatch, {error, eilseq}}, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
+					?assertException(throw, eilseq, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8")),
 					%?assertEqual(<<"this contains a copyright  symbol"/utf8>>, decode_header(<<"=?us-ascii?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE")),
 					?assertEqual(<<"this contains a copyright © symbol"/utf8>>, decode_header(<<"=?iso-8859-1?B?dGhpcyBjb250YWlucyBhIGNvcHlyaWdodCCpIHN5bWJvbA==?=">>, "utf-8//IGNORE"))
 			end
