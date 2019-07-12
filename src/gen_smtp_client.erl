@@ -72,7 +72,7 @@
                     {sockopts, [gen_tcp:connect_option()]} |
                     {port, inet:port_number()} |
                     {timeout, timeout()} |
-                    {relay, inet:socket_address() | inet:hostname()} |
+                    {relay, inet:ip_address() | inet:hostname()} |
                     {no_mx_lookups, boolean()} |
                     {auth, always | never | if_available} |
                     {hostname, string()} |
