@@ -39,7 +39,7 @@
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
--export([start_link/4]).
+-export([start_link/3, start_link/4]).
 -export([ranch_init/1]).
 
 %% gen_server callbacks
@@ -126,8 +126,15 @@ start_link(Ref, Socket, Transport, Options) ->
 	%% TODO: drop Socket when support for ranch < 1.6 no longer needed
 	{ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Socket, Transport, Options}])}.
 
-ranch_init({Ref, Socket, Transport, {Callback, RanchVer, Opts}}) ->
-	{ok, Socket} = ranch_handshake(RanchVer, Ref, Socket),
+%% Ranch 2.0 callback
+-spec start_link(Ref :: ranch:ref(), Transport :: module(),
+				 {Callback :: module(), RanchVer :: gte16, Options :: options()}) ->
+						{'ok', pid()}.
+start_link(Ref, Transport, Options) ->
+	start_link(Ref, [], Transport, Options).
+
+ranch_init({Ref, Sock, Transport, {Callback, RanchVer, Opts}}) ->
+	{ok, Socket} = ranch_handshake(RanchVer, Ref, Sock),
 	case init([Ref, Transport, Socket, Callback, RanchVer, Opts]) of
 		{ok, State, Timeout} ->
 			gen_server:enter_loop(?MODULE, [], State, Timeout);

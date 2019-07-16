@@ -50,16 +50,31 @@
 start(ServerName, CallbackModule, Options) when is_list(Options) ->
 	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
 		= convert_options(CallbackModule, Options),
-	%% TODO: drop 2nd argument when ranch lt16 will be dropped
-	ranch:start_listener(
+	ranch_start_listener(
 	  ServerName, NumAcceptors, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
+
+ranch_start_listener(ServerName, _NumAcceptors, Transport, TransportOpts, Handler,
+					 {_, gte16, _} = ProtoOpts) ->
+	ranch:start_listener(ServerName, Transport, TransportOpts, Handler, ProtoOpts);
+ranch_start_listener(ServerName, NumAcceptors, Transport, TransportOpts, Handler,
+					 {_, lt16, _} = ProtoOpts) ->
+	%% TODO: remove when ranch lt16 will be dropped
+	ranch:start_listener(ServerName, NumAcceptors, Transport, TransportOpts, Handler, ProtoOpts).
+
 
 child_spec(ServerName, CallbackModule, Options) ->
 	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
 		= convert_options(CallbackModule, Options),
-	%% TODO: drop 2nd argument when ranch lt16 will be dropped
-	ranch:child_spec(
+	ranch_child_spec(
 	  ServerName, NumAcceptors, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
+
+ranch_child_spec(ServerName, _NumAcceptors, Transport, TransportOpts, Handler,
+				 {_, gte16, _} = ProtoOpts) ->
+	ranch:child_spec(ServerName, Transport, TransportOpts, Handler, ProtoOpts);
+ranch_child_spec(ServerName, NumAcceptors, Transport, TransportOpts, Handler,
+				 {_, lt16, _} = ProtoOpts) ->
+	%% TODO: remove when ranch lt16 will be dropped
+	ranch:child_spec(ServerName, NumAcceptors, Transport, TransportOpts, Handler, ProtoOpts).
 
 convert_options(CallbackModule, Options) ->
 	Transport = case proplists:get_value(protocol, Options, tcp) of
