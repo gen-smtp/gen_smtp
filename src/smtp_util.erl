@@ -62,8 +62,9 @@ guess_FQDN() ->
 
 guess_FQDN_1(_Hostname, {ok, #hostent{ h_name = FQDN }}) ->
 	FQDN;
-guess_FQDN_1(Hostname, {error, nxdomain}) ->
-    error_logger:info_msg("~p could not get FQDN for ~p, using \"localhost\" instead.", [?MODULE, Hostname]),
+guess_FQDN_1(Hostname, {error, Error}) ->
+    error_logger:info_msg("~p could not get FQDN for ~p (error ~p), using \"localhost\" instead.",
+                          [?MODULE, Error, Hostname]),
     "localhost".
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
