@@ -15,5 +15,5 @@ end_of_line = crlf
 insert_final_newline = false
 trim_trailing_whitespace = false
 
-[*.{conf,src,config,markdown}]
+[*.{conf,src,config,markdown,yml}]
 indent_style = space
