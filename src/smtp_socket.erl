@@ -366,15 +366,18 @@ connect_test_() ->
 		fun() ->
 			Self = self(),
 			Port = ?TEST_PORT + 1,
+			Ref = make_ref(),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(tcp, Port),
 						?assert(is_port(ListenSocket)),
+						Self ! {Ref, listen},
 						{ok, ServerSocket} = accept(ListenSocket),
 						controlling_process(ServerSocket, Self),
-						Self ! ListenSocket
+						Self ! {Ref, ListenSocket}
 				end),
+			receive {Ref, listen} -> ok end,
 			{ok, ClientSocket} = connect(tcp, "localhost", Port),
-			receive ListenSocket when is_port(ListenSocket) -> ok end,
+			receive {Ref, ListenSocket} when is_port(ListenSocket) -> ok end,
 			?assert(is_port(ClientSocket)),
 			close(ListenSocket)
 		end
@@ -383,16 +386,19 @@ connect_test_() ->
 		fun() ->
 			Self = self(),
 			Port = ?TEST_PORT + 2,
+			Ref = make_ref(),
 	        gen_smtp_application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 						?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
+						Self ! {Ref, listen},
 						{ok, ServerSocket} = accept(ListenSocket),
 						controlling_process(ServerSocket, Self),
-						Self ! ListenSocket
+						Self ! {Ref, ListenSocket}
 				end),
+			receive {Ref, listen} -> ok end,
 			{ok, ClientSocket} = connect(ssl, "localhost", Port,  []),
-			receive {sslsocket,_,_} = ListenSocket -> ok end,
+			receive {Ref, {sslsocket,_,_} = ListenSocket} -> ok end,
 			?assertMatch([sslsocket|_], tuple_to_list(ClientSocket)),
 			close(ListenSocket)
 		end

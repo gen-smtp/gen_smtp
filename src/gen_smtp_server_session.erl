@@ -991,7 +991,8 @@ smtp_session_test_() ->
 				{CSock, Pid}
 		end,
 		fun({CSock, _Pid}) ->
-				smtp_socket:close(CSock)
+				smtp_socket:close(CSock),
+				timer:sleep(10)
 		end,
 		[fun({CSock, _Pid}) ->
 					{"A new connection should get a banner",
@@ -1296,7 +1297,8 @@ smtp_session_auth_test_() ->
 				{CSock, Pid}
 		end,
 		fun({CSock, _Pid}) ->
-				smtp_socket:close(CSock)
+				smtp_socket:close(CSock),
+				timer:sleep(10)
 		end,
 		[fun({CSock, _Pid}) ->
 					{"EHLO response includes AUTH",
@@ -1803,7 +1805,8 @@ smtp_session_tls_test_() ->
 				{CSock, Pid}
 		end,
 		fun({CSock, _Pid}) ->
-				smtp_socket:close(CSock)
+				smtp_socket:close(CSock),
+				timer:sleep(10)
 		end,
 		[fun({CSock, _Pid}) ->
 					{"EHLO response includes STARTTLS",
