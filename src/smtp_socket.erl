@@ -117,7 +117,7 @@ accept(Socket, Timeout) when is_port(Socket) ->
 			{ok, Opts} = inet:getopts(Socket, [active,keepalive,packet,reuseaddr]),
 			inet:setopts(NewSocket, Opts),
 			{ok, NewSocket};
-		Error ->
+		{error, _} = Error ->
 			Error
 	end;
 
@@ -125,23 +125,30 @@ accept(Socket, Timeout) when is_port(Socket) ->
 accept(Socket, Timeout) ->
 	case ssl:transport_accept(Socket, Timeout) of
 		{ok, NewSocket} ->
-			ssl_handshake(NewSocket),
-			{ok, NewSocket};
-		Error -> Error
+			ssl_handshake(NewSocket);
+		{error, _} = Error ->
+			Error
 	end.
 
 -ifdef(deprecated_ssl_accept).
 ssl_handshake(Socket) ->
-  ssl:ssl_accept(Socket).
+	case ssl:ssl_accept(Socket) of
+		ok -> {ok, Socket};
+		{error, _} = Error -> Error
+	end.
 
 ssl_handshake(Socket, Options, Timeout) ->
-  ssl:ssl_accept(Socket, Options, Timeout).
+	case ssl:ssl_accept(Socket, Options, Timeout) of
+		{ok, _} = OK -> OK;
+		{error, _} = Error -> Error
+	end.
+
 -else.
 ssl_handshake(Socket) ->
-  ssl:handshake(Socket).
+ 	ssl:handshake(Socket).
 
 ssl_handshake(Socket, Options, Timeout) ->
-  ssl:handshake(Socket, Options, Timeout).
+ 	ssl:handshake(Socket, Options, Timeout).
 -endif.
 
 -spec send(Socket :: socket(), Data :: binary() | string() | iolist()) -> 'ok' | {'error', any()}.
