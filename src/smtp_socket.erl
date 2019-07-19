@@ -139,7 +139,6 @@ ssl_handshake(Socket) ->
 
 ssl_handshake(Socket, Options, Timeout) ->
 	case ssl:ssl_accept(Socket, Options, Timeout) of
-		ok -> {ok, Socket};
 		{ok, _} = OK -> OK;
 		{error, _} = Error -> Error
 	end.
