@@ -35,7 +35,7 @@ thousand emails without leaking any RAM or crashing the erlang virtual machine.
 ## Who is using it?
 
 + gen_smtp is used to provide the email functionality of [OpenACD](https://github.com/OpenACD/OpenACD)
-+ gen_smtp will be used as both the SMTP server and SMTP client for [Zotonic](http://zotonic.com) as of version 0.7
++ gen_smtp is used as both the SMTP server and SMTP client for [Zotonic](http://zotonic.com)
 + [Chicago Boss](http://www.chicagoboss.org/) uses gen_smtp for its mail API.
 + [Gmailbox](https://www.gmailbox.org) uses gen_smtp to provide a free email forwarding service.
 + many libraries [depend on gen_smtp](https://hex.pm/packages/gen_smtp) according to hex.pm
@@ -194,6 +194,6 @@ For that, you can add the following line to your `rebar.config` file:
 
 ```
 {deps, [
-  {eiconv, "1.0.0-alpha1"}
+  {eiconv, "1.0.0"}
 ]}.
 ```
