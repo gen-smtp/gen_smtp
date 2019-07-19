@@ -120,13 +120,29 @@ accept(Socket, Timeout) when is_port(Socket) ->
 		Error ->
 			Error
 	end;
+
+
 accept(Socket, Timeout) ->
 	case ssl:transport_accept(Socket, Timeout) of
 		{ok, NewSocket} ->
-			ssl:ssl_accept(NewSocket),
+			ssl_handshake(NewSocket),
 			{ok, NewSocket};
 		Error -> Error
 	end.
+
+-ifdef(deprecated_ssl_accept).
+ssl_handshake(Socket) ->
+  ssl:ssl_accept(Socket);
+
+ssl_handshake(Socket, Options, Timeout) ->
+  ssl:ssl_accept(Socket, Options, Timeout).
+-else.
+ssl_handshake(Socket) ->
+  ssl:handshake(Socket);
+
+ssl_handshake(Socket, Options, Timeout) ->
+  ssl:handshake(Socket, Options, Timeout).
+-endif.
 
 -spec send(Socket :: socket(), Data :: binary() | string() | iolist()) -> 'ok' | {'error', any()}.
 send(Socket, Data) when is_port(Socket) ->
@@ -232,7 +248,7 @@ to_ssl_server(Socket, Options) ->
 
 -spec to_ssl_server(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
-	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
+	ssl_handshake(Socket, ssl_listen_options(Options), Timeout);
 to_ssl_server(_Socket, _Options, _Timeout) ->
 	{error, already_ssl}.
 
