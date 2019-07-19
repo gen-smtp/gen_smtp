@@ -132,13 +132,13 @@ accept(Socket, Timeout) ->
 
 -ifdef(deprecated_ssl_accept).
 ssl_handshake(Socket) ->
-  ssl:ssl_accept(Socket);
+  ssl:ssl_accept(Socket).
 
 ssl_handshake(Socket, Options, Timeout) ->
   ssl:ssl_accept(Socket, Options, Timeout).
 -else.
 ssl_handshake(Socket) ->
-  ssl:handshake(Socket);
+  ssl:handshake(Socket).
 
 ssl_handshake(Socket, Options, Timeout) ->
   ssl:handshake(Socket, Options, Timeout).
