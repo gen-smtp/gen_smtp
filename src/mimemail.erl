@@ -77,13 +77,14 @@
 -type mime_type() :: binary().                  % <<"text">>
 -type mime_subtype() :: binary().               % <<"plain">>
 -type headers() :: [{binary(), binary()}].      % [{<<"Content-Type">>, <<"text/plain">>}]
-%% Keys are:
-%% - "transfer-encoding"
-%% - "content-type-params"
-%% - "disposition"
-%% - "disposition-params"
--type parameter_value() :: binary() | [{binary(), binary()}].
--type parameters() :: [{binary(), parameter_value()}].
+-type parameters() ::
+        #{transfer_encoding => binary(),
+          %% [{<<"charset">>, <<"utf-8">>} | {<<"boundary">>, binary()} | {<<"name">>, binary()} etc...]
+          content_type_params => [{binary(), binary()}],
+          %% <<"inline">> | <<"attachment">> etc...
+          disposition => binary(),
+          %% [{<<"filename">>, binary()}, ]
+          disposition_params => [{binary(), binary()}]}.
 
 -type mimetuple() :: {
                  mime_type(),
@@ -139,7 +140,9 @@ decode(OrigHeaders, Body, Options) ->
 						Body, proplists:get_value(<<"charset">>, Parameters), Encoding),
 					{Type, SubType, Headers, Parameters, NewBody};
 				undefined ->
-					Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, <<"inline">>}, {<<"disposition-params">>, []}],
+					Parameters = #{content_type_params =>  [{<<"charset">>, <<"us-ascii">>}],
+                                   disposition => <<"inline">>,
+                                   disposition_params => []},
 					{<<"text">>, <<"plain">>, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 			end;
 		Other ->
@@ -295,21 +298,29 @@ decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
 					erlang:error(no_boundary);
 				Boundary ->
 					% io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
-					Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
+					Parameters2 = #{content_type_params => Parameters,
+                                    disposition => Disposition,
+                                    disposition_params => DispositionParams},
 					{<<"multipart">>, SubType, Headers, Parameters2, split_body_by_boundary(Body, list_to_binary(["--", Boundary]), MimeVsn, Options)}
 			end;
 		{<<"message">>, <<"rfc822">>, Parameters} ->
 			{NewHeaders, NewBody} = parse_headers(Body),
-			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
+			Parameters2 = #{content_type_params => Parameters,
+                            disposition => Disposition,
+                            disposition_params => DispositionParams},
 			{<<"message">>, <<"rfc822">>, Headers, Parameters2, decode(NewHeaders, NewBody, Options)};
 		{Type, SubType, Parameters} ->
 			%io:format("body is ~s/~s~n", [Type, SubType]),
-			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
+			Parameters2 = #{content_type_params => Parameters,
+                            disposition => Disposition,
+                            disposition_params => DispositionParams},
 			{Type, SubType, Headers, Parameters2, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body, proplists:get_value(<<"charset">>, Parameters), proplists:get_value(encoding, Options, none))};
 		undefined -> % defaults
 			Type = <<"text">>,
 			SubType = <<"plain">>,
-			Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
+			Parameters = #{content_type_params => [{<<"charset">>, <<"us-ascii">>}],
+                           disposition => Disposition,
+                           disposition_params => DispositionParams},
 			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
 	end;
 decode_component(_Headers, _Body, Other, _Options) ->
@@ -650,49 +661,49 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 			CT = io_lib:format("~s/~s", [Type, SubType]),
 			CTP = case Type of
 				<<"multipart">> ->
-					Boundary = case proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
+					Boundary = case proplists:get_value(<<"boundary">>, maps:get(content_type_params, Parameters, [])) of
 						undefined ->
 							list_to_binary(smtp_util:generate_message_boundary());
 						B ->
 							B
 					end,
-					[{<<"boundary">>, Boundary} | proplists:delete(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Parameters, []))];
+					[{<<"boundary">>, Boundary} | proplists:delete(<<"boundary">>, maps:get(content_type_params, Parameters, []))];
 				<<"text">> ->
-					Charset = case proplists:get_value(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
+					Charset = case proplists:get_value(<<"charset">>, maps:get(content_type_params, Parameters, [])) of
 						undefined ->
 							guess_charset(Body);
 						C ->
 							C
 					end,
-					[{<<"charset">>, Charset} | proplists:delete(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, []))];
+					[{<<"charset">>, Charset} | proplists:delete(<<"charset">>, maps:get(content_type_params, Parameters, []))];
 				_ ->
-					proplists:get_value(<<"content-type-params">>, Parameters, [])
+					maps:get(content_type_params, Parameters, [])
 			end,
 
 			%CTP = proplists:get_value(<<"content-type-params">>, Parameters, [guess_charset(Body)]),
 			CTH = binstr:join([CT | encode_parameters(CTP)], ";"),
-			NewParameters = [{<<"content-type-params">>, CTP} | proplists:delete(<<"content-type-params">>, Parameters)],
+			NewParameters = Parameters#{content_type_params => CTP},
 			ensure_content_headers(Tail, Type, SubType, NewParameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel);
 		undefined when Header == <<"Content-Type">> ->
 			% no content-type header and its text/plain
-			Charset = case proplists:get_value(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, [])) of
+			Charset = case proplists:get_value(<<"charset">>, maps:get(content_type_params, Parameters, [])) of
 				undefined ->
 					guess_charset(Body);
 				C ->
-					C
+					binstr:to_lower(C)
 			end,
 			case Charset of
 				<<"us-ascii">> ->
 					% the default
 					ensure_content_headers(Tail, Type, SubType, Parameters, Headers, Body, Toplevel);
 				_ ->
-					CTP = [{<<"charset">>, Charset} | proplists:delete(<<"charset">>, proplists:get_value(<<"content-type-params">>, Parameters, []))],
+					CTP = [{<<"charset">>, Charset} | proplists:delete(<<"charset">>, maps:get(content_type_params, Parameters, []))],
 					CTH = binstr:join([<<"text/plain">> | encode_parameters(CTP)], ";"),
-					NewParameters = [{<<"content-type-params">>, CTP} | proplists:delete(<<"content-type-params">>, Parameters)],
+					NewParameters = Parameters#{content_type_params => CTP},
 					ensure_content_headers(Tail, Type, SubType, NewParameters, [{<<"Content-Type">>, CTH} | Headers], Body, Toplevel)
 			end;
 		undefined when Header == <<"Content-Transfer-Encoding">>, Type =/= <<"multipart">> ->
-			Enc = case proplists:get_value(<<"transfer-encoding">>, Parameters) of
+			Enc = case maps:get(transfer_encoding, Parameters, undefined) of
 				undefined ->
 					guess_best_encoding(Body);
 				Value ->
@@ -705,8 +716,8 @@ ensure_content_headers([Header | Tail], Type, SubType, Parameters, Headers, Body
 					ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Transfer-Encoding">>, Enc} | Headers], Body, Toplevel)
 			end;
 		undefined when Header == <<"Content-Disposition">>, Toplevel == false ->
-			CD = proplists:get_value(<<"disposition">>, Parameters, <<"inline">>),
-			CDP = proplists:get_value(<<"disposition-params">>, Parameters, []),
+			CD = maps:get(disposition, Parameters, <<"inline">>),
+			CDP = maps:get(disposition_params, Parameters, []),
 			CDH = binstr:join([CD | encode_parameters(CDP)], ";"),
 			ensure_content_headers(Tail, Type, SubType, Parameters, [{<<"Content-Disposition">>, CDH} | Headers], Body, Toplevel);
 		_ ->
@@ -807,7 +818,7 @@ encode_header_value(_, Value) ->
 encode_component(_Type, _SubType, Headers, Params, Body) ->
 	if
 		is_list(Body) -> % is this a multipart component?
-			Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, Params)),
+			Boundary = proplists:get_value(<<"boundary">>, maps:get(content_type_params, Params)),
 			[<<>>] ++  % blank line before start of component
 			lists:flatmap(
 				fun(Part) ->
@@ -1440,9 +1451,9 @@ parse_example_mails_test_() ->
 				[H | _] = Body,
 				[{<<"image">>, <<"jpeg">>, _, Parameters, _Image}] = Body,
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, H))),
-				?assertEqual(<<"inline">>, proplists:get_value(<<"disposition">>, Parameters)),
-				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"filename">>, proplists:get_value(<<"disposition-params">>, Parameters))),
-				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"name">>, proplists:get_value(<<"content-type-params">>, Parameters)))
+				?assertEqual(<<"inline">>, maps:get(disposition, Parameters)),
+				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"filename">>, maps:get(disposition_params, Parameters))),
+				?assertEqual(<<"chili-pepper.jpg">>, proplists:get_value(<<"name">>, maps:get(content_type_params, Parameters)))
 			end
 		},
 		{"message attachment only",
@@ -1553,11 +1564,11 @@ parse_example_mails_test_() ->
 				{<<"text">>, _, _, _, InlineBody} = Inline,
 				{<<"text">>, _, _, ContentHeaders, _AttachmentBody} = Attachment,
 				ContentTypeName = proplists:get_value(
-									<<"name">>, proplists:get_value(
-												  <<"content-type-params">>, ContentHeaders)),
+									<<"name">>, maps:get(
+												  content_type_params, ContentHeaders)),
 				DispositionName = proplists:get_value(
-									<<"filename">>, proplists:get_value(
-													  <<"disposition-params">>, ContentHeaders)),
+									<<"filename">>, maps:get(
+													  disposition_params, ContentHeaders)),
 
 				?assertEqual(<<"Hello\r\n">>, InlineBody),
 				?assert(ContentTypeName == DispositionName),
@@ -1878,9 +1889,9 @@ encoding_test_() ->
 							{<<"Message-ID">>, <<"<abcd@example.com>">>},
 							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
-						[{<<"content-type-params">>,
-								[{<<"charset">>,<<"US-ASCII">>}],
-								{<<"disposition">>,<<"inline">>}}],
+						#{content_type_params =>
+                              [{<<"charset">>,<<"US-ASCII">>}],
+                          disposition => <<"inline">>},
 						<<"This is a plain message">>},
 					Result = <<"From: me@example.com\r\nTo: you@example.com\r\nSubject: This is a test\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
@@ -1895,9 +1906,9 @@ encoding_test_() ->
 							{<<"Message-ID">>, <<"<abcd@example.com>">>},
 							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
-						[{<<"content-type-params">>,
-								[{<<"charset">>,<<"US-ASCII">>}],
-								{<<"disposition">>,<<"inline">>}}],
+						#{content_type_params =>
+                              [{<<"charset">>,<<"US-ASCII">>}],
+                          disposition => <<"inline">>},
 						<<"This is a plain message">>},
 					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
@@ -1910,7 +1921,7 @@ encoding_test_() ->
 							{<<"Message-ID">>, <<"<abcd@example.com>">>},
 							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Date">>, <<"Sun, 01 Nov 2009 14:44:47 +0200">>}],
-						[],
+						#{},
 						<<"This is a plain message">>},
 					Result = <<"From: \"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
@@ -1925,27 +1936,27 @@ encoding_test_() ->
 							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Content-Type">>,
 								<<"multipart/alternative; boundary=wtf-123234234">>}],
-						[{<<"content-type-params">>,
-								[{<<"boundary">>, <<"wtf-123234234">>}]},
-							{<<"disposition">>,<<"inline">>},
-							{<<"disposition-params">>,[]}],
+						#{content_type_params =>
+                              [{<<"boundary">>, <<"wtf-123234234">>}],
+                          disposition => <<"inline">>,
+                          disposition_params => []},
 						[{<<"text">>,<<"plain">>,
 								[{<<"Content-Type">>,
 										<<"text/plain;charset=US-ASCII;format=flowed">>},
 									{<<"Content-Transfer-Encoding">>,<<"7bit">>}],
-								[{<<"content-type-params">>,
+								#{content_type_params =>
 										[{<<"charset">>,<<"US-ASCII">>},
-											{<<"format">>,<<"flowed">>}]},
-									{<<"disposition">>,<<"inline">>},
-									{<<"disposition-params">>,[]}],
+											{<<"format">>,<<"flowed">>}],
+                                  disposition => <<"inline">>,
+                                  disposition_params => []},
 								<<"This message contains rich text.">>},
 							{<<"text">>,<<"html">>,
 								[{<<"Content-Type">>,<<"text/html;charset=US-ASCII">>},
 									{<<"Content-Transfer-Encoding">>,<<"7bit">>}],
-								[{<<"content-type-params">>,
-										[{<<"charset">>,<<"US-ASCII">>}]},
-									{<<"disposition">>,<<"inline">>},
-									{<<"disposition-params">>,[]}],
+								#{content_type_params =>
+										[{<<"charset">>,<<"US-ASCII">>}],
+                                  disposition => <<"inline">>,
+                                  disposition_params =>[]},
 								<<"<html><body>This message also contains HTML</body></html>">>}]},
 					Result = decode(encode(Email)),
 					?assertMatch({<<"multipart">>, <<"alternative">>, _, _, [{<<"text">>,
@@ -1962,28 +1973,28 @@ encoding_test_() ->
 							{<<"MIME-Version">>, <<"1.0">>},
 							{<<"Content-Type">>,
 								<<"multipart/alternative; boundary=wtf-123234234">>}],
-						[{<<"content-type-params">>,
-								[{<<"boundary">>, <<"wtf-123234234">>}]},
-							{<<"disposition">>,<<"inline">>},
-							{<<"disposition-params">>,[]}],
+						#{content_type_params =>
+                              [{<<"boundary">>, <<"wtf-123234234">>}],
+                          disposition => <<"inline">>,
+                          disposition_params => []},
 						[{<<"text">>,<<"plain">>,
 								[{<<"Content-Type">>,
 										<<"text/plain;charset=US-ASCII;format=flowed">>},
 									{<<"Content-Transfer-Encoding">>,<<"quoted-printable">>}],
-								[{<<"content-type-params">>,
-										[{<<"charset">>,<<"US-ASCII">>},
-											{<<"format">>,<<"flowed">>}]},
-									{<<"disposition">>,<<"inline">>},
-									{<<"disposition-params">>,[]}],
+								#{content_type_params =>
+                                      [{<<"charset">>,<<"US-ASCII">>},
+                                       {<<"format">>,<<"flowed">>}],
+                                  disposition => <<"inline">>,
+                                  disposition_params => []},
 								<<"This message contains rich text.\r\n",
 								"and is =quoted printable= encoded!">>},
 							{<<"text">>,<<"html">>,
 								[{<<"Content-Type">>,<<"text/html;charset=US-ASCII">>},
 									{<<"Content-Transfer-Encoding">>,<<"base64">>}],
-								[{<<"content-type-params">>,
-										[{<<"charset">>,<<"US-ASCII">>}]},
-									{<<"disposition">>,<<"inline">>},
-									{<<"disposition-params">>,[]}],
+								#{content_type_params =>
+                                     [{<<"charset">>,<<"US-ASCII">>}],
+                                  disposition => <<"inline">>,
+                                  disposition_params => []},
 								<<"<html><body>This message also contains",
 								"HTML and is base64",
 								"encoded\r\n\r\n</body></html>">>}]},
@@ -2004,9 +2015,9 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[{<<"content-type-params">>,
-								[{<<"charset">>,<<"US-ASCII">>}],
-								{<<"disposition">>,<<"inline">>}}],
+						#{content_type_params =>
+                              [{<<"charset">>,<<"US-ASCII">>}],
+                          disposition => <<"inline">>},
 						<<"This is a plain message">>},
 					Result = decode(encode(Email)),
 					?assertNot(undefined == proplists:get_value(<<"Message-ID">>, element(3, Result))),
@@ -2021,9 +2032,9 @@ encoding_test_() ->
 							{<<"To">>, <<"you@example.com">>},
 							{<<"In-Reply-To">>, <<"<abcd@example.com>">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[{<<"content-type-params">>,
+						#{content_type_params =>
 								[{<<"charset">>,<<"US-ASCII">>}],
-								{<<"disposition">>,<<"inline">>}}],
+                          disposition => <<"inline">>},
 						<<"This is a plain message">>},
 					Result = decode(encode(Email)),
 					?assertEqual(<<"<abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
@@ -2037,9 +2048,9 @@ encoding_test_() ->
 							{<<"In-Reply-To">>, <<"<abcd@example.com>">>},
 							{<<"References">>, <<"<wxyz@example.com>">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[{<<"content-type-params">>,
-								[{<<"charset">>,<<"US-ASCII">>}],
-								{<<"disposition">>,<<"inline">>}}],
+						#{content_type_params =>
+                              [{<<"charset">>,<<"US-ASCII">>}],
+                          disposition => <<"inline">>},
 						<<"This is a plain message">>},
 					Result = decode(encode(Email)),
 					?assertEqual(<<"<wxyz@example.com> <abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
@@ -2053,9 +2064,9 @@ encoding_test_() ->
 							{<<"In-Reply-To">>, <<"<abcd@example.com>">>},
 							{<<"References">>, <<"<wxyz@example.com> <abcd@example.com>">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[{<<"content-type-params">>,
-								[{<<"charset">>,<<"US-ASCII">>}],
-								{<<"disposition">>,<<"inline">>}}],
+						#{content_type_params =>
+                              [{<<"charset">>,<<"US-ASCII">>}],
+                          disposition => <<"inline">>},
 						<<"This is a plain message">>},
 					Result = decode(encode(Email)),
 					?assertEqual(<<"<wxyz@example.com> <abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
@@ -2067,7 +2078,7 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
+						#{},
 						<<"This is a plain message with some non-ascii characters øÿ\r\nso there"/utf8>>},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
@@ -2076,7 +2087,7 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
+						#{},
 						<<"This is a plain message with no non-ascii characters">>},
 					Encoded2 = encode(Email2),
 					Result2 = decode(Encoded2),
@@ -2085,7 +2096,7 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[{<<"transfer-encoding">>, <<"base64">>}],
+						#{transfer_encoding => <<"base64">>},
 						<<"This is a plain message with no non-ascii characters">>},
 					Encoded3 = encode(Email3),
 					Result3 = decode(Encoded3),
@@ -2098,7 +2109,7 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
+						#{},
 						<<"This is a HTML message with some non-ascii characters øÿ\r\nso there"/utf8>>},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
@@ -2108,7 +2119,7 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
+						#{},
 						<<"This is a HTML message with no non-ascii characters\r\nso there">>},
 					Encoded2 = encode(Email2),
 					Result2 = decode(Encoded2),
@@ -2117,7 +2128,7 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
+						#{},
 						<<"This is a text message with some invisible non-ascii characters\r\nso there"/utf8>>},
 					Encoded3 = encode(Email3),
 					Result3 = decode(Encoded3),
@@ -2130,8 +2141,8 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
-						[{<<"text">>, <<"plain">>, [], [], <<"This is a multipart message with some invisible non-ascii characters\r\nso there"/utf8>>}]},
+						#{},
+						[{<<"text">>, <<"plain">>, [], #{}, <<"This is a multipart message with some invisible non-ascii characters\r\nso there"/utf8>>}]},
 					Encoded4 = encode(Email4),
 					Result4 = decode(Encoded4),
 					?assertMatch(<<"text/plain;charset=utf-8">>, proplists:get_value(<<"Content-Type">>, element(3, lists:nth(1,element(5, Result4)))))
@@ -2143,8 +2154,8 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
-						[{<<"text">>, <<"plain">>, [], [], <<"This is a multipart message with no non-ascii characters\r\nso there">>}]},
+						#{},
+						[{<<"text">>, <<"plain">>, [], #{}, <<"This is a multipart message with no non-ascii characters\r\nso there">>}]},
 					Encoded4 = encode(Email4),
 					Result4 = decode(Encoded4),
 					?assertMatch(undefined, proplists:get_value(<<"Content-Type">>, element(3, lists:nth(1,element(5, Result4)))))
@@ -2156,8 +2167,8 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
-						[{<<"text">>, <<"html">>, [], [], <<"This is a multipart message with no non-ascii characters\r\nso there">>}]},
+						#{},
+						[{<<"text">>, <<"html">>, [], #{}, <<"This is a multipart message with no non-ascii characters\r\nso there">>}]},
 					Encoded4 = encode(Email4),
 					Result4 = decode(Encoded4),
 					?assertMatch(<<"text/html;charset=us-ascii">>, proplists:get_value(<<"Content-Type">>, element(3, lists:nth(1,element(5, Result4)))))
@@ -2169,21 +2180,21 @@ encoding_test_() ->
 							{<<"From">>, <<"me@example.com">>},
 							{<<"To">>, <<"you@example.com">>},
 							{<<"Subject">>, <<"This is a test">>}],
-						[],
+						#{},
 						[{<<"text">>,<<"plain">>,
 								[],
-								[],
+								#{},
 								<<"This message contains rich text.\r\n",
 								"and is =quoted printable= encoded!">>},
 							{<<"text">>,<<"html">>,
 								[],
-								[],
+								#{},
 								<<"<html><body>This message also contains",
 								"HTML and is base64",
 								"encoded\r\n\r\n</body></html>">>}]},
 					Encoded = encode(Email),
 					Result = decode(Encoded),
-					Boundary = proplists:get_value(<<"boundary">>, proplists:get_value(<<"content-type-params">>, element(4, Result))),
+					Boundary = proplists:get_value(<<"boundary">>, maps:get(content_type_params, element(4, Result))),
 					?assert(is_binary(Boundary)),
 					% ensure we don't add the header multiple times
 					?assertEqual(1, length(proplists:get_all_values(<<"Content-Type">>, element(3, Result)))),
@@ -2277,7 +2288,7 @@ dkim_sign_test_() ->
 						{<<"Date">>, <<"Thu, 28 Nov 2013 04:15:44 +0400">>},
 						{<<"Message-ID">>, <<"the-id">>},
 						{<<"Content-Type">>, <<"text/plain; charset=utf-8">>}],
-					   [],
+					   #{},
 					   <<"123">>},
 			  Options = [{dkim, [{s, <<"foo.bar">>},
 								 {d, <<"example.com">>},
@@ -2311,7 +2322,7 @@ dkim_sign_test_() ->
 						{<<"Date">>, <<"Thu, 28 Nov 2013 04:15:44 +0400">>},
 						{<<"Message-ID">>, <<"the-id-relaxed">>},
 						{<<"Content-Type">>, <<"text/plain; charset=utf-8">>}],
-					   [],
+					   #{},
 					   <<"123">>},
 			  Options = [{dkim, [{s, <<"foo.bar">>},
 								 {d, <<"example.com">>},
