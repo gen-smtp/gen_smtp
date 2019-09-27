@@ -347,7 +347,7 @@ try_MAIL_FROM(From, Socket, Extensions, Options) when is_binary(From) ->
 	try_MAIL_FROM(binary_to_list(From), Socket, Extensions, Options);
 try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions, Options) ->
 	% TODO do we need to bother with SIZE?
-	smtp_socket:send(Socket, ["MAIL FROM: ", From, "\r\n"]),
+	smtp_socket:send(Socket, ["MAIL FROM:", From, "\r\n"]),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"250", _Rest/binary>>} ->
 			true;
@@ -369,7 +369,7 @@ try_RCPT_TO([], _Socket, _Extensions, _Options) ->
 try_RCPT_TO([To | Tail], Socket, Extensions, Options) when is_binary(To) ->
 	try_RCPT_TO([binary_to_list(To) | Tail], Socket, Extensions, Options);
 try_RCPT_TO(["<" ++ _ = To | Tail], Socket, Extensions, Options) ->
-	smtp_socket:send(Socket, ["RCPT TO: ",To,"\r\n"]),
+	smtp_socket:send(Socket, ["RCPT TO:",To,"\r\n"]),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"250", _Rest/binary>>} ->
 			try_RCPT_TO(Tail, Socket, Extensions, Options);
@@ -909,9 +909,9 @@ session_start_test_() ->
 								smtp_socket:send(X, "500 5.3.3 Unrecognized command\r\n"),
 								?assertMatch({ok, "HELO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 Some banner\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "354 ok\r\n"),
@@ -932,9 +932,9 @@ session_start_test_() ->
 								smtp_socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 hostname\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "354 ok\r\n"),
@@ -955,9 +955,9 @@ session_start_test_() ->
 								smtp_socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 hostname\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "354 ok\r\n"),
@@ -978,9 +978,9 @@ session_start_test_() ->
 								smtp_socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 hostname\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "354 ok\r\n"),
@@ -1007,9 +1007,9 @@ session_start_test_() ->
 								{ok, Y} = smtp_socket:to_ssl_server(X, [{certfile, "test/fixtures/server.crt"}, {keyfile, "test/fixtures/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "354 ok\r\n"),
@@ -1036,9 +1036,9 @@ session_start_test_() ->
 								{ok, Y} = smtp_socket:to_ssl_server(X, [{certfile, "test/fixtures/server.crt"}, {keyfile, "test/fixtures/server.key"}], 5000),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "354 ok\r\n"),
@@ -1064,7 +1064,7 @@ session_start_test_() ->
 								AuthPacket = "AUTH PLAIN "++AuthString++"\r\n",
 								?assertEqual({ok, AuthPacket}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "235 ok\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								ok
 						end
 					}
@@ -1086,7 +1086,7 @@ session_start_test_() ->
 								PassString = binary_to_list(base64:encode("pass")),
 								?assertEqual({ok, PassString++"\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "235 ok\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								ok
 						end
 					}
@@ -1108,7 +1108,7 @@ session_start_test_() ->
 								PassString = binary_to_list(base64:encode("pass")),
 								?assertEqual({ok, PassString++"\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "235 ok\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								ok
 						end
 					}
@@ -1132,7 +1132,7 @@ session_start_test_() ->
 								CramDigest = smtp_util:trim_crlf(Packet),
 								?assertEqual(String, CramDigest),
 								smtp_socket:send(X, "235 ok\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								ok
 						end
 					}
@@ -1156,7 +1156,7 @@ session_start_test_() ->
 								CramDigest = smtp_util:trim_crlf(Packet),
 								?assertEqual(String, CramDigest),
 								smtp_socket:send(X, "235 ok\r\n"),
-								?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								ok
 						end
 					}
@@ -1206,11 +1206,11 @@ session_start_test_() ->
 								smtp_socket:send(X, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250-hostname\r\n250 AUTH CRAM-MD5\r\n"),
-								?assertEqual({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertEqual({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
-								?assertMatch({ok, "RCPT TO: <baz@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								?assertMatch({ok, "RCPT TO:<baz@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250 ok\r\n"),
 								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "354 ok\r\n"),
