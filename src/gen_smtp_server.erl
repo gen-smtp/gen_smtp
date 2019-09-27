@@ -20,212 +20,134 @@
 %%% (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 %%% SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-%% @doc A non-blocking tcp listener for SMTP connections. Based on the tcp_listener module by Serge
-%% Aleynikov [http://www.trapexit.org/Building_a_Non-blocking_TCP_server_using_OTP_principles]
+%% @doc Setup ranch socket acceptor for gen_smtp_server_session
 
 -module(gen_smtp_server).
--behaviour(gen_server).
 
 -define(PORT, 2525).
 
 %% External API
--export([start_link/3, start_link/2, start_link/1,
-    start/3, start/2, start/1,
-    stop/1, sessions/1]).
+-export([
+	start/3, start/2, start/1,
+	stop/1, child_spec/3, sessions/1]).
+-export_type([options/0]).
 
-%% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
-		code_change/3]).
-
-
--record(listener, {
-		hostname :: list(),
-		port :: port(),
-		sessionoptions = [] :: [tuple()],
-		socket :: port() | any(),
-		listenoptions = [] :: [tuple()]
-		}).
--type(listener() :: #listener{}).
-
--record(state, {
-		listeners :: [listener()],  % Listening sockets (tcp or ssl)
-		module :: atom(),
-		sessions = [] :: [pid()]
-		}).
-
--type(options() :: [{'domain', string()} | {'address', {pos_integer(), non_neg_integer(), non_neg_integer(), non_neg_integer()}} |
-		{'port', pos_integer()} | {'protocol', 'tcp' | 'ssl'} | {'sessionoptions', [any()]}]).
-
-%% @doc Start the listener as a registered process with callback module `Module' on with options `Options' linked to the calling process.
--spec start_link(ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start_link(ServerName, Module, Options) when is_list(Options) ->
-	gen_server:start_link(ServerName, ?MODULE, [Module, Options], []).
-
-%% @doc Start the listener with callback module `Module' on with options `Options' linked to the calling process.
--spec start_link(Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start_link(Module, Options) when is_list(Options) ->
-	gen_server:start_link(?MODULE, [Module, Options], []).
-
-%% @doc Start the listener with callback module `Module' with default options linked to the calling process.
--spec start_link(Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start_link(Module) ->
-	start_link(Module, [[]]).
+-type server_name() :: any().
+-type options() ::
+		[{domain, string()}
+		 | {address, inet:ip4_address()}
+		 | {family, inet | inet6}
+		 | {port, inet:port_number()}
+		 | {protocol, 'tcp' | 'ssl'}
+		 | {ranch_opts, [ranch:opt()] | map()}	%use ranch:opts() if ranch gte16
+		 | {ranch_version, gte16 | lt16}
+		 | {sessionoptions, gen_smtp_server_session:options()}].
 
 %% @doc Start the listener as a registered process with callback module `Module' with options `Options' linked to no process.
--spec start(ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start(ServerName, Module, Options) when is_list(Options) ->
-	gen_server:start(ServerName, ?MODULE, [Module, Options], []).
+-spec start(ServerName :: server_name(),
+			CallbackModule :: module(),
+			Options :: options()) -> {'ok', pid()} | {'error', any()}.
+start(ServerName, CallbackModule, Options) when is_list(Options) ->
+	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
+		= convert_options(CallbackModule, Options),
+	ranch_start_listener(
+	  ServerName, NumAcceptors, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
+
+ranch_start_listener(ServerName, _NumAcceptors, Transport, TransportOpts, Handler,
+					 {_, gte16, _} = ProtoOpts) ->
+	ranch:start_listener(ServerName, Transport, TransportOpts, Handler, ProtoOpts);
+ranch_start_listener(ServerName, NumAcceptors, Transport, TransportOpts, Handler,
+					 {_, lt16, _} = ProtoOpts) ->
+	%% TODO: remove when ranch lt16 will be dropped
+	ranch:start_listener(ServerName, NumAcceptors, Transport, TransportOpts, Handler, ProtoOpts).
+
+
+child_spec(ServerName, CallbackModule, Options) ->
+	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
+		= convert_options(CallbackModule, Options),
+	ranch_child_spec(
+	  ServerName, NumAcceptors, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
+
+ranch_child_spec(ServerName, _NumAcceptors, Transport, TransportOpts, Handler,
+				 {_, gte16, _} = ProtoOpts) ->
+	ranch:child_spec(ServerName, Transport, TransportOpts, Handler, ProtoOpts);
+ranch_child_spec(ServerName, NumAcceptors, Transport, TransportOpts, Handler,
+				 {_, lt16, _} = ProtoOpts) ->
+	%% TODO: remove when ranch lt16 will be dropped
+	ranch:child_spec(ServerName, NumAcceptors, Transport, TransportOpts, Handler, ProtoOpts).
+
+convert_options(CallbackModule, Options) ->
+	Transport = case proplists:get_value(protocol, Options, tcp) of
+					tcp -> ranch_tcp;
+					ssl -> ranch_ssl
+				end,
+	Family = proplists:get_value(family, Options, inet),
+	Address = proplists:get_value(address, Options, {0, 0, 0, 0}),
+	Port = proplists:get_value(port, Options, ?PORT),
+	Hostname = proplists:get_value(domain, Options, smtp_util:guess_FQDN()),
+	ProtocolOpts = proplists:get_value(sessionoptions, Options, []),
+	RanchVer = case proplists:get_value(ranch_version, Options) of
+				   undefined -> get_ranch_version();
+				   _Ver -> _Ver
+			   end,
+	ProtocolOpts1 = {CallbackModule,
+					 RanchVer,
+					 [{hostname, Hostname}
+					 | ProtocolOpts]},
+	{NumAcceptors, TransportOpts} =
+		case RanchVer of
+			gte16 ->
+				RanchOpts = proplists:get_value(ranch_opts, Options, #{}),
+				NumAcceptors_ = maps:get(num_acceptors, RanchOpts, 10),
+				{NumAcceptors_,
+				 RanchOpts#{
+				   socket_opts =>
+					   [{port, Port},
+						{ip, Address},
+						{keepalive, true},
+						%% binary, {active, false}, {reuseaddr, true} - ranch defaults
+						Family]}};
+			lt16 ->
+				RanchOpts = proplists:get_value(ranch_opts, Options, []),
+				NumAcceptors_ = proplists:get_value(num_acceptors, RanchOpts, 10),
+				%% TODO: socket:?TCP_LISTEN_OPTIONS
+				{NumAcceptors_,
+				 [{port, Port},
+				  {ip, Address},
+				  {keepalive, true},
+				  Family
+				  %% binary, {active, false}, {reuseaddr, true} - ranch defaults
+				  | RanchOpts]}
+		end,
+	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts1}.
+
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
--spec start(Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start(Module, Options) when is_list(Options) ->
-	gen_server:start(?MODULE, [Module, Options], []).
+-spec start(CallbackModule :: module(), Options :: options()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
+start(CallbackModule, Options) when is_list(Options) ->
+	start(?MODULE, CallbackModule, Options).
 
 %% @doc Start the listener with callback module `Module' with default options linked to no process.
--spec start(Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
-start(Module) ->
-	start(Module, [[]]).
+-spec start(CallbackModule :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
+start(CallbackModule) ->
+	start(CallbackModule, []).
 
 %% @doc Stop the listener pid() `Pid' with reason `normal'.
--spec stop(Pid :: pid()) -> 'ok'.
-stop(Pid) ->
-	gen_server:call(Pid, stop).
+-spec stop(Name :: server_name()) -> 'ok'.
+stop(Name) ->
+	ranch:stop_listener(Name).
 
 %% @doc Return the list of active SMTP session pids.
--spec sessions(Pid :: pid()) -> [pid()].
-sessions(Pid) ->
-	gen_server:call(Pid, sessions).
+-spec sessions(Name :: server_name()) -> [pid()].
+sessions(Name) ->
+	ranch:procs(Name, connections).
 
-%% @doc
-%% The gen_smtp_server is given a list of tcp listener configurations.
-%% You'll typically only want to listen on one port so your options
-%% will be a single-item list containing a proplist. e.g.:
-%%
-%% <pre>  [[{port,25},{protocol,tcp},{domain,"myserver.com"},{address,,{0,0,0,0}}]]</pre>
-%%
-%% By providing additional configurations the server will listen on multiple
-%% ports over either tcp or ssl on any given port. e.g.:
-%% <pre>
-%%  [
-%%    [{port,25},{protocol,tcp},{domain,"myserver.com"},{address,{0,0,0,0}}],
-%%    [{port,465},{protocol,ssl},{domain,"secure.myserver.com"},{address,{0.0.0.0}}],
-%%    [{port, 25},{family, inet6},{domain,"ipv6.myserver.com"},{address,"::"}]
-%%  ]
-%% </pre>
-%% Note that the default port to listen on is `2525' because the regular SMTP
-%% ports are privileged and only bindable by root. The default protocol is
-%% `tcp', the default listen address is `0.0.0.0' and the default address family
-%% is `inet'. Anything passed in the `sessionoptions' option, is passed through
-%% to `gen_smtp_server_session'.
-%% @see gen_smtp_server_session
--spec init(Args :: list()) -> {'ok', #state{}} | {'stop', any()}.
-init([Module, Configurations]) ->
-	process_flag(trap_exit, true),
-	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}},
-		{port, ?PORT}, {protocol, tcp}, {family, inet}],
-    case Configurations of
-        [FirstConfig|_] when is_list(FirstConfig) ->
-            error_logger:info_msg("~p starting at ~p~n", [?MODULE, node()]),
-            Listeners = [extract_listener(Config, DefaultConfig) || Config <- Configurations],
-            case lists:dropwhile(fun(R) -> element(1, R) =/= error end, Listeners) of
-                [] ->
-                    {ok, #state{listeners = Listeners, module = Module}};
-                _Else ->
-                    {stop, {init, hd(Listeners)}}
-            end;
-        _ ->
-            {stop, {init, "Please start gen_smtp_server with an options argument formatted as a list of proplists"}}
-    end.
-
-extract_listener(Config, DefaultConfig) ->
-    NewConfig = lists:ukeymerge(1, lists:sort(Config), lists:sort(DefaultConfig)),
-    Port = proplists:get_value(port, NewConfig),
-    IP = proplists:get_value(address, NewConfig),
-    Family = proplists:get_value(family, NewConfig),
-    Hostname = proplists:get_value(domain, NewConfig),
-    Protocol = proplists:get_value(protocol, NewConfig),
-    SessionOptions = proplists:get_value(sessionoptions, NewConfig, []),
-    ListenOptions = [binary, {ip, IP}, Family],
-    case smtp_socket:listen(Protocol, Port, ListenOptions) of
-        {ok, ListenSocket} -> %%Create first accepting process
-            error_logger:info_msg("~p listening on ~p:~p via ~p~n", [?MODULE, IP, Port, Protocol]),
-            smtp_socket:begin_inet_async(ListenSocket),
-            #listener{port = smtp_socket:extract_port_from_socket(ListenSocket),
-                      hostname = Hostname, sessionoptions = SessionOptions,
-                      socket = ListenSocket, listenoptions = ListenOptions};
-        {error, Reason} = Error ->
-            error_logger:error_msg("~p could not listen on ~p:~p via ~p. Error: ~p~n", [?MODULE, IP, Port, Protocol, Reason]),
-            Error
-    end.
-
-%% @hidden
--spec handle_call(Message :: any(), From :: {pid(), reference()}, State :: #state{}) -> {'stop', 'normal', 'ok', #state{}} | {'reply', any(), #state{}}.
-handle_call(stop, _From, State) ->
-	{stop, normal, ok, State};
-
-handle_call(sessions, _From, State) ->
-	{reply, State#state.sessions, State};
-
-handle_call(Request, _From, State) ->
-	{reply, {unknown_call, Request}, State}.
-
-%% @hidden
--spec handle_cast(Message :: any(), State :: #state{}) -> {'noreply', #state{}}.
-handle_cast(_Msg, State) ->
-	{noreply, State}.
-
-%% @hidden
--spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
-handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}},
-	#state{module = Module, listeners = Listeners, sessions = CurSessions} = State) ->
-	try
-		% find this ListenPort in our listeners.
-		[Listener] = lists:flatten([case L#listener.port of
-					ListenPort -> L;
-					_ -> []
-				end || L <- Listeners]),
-		{ok, ClientSocket} = smtp_socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket, Listener#listener.listenoptions),
-		%% New client connected
-		% io:format("new client connection.~n", []),
-		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, [{hostname, Listener#listener.hostname}, {sessioncount, length(CurSessions) + 1} | Listener#listener.sessionoptions]) of
-			{ok, Pid} ->
-				link(Pid),
-				smtp_socket:controlling_process(ClientSocket, Pid),
-				CurSessions ++[Pid];
-			_Other ->
-				CurSessions
-		end,
-		{noreply, State#state{sessions = Sessions}}
-	catch _:Error ->
-		error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
-		{noreply, State}
-	end;
-handle_info({'EXIT', From, Reason}, State) ->
-	case lists:member(From, State#state.sessions) of
-		true ->
-			{noreply, State#state{sessions = lists:delete(From, State#state.sessions)}};
-		false ->
-			io:format("process ~p exited with reason ~p~n", [From, Reason]),
-			{noreply, State}
-	end;
-handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
-	io:format("Client terminated connection with econnaborted~n"),
-	smtp_socket:begin_inet_async(ListenSocket),
-	{noreply, State};
-handle_info({inet_async, _ListenSocket,_, Error}, State) ->
-	error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
-	{stop, Error, State};
-handle_info(_Info, State) ->
-	{noreply, State}.
-
-%% @hidden
--spec terminate(Reason :: any(), State :: #state{}) -> 'ok'.
-terminate(Reason, State) ->
-	io:format("Terminating due to ~p~n", [Reason]),
-	lists:foreach(fun(#listener{socket=S}) -> catch smtp_socket:close(S) end, State#state.listeners),
-	ok.
-
-%% @hidden
--spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {'ok', #state{}}.
-code_change(_OldVsn, State, _Extra) ->
-	{ok, State}.
+get_ranch_version() ->
+	{ranch, _, VerString} = lists:keyfind(ranch, 1, application:which_applications()),
+	Ver = lists:map(fun erlang:list_to_integer/1,
+					string:tokens(VerString, ".")),
+	if Ver < [1, 6, 0] ->
+			lt16;
+	   true ->
+			gte16
+	end.
