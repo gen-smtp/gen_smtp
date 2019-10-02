@@ -14,4 +14,7 @@ dialyze:
 xref:
 	./rebar3 as test xref
 
-.PHONY: compile clean test dialyze
+bench:
+	./rebar3 as test bench
+
+.PHONY: compile clean test dialyze bench
