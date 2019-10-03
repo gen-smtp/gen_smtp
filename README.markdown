@@ -220,3 +220,23 @@ For that, you can add the following line to your `rebar.config` file:
   {eiconv, "1.0.0"}
 ]}.
 ```
+
+## Contribution guide
+
+Contributions are welcome! Here's how to create a patch that's easy to integrate:
+
+* Create a new branch from master for the proposed fix.
+* Try to maintain code style that is consistent with surrounding code. gen_smtp uses
+  tabs for indentation. We provide [.editorconfig](.editorconfig) file.
+* Make sure PR includes a test and documentation, if appropriate. `make dialyze` should pass.
+* If you think your change may affect performance, run benchmarks before and after your changes
+  and attach results to PR.
+* Travis build should pass.
+
+### How to run benchmarks
+
+Run `make bench-init` before making any changes. It will run all benchmarks and save results to file.
+After making your changes, run `make bench-compare`. This will
+run benchmarks once again and will compare results with baseline saved earlier.
+
+See [rebar3_bench docs](https://github.com/seriyps/rebar3_bench) for more details.
