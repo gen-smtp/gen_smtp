@@ -646,11 +646,12 @@ option_test_() ->
 		{"ssl_connect_options merges provided proplist",
 		fun() ->
 			?assertEqual(lists:sort([list,{active, true},
-			                   {depth, 0},
-			                   {ip, {0,0,0,0}},
-			                   {port, 0},
-			                   {packet, 2},
-			                   {versions,[tlsv1,'tlsv1.1','tlsv1.2']}]),
+									 {depth, 0},
+									 {ip, {0,0,0,0}},
+									 {port, 0},
+									 {packet, 2},
+									 {versions, [tlsv1,'tlsv1.1','tlsv1.2']},
+									 {ciphers, ssl:cipher_suites()}]),
 			             lists:sort(ssl_connect_options([{active, true},{packet,2}])))
 		end
 		}
