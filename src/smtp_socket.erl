@@ -48,7 +48,8 @@
                               {packet, line},
                               {ip, {0,0,0,0}},
                               {versions, ['tlsv1', 'tlsv1.1', 'tlsv1.2']},
-                              {port, 0}]).
+                              {port, 0},
+                              {ciphers, ssl:cipher_suites()}]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
