@@ -48,8 +48,9 @@
                               {packet, line},
                               {ip, {0,0,0,0}},
                               {versions, ['tlsv1', 'tlsv1.1', 'tlsv1.2']},
-                              {port, 0},
-                              {ciphers, ssl:cipher_suites()}]).
+                              {port, 0}]).
+
+-define(SSL_CONNECT_OPTIONS_KEYS, [ciphers]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -322,7 +323,9 @@ proplist_merge(PrimaryList, DefaultList) ->
 	MergedOther = lists:merge(lists:sort(PrimaryOther), lists:sort(DefaultOther)),
 
 	%% remove all the values that don't belong here
-	[Option  || Option = {Key, _} <- MergedTuples, proplists:is_defined(Key, DefaultList)] ++ [Option || Option <- MergedOther, Option == inet6 ].
+	[Option || Option = {Key, _} <- MergedTuples,
+			   lists:member(Key, ?SSL_CONNECT_OPTIONS_KEYS) or proplists:is_defined(Key, DefaultList)]
+		++ [Option || Option <- MergedOther, Option == inet6 ].
 
 parse_address(Options) ->
 	case proplists:get_value(ip, Options) of
@@ -650,8 +653,7 @@ option_test_() ->
 									 {ip, {0,0,0,0}},
 									 {port, 0},
 									 {packet, 2},
-									 {versions, [tlsv1,'tlsv1.1','tlsv1.2']},
-									 {ciphers, ssl:cipher_suites()}]),
+									 {versions, [tlsv1,'tlsv1.1','tlsv1.2']}]),
 			             lists:sort(ssl_connect_options([{active, true},{packet,2}])))
 		end
 		}
