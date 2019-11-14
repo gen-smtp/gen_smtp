@@ -83,7 +83,13 @@
 
 -type extensions() :: [{binary(), binary()}].
 
--opaque smtp_client_socket() :: {smtp_socket:socket(), extensions(), options()}.
+-record(smtp_client_socket, {
+		socket :: smtp_socket:socket(),
+		host :: string(),
+		extensions :: list(),
+		options :: list()
+	}).
+-opaque smtp_client_socket() :: #smtp_client_socket{}.
 
 -type callback() :: fun( ({exit, any()} |
                           smtp_session_error() |
@@ -111,8 +117,8 @@
         {unexpected_response, smtp_host(), [binary()]} |
         {network_failure, smtp_host(), {error, timeout | inet:posix()}}.
 -type smtp_session_error() ::
-        {error, no_more_hosts, {permanent_failure, smtp_host(), permanent_failure_reason()}} |
-        {error, retries_exceeded, host_failure()}.
+        {error, no_more_hosts | send, {permanent_failure, smtp_host(), permanent_failure_reason()}} |
+        {error, retries_exceeded | send, host_failure()}.
 
 
 -spec send(Email :: email(), Options :: options()) -> {'ok', pid()} | {'error', validate_options_error()}.
@@ -214,10 +220,7 @@ open(Options) ->
 								_ ->
 									MXRecords
 							end,
-			case try_smtp_sessions(Hosts, NewOptions, []) of
-				{error, _, _} = Error -> Error;
-				SocketDescriptor -> {ok, SocketDescriptor}
-			end;
+			try_smtp_sessions(Hosts, NewOptions, []);
 		{error, Reason} ->
 			{error, bad_option, Reason}
 	end.
@@ -225,17 +228,23 @@ open(Options) ->
 -spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> {'ok', Receipt :: binary()} | {error, failure()}.
 %% @doc Deliver an email on an open smtp client socket.
 %% For use with a socket opened with open/1. The socket can be reused as long as the previous call to deliver/2 returned `{ok, Receipt}'.
-deliver({Socket, Extensions, Options}, Email) ->
-	try try_sending_it(Email, Socket, Extensions, Options) of
-		Receipt -> {ok, Receipt}
+deliver(#smtp_client_socket{} = SmtpClientSocket, Email) ->
+	#smtp_client_socket{
+		socket = Socket,
+		extensions = Extensions,
+		options = Options
+	} = SmtpClientSocket,
+	try
+		Receipt = try_sending_it(Email, Socket, Extensions, Options),
+		{ok, Receipt}
 	catch
 		throw:FailMsg ->
 			{error, FailMsg}
 	end.
 
--spec close(Socker:: smtp_client_socket()) -> ok.
+-spec close(Socket :: smtp_client_socket()) -> ok.
 %% @doc Close an open smtp client socket opened with open/1.
-close({Socket, _Extensions, _Options}) ->
+close(#smtp_client_socket{ socket = Socket }) ->
 	quit(Socket).
 
 -spec send_it(Email :: email(), Options :: options()) -> binary() |
@@ -258,18 +267,29 @@ send_it(Email, Options) ->
 	case try_smtp_sessions(Hosts, Options, []) of
 		{error, _, _} = Error ->
 			Error;
-		{Socket, Extensions, Options1} ->
-			Receipt = try_sending_it(Email, Socket, Extensions, Options1),
-			quit(Socket),
-			Receipt
+		{ok, ClientSocket} ->
+			#smtp_client_socket{
+				socket = Socket,
+				host = Host,
+				extensions = Extensions,
+				options = Options1
+			} = ClientSocket,
+			try
+				Receipt = try_sending_it(Email, Socket, Extensions, Options1),
+				quit(Socket),
+				Receipt
+			catch
+				throw:{FailureType, Message} ->
+					{error, send, {FailureType, Host, Message}}
+			end
 	end.
 
 -spec try_smtp_sessions(Hosts :: [{non_neg_integer(), string()}, ...], Options :: options(), RetryList :: list()) ->
-                               smtp_client_socket() |
+                               {ok, smtp_client_socket()} |
                                smtp_session_error().
 try_smtp_sessions([{_Distance, Host} | _Tail] = Hosts, Options, RetryList) ->
-	try open_smtp_session(Host, Options) of
-		Res -> Res
+	try
+		{ok, open_smtp_session(Host, Options)}
 	catch
 		throw:FailMsg ->
 			handle_smtp_throw(FailMsg, Hosts, Options, RetryList)
@@ -334,7 +354,12 @@ open_smtp_session(Host, Options) ->
 	trace(Options, "Extensions are ~p~n", [Extensions2]),
 	Authed = try_AUTH(Socket2, Options, proplists:get_value(<<"AUTH">>, Extensions2)),
 	trace(Options, "Authentication status is ~p~n", [Authed]),
-	{Socket2, Extensions, Options}.
+	#smtp_client_socket{
+		socket = Socket2,
+		host = Host,
+		extensions = Extensions,
+		options = Options
+	}.
 
 -spec try_sending_it(Email :: email(), Socket :: smtp_socket:socket(), Extensions :: extensions(), Options :: options()) -> binary().
 try_sending_it({From, To, Body}, Socket, Extensions, Options) ->
