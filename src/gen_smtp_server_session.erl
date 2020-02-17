@@ -89,7 +89,7 @@
 	{ok, Banner :: iodata(), CallbackState :: state()} | {stop, Reason :: any(), Message :: iodata()} | ignore.
 -callback code_change(OldVsn :: any(), State :: state(), Extra :: any()) ->  {ok, state()}.
 -callback handle_HELO(Hostname :: binary(), State :: state()) ->
-    {ok, pos_integer(), state()} | {ok, state()} | error_message().
+    {ok, pos_integer() | 'infinity', state()} | {ok, state()} | error_message().
 -callback handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: state()) ->
     {ok, list(), state()} | error_message().
 -callback handle_AUTH(AuthType :: login | plain | 'cram-md5', Username :: binary(),
