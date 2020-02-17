@@ -90,7 +90,9 @@ handle_EHLO(Hostname, Extensions, State) ->
 	MyExtensions2 = case proplists:get_value(size, State#state.options) of
 		undefined ->
 			MyExtensions1;
-		Size when is_integer(Size) ->
+		infinity ->
+			[ {"SIZE", "0"} | lists:keydelete("SIZE", 1, MyExtensions1) ];
+		Size when is_integer(Size), Size > 0 ->
 			[ {"SIZE", integer_to_list(Size)} | lists:keydelete("SIZE", 1, MyExtensions1) ]
 	end,
 	{ok, MyExtensions2, State}.

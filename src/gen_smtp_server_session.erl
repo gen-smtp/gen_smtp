@@ -34,8 +34,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(MAXIMUMSIZE, 10485760). %10mb
--define(BUILTIN_EXTENSIONS, [{"SIZE", integer_to_list(?MAXIMUMSIZE)}, {"8BITMIME", true}, {"PIPELINING", true}]).
+-define(DEFAULT_MAXSIZE, 10485760). %10mb
+-define(BUILTIN_EXTENSIONS, [{"SIZE", integer_to_list(?DEFAULT_MAXSIZE)}, {"8BITMIME", true}, {"PIPELINING", true}]).
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
@@ -66,7 +66,7 @@
 		ranch_version :: lt16 | gte16,
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
-		maxsize = ?MAXIMUMSIZE,
+		maxsize = ?DEFAULT_MAXSIZE :: pos_integer() | 'infinity',
 		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
 		authdata :: 'undefined' | binary(),
 		readmessage = false :: boolean(),
@@ -214,13 +214,8 @@ handle_info({receive_data, Body, Rest},
 	%% Unescape periods at start of line (rfc5321 4.5.2)
 	UnescapedBody = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
 	Envelope = Env#envelope{data = UnescapedBody},
-	case byte_size(Envelope#envelope.data) > MaxSize of
-		true when MaxSize =/= 0 ->
-			send(State, "552 Message too large\r\n"),
-			setopts(State, [{active, once}]),
-			% might not even be able to get here anymore...
-			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-		_ ->
+	case MaxSize =:= infinity orelse byte_size(Envelope#envelope.data) =< MaxSize of
+		true ->
 			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
 				{ok, Reference, CallbackState} ->
 					send(State, io_lib:format("250 queued as ~s\r\n", [Reference])),
@@ -234,19 +229,23 @@ handle_info({receive_data, Body, Rest},
 					{noreply, State#state{readmessage = false,
 										  envelope = #envelope{},
 										  callbackstate = CallbackState}, ?TIMEOUT}
-			end
+			end;
+		false ->
+			send(State, "552 Message too large\r\n"),
+			setopts(State, [{active, once}]),
+			% might not even be able to get here anymore...
+			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
 handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport} = State)
   when SocketType =:= tcp; SocketType =:= ssl ->
 	case handle_request(parse_request(Packet), State) of
-		{ok,  #state{options = Options, readmessage = true, maxsize = MaxSize} = NewState} ->
+		{ok, #state{options = Options, readmessage = true, maxsize = MaxSize} = NewState} ->
 			Session = self(),
 			Size = 0,
 			setopts(NewState, [{packet, raw}]),
 			%% TODO: change to receive asynchronously in the same process
 			spawn_opt(fun() ->
-							  receive_data(
-								[], Transport, Socket, 0, Size, MaxSize, Session, Options)
+							  receive_data([], Transport, Socket, 0, Size, MaxSize, Session, Options)
 					  end,
 					  [link, {fullsweep_after, 0}]),
 			{noreply, NewState, ?TIMEOUT};
@@ -326,11 +325,7 @@ handle_request({<<"HELO">>, <<>>}, State) ->
 handle_request({<<"HELO">>, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
-		{ok, 0, CallbackState} ->
-			Data = ["250 ", hostname(Options), "\r\n"],
-			send(State, Data),
-			{ok, State#state{maxsize = 0, envelope = #envelope{}, callbackstate = CallbackState}};
-		{ok, MaxSize, CallbackState} when is_integer(MaxSize) ->
+		{ok, MaxSize, CallbackState} when MaxSize =:= infinity; is_integer(MaxSize) ->
 			Data = ["250 ", hostname(Options), "\r\n"],
 			send(State, Data),
 			{ok, State#state{maxsize = MaxSize,
@@ -347,7 +342,8 @@ handle_request({<<"HELO">>, Hostname},
 handle_request({<<"EHLO">>, <<>>}, State) ->
 	send(State, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({<<"EHLO">>, Hostname}, #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+handle_request({<<"EHLO">>, Hostname},
+			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, [], CallbackState} ->
 			Data = ["250 ", hostname(Options), "\r\n"],
@@ -357,11 +353,11 @@ handle_request({<<"EHLO">>, Hostname}, #state{options = Options, module = Module
 			ExtensionsUpper = lists:map( fun({X, Y}) -> {string:to_upper(X), Y} end, Extensions),
 			{Extensions1, MaxSize} = case lists:keyfind("SIZE", 1, ExtensionsUpper) of
 				{"SIZE", "0"} ->
-					{lists:keydelete("SIZE", 1, ExtensionsUpper), 0};
+					{lists:keydelete("SIZE", 1, ExtensionsUpper), infinity};
 				{"SIZE", MaxSizeString} when is_list(MaxSizeString) ->
 					{ExtensionsUpper, list_to_integer(MaxSizeString)};
 				false ->
-					{ExtensionsUpper, ?MAXIMUMSIZE}
+					{ExtensionsUpper, State#state.maxsize}
 			end,
 			Extensions2 = case Tls of
 				true ->
@@ -518,7 +514,7 @@ handle_request({<<"MAIL">>, Args},
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
-								 (<<"SIZE=", Size/binary>>, InnerState) when MaxSize =:= 0 ->
+								 (<<"SIZE=", Size/binary>>, InnerState) when MaxSize =:= 'infinity' ->
 									InnerState#state{envelope = Envelope#envelope{expectedsize = binary_to_integer(Size)}};
 								 (<<"SIZE=", Size/binary>>, InnerState) ->
 									case binary_to_integer(Size) > MaxSize of
@@ -795,7 +791,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 
 
 %% @doc a tight loop to receive the message body
-receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize > 0, Size > MaxSize ->
+receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize =/= 'infinity', Size > MaxSize ->
 	error_logger:info_msg("SMTP message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	% io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
@@ -2556,7 +2552,7 @@ smtp_session_nomaxsize_test_() ->
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
-								[{callbackoptions, [{size, 0}]}]},
+								[{callbackoptions, [{size, infinity}]}]},
 							   {domain, "localhost"},
 							   {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
@@ -2579,7 +2575,7 @@ smtp_session_nomaxsize_test_() ->
 								?assertMatch("250-localhost\r\n",  Packet2),
 								Foo = fun(F, Acc) ->
 										receive
-											{tcp, CSock, "250-SIZE"++_} ->
+											{tcp, CSock, "250-SIZE"++_ = _Data} ->
 												error;
 											{tcp, CSock, "250-"++_} ->
 												smtp_socket:active_once(CSock),
@@ -2587,7 +2583,7 @@ smtp_session_nomaxsize_test_() ->
 											{tcp, CSock, "250 PIPELINING"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
-											{tcp, CSock, _} ->
+											{tcp, CSock, _Data} ->
 												smtp_socket:active_once(CSock),
 												error
 										end
