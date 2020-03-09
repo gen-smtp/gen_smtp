@@ -34,8 +34,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--define(MAXIMUMSIZE, 10485760). %10mb
--define(BUILTIN_EXTENSIONS, [{"SIZE", "10485670"}, {"8BITMIME", true}, {"PIPELINING", true}]).
+-define(DEFAULT_MAXSIZE, 10485760). %10mb
+-define(BUILTIN_EXTENSIONS, [{"SIZE", integer_to_list(?DEFAULT_MAXSIZE)}, {"8BITMIME", true}, {"PIPELINING", true}]).
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
@@ -66,6 +66,7 @@
 		ranch_version :: lt16 | gte16,
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
+		maxsize = ?DEFAULT_MAXSIZE :: pos_integer() | 'infinity',
 		waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
 		authdata :: 'undefined' | binary(),
 		readmessage = false :: boolean(),
@@ -88,7 +89,7 @@
 	{ok, Banner :: iodata(), CallbackState :: state()} | {stop, Reason :: any(), Message :: iodata()} | ignore.
 -callback code_change(OldVsn :: any(), State :: state(), Extra :: any()) ->  {ok, state()}.
 -callback handle_HELO(Hostname :: binary(), State :: state()) ->
-    {ok, pos_integer(), state()} | {ok, state()} | error_message().
+    {ok, pos_integer() | 'infinity', state()} | {ok, state()} | error_message().
 -callback handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: state()) ->
     {ok, list(), state()} | error_message().
 -callback handle_AUTH(AuthType :: login | plain | 'cram-md5', Username :: binary(),
@@ -203,7 +204,7 @@ handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = 
 	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, Body, Rest},
 			#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
-				   callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+				   callbackstate = OldCallbackState, maxsize=MaxSize} = State) ->
 	% send the remainder of the data...
 	case Rest of
 		<<>> -> ok; % no remaining data
@@ -212,21 +213,8 @@ handle_info({receive_data, Body, Rest},
 	setopts(State, [{packet, line}]),
 	%% Unescape periods at start of line (rfc5321 4.5.2)
 	UnescapedBody = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
-	Envelope = Env#envelope{data = UnescapedBody},% size = length(Body)},
-	Valid = case has_extension(Extensions, "SIZE") of
-		{true, Value} ->
-			case byte_size(Envelope#envelope.data) > list_to_integer(Value) of
-				true ->
-					send(State, "552 Message too large\r\n"),
-					setopts(State, [{active, once}]),
-					false;
-				false ->
-					true
-			end;
-		false ->
-			true
-	end,
-	case Valid of
+	Envelope = Env#envelope{data = UnescapedBody},
+	case MaxSize =:= infinity orelse byte_size(Envelope#envelope.data) =< MaxSize of
 		true ->
 			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
 				{ok, Reference, CallbackState} ->
@@ -243,26 +231,21 @@ handle_info({receive_data, Body, Rest},
 										  callbackstate = CallbackState}, ?TIMEOUT}
 			end;
 		false ->
+			send(State, "552 Message too large\r\n"),
+			setopts(State, [{active, once}]),
 			% might not even be able to get here anymore...
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
 handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport} = State)
   when SocketType =:= tcp; SocketType =:= ssl ->
 	case handle_request(parse_request(Packet), State) of
-		{ok,  #state{extensions = Extensions,  options = Options, readmessage = true} = NewState} ->
-			MaxSize = case has_extension(Extensions, "SIZE") of
-				{true, Value} ->
-					list_to_integer(Value);
-				false ->
-					?MAXIMUMSIZE
-			end,
+		{ok, #state{options = Options, readmessage = true, maxsize = MaxSize} = NewState} ->
 			Session = self(),
 			Size = 0,
 			setopts(NewState, [{packet, raw}]),
 			%% TODO: change to receive asynchronously in the same process
 			spawn_opt(fun() ->
-							  receive_data(
-								[], Transport, Socket, 0, Size, MaxSize, Session, Options)
+							  receive_data([], Transport, Socket, 0, Size, MaxSize, Session, Options)
 					  end,
 					  [link, {fullsweep_after, 0}]),
 			{noreply, NewState, ?TIMEOUT};
@@ -342,10 +325,10 @@ handle_request({<<"HELO">>, <<>>}, State) ->
 handle_request({<<"HELO">>, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
-		{ok, MaxSize, CallbackState} when is_integer(MaxSize) ->
+		{ok, MaxSize, CallbackState} when MaxSize =:= infinity; is_integer(MaxSize) ->
 			Data = ["250 ", hostname(Options), "\r\n"],
 			send(State, Data),
-			{ok, State#state{extensions = [{"SIZE", integer_to_list(MaxSize)}],
+			{ok, State#state{maxsize = MaxSize,
 							 envelope = #envelope{},
 							 callbackstate = CallbackState}};
 		{ok, CallbackState} ->
@@ -359,40 +342,45 @@ handle_request({<<"HELO">>, Hostname},
 handle_request({<<"EHLO">>, <<>>}, State) ->
 	send(State, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({<<"EHLO">>, Hostname}, #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+handle_request({<<"EHLO">>, Hostname},
+			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
+		{ok, [], CallbackState} ->
+			Data = ["250 ", hostname(Options), "\r\n"],
+			send(State, Data),
+			{ok, State#state{extensions = [], callbackstate = CallbackState}};
 		{ok, Extensions, CallbackState} ->
-			case Extensions of
-				[] ->
-					Data = ["250 ", hostname(Options), "\r\n"],
-					send(State, Data),
-					{ok, State#state{extensions = Extensions, callbackstate = CallbackState}};
-				_Else ->
-					F =
-					fun({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
-							{Pos, Len, [["250 ", E, "\r\n"] | Acc]};
-						({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
-							{Pos, Len, [["250 ", E, " ", Value, "\r\n"] | Acc]};
-						({E, true}, {Pos, Len, Acc}) ->
-							{Pos+1, Len, [["250-", E, "\r\n"] | Acc]};
-						({E, Value}, {Pos, Len, Acc}) ->
-							{Pos+1, Len, [["250-", E, " ", Value , "\r\n"] | Acc]}
-					end,
-					Extensions2 = case Tls of
-						true ->
-							Extensions -- [{"STARTTLS", true}];
-						false ->
-							Extensions
-					end,
-					{_, _, Response} = lists:foldl(
-										 F,
-										 {1, length(Extensions2),
-										  [["250-", hostname(Options), "\r\n"]]},
-										 Extensions2),
-					%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
-					send(State, lists:reverse(Response)),
-					{ok, State#state{extensions = Extensions2, envelope = #envelope{}, callbackstate = CallbackState}}
-			end;
+			ExtensionsUpper = lists:map( fun({X, Y}) -> {string:to_upper(X), Y} end, Extensions),
+			{Extensions1, MaxSize} = case lists:keyfind("SIZE", 1, ExtensionsUpper) of
+				{"SIZE", "0"} ->
+					{lists:keydelete("SIZE", 1, ExtensionsUpper), infinity};
+				{"SIZE", MaxSizeString} when is_list(MaxSizeString) ->
+					{ExtensionsUpper, list_to_integer(MaxSizeString)};
+				false ->
+					{ExtensionsUpper, State#state.maxsize}
+			end,
+			Extensions2 = case Tls of
+				true ->
+					Extensions1 -- [ {"STARTTLS", true} ];
+				false ->
+					Extensions1
+			end,
+			{_, _, Response} = lists:foldl(
+				fun
+					({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
+						{Pos, Len, [["250 ", E, "\r\n"] | Acc]};
+					({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
+						{Pos, Len, [["250 ", E, " ", Value, "\r\n"] | Acc]};
+					({E, true}, {Pos, Len, Acc}) ->
+						{Pos+1, Len, [["250-", E, "\r\n"] | Acc]};
+					({E, Value}, {Pos, Len, Acc}) ->
+						{Pos+1, Len, [["250-", E, " ", Value , "\r\n"] | Acc]}
+				end,
+				{1, length(Extensions2), [ ["250-", hostname(Options), "\r\n"] ]},
+				Extensions2),
+			%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
+			send(State, lists:reverse(Response)),
+			{ok, State#state{extensions = Extensions2, maxsize = MaxSize, envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
 			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
@@ -496,10 +484,14 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: send HELO/EHLO first\r\n"),
 	{ok, State};
-handle_request({<<"MAIL">>, Args}, #state{module = Module, envelope = Envelope, callbackstate = OldCallbackState,  extensions = Extensions} = State) ->
+handle_request({<<"MAIL">>, Args},
+			   #state{
+					module = Module, envelope = Envelope,
+					callbackstate = OldCallbackState,  extensions = Extensions,
+					maxsize=MaxSize} = State) ->
 	case Envelope#envelope.from of
 		undefined ->
-			case binstr:strpos(binstr:to_upper(Args), "FROM:") of
+			case binstr:strpos(binstr:to_upper(Args), <<"FROM:">>) of
 				1 ->
 					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
 					case parse_encoded_address(Address) of
@@ -522,17 +514,14 @@ handle_request({<<"MAIL">>, Args}, #state{module = Module, envelope = Envelope, 
 							%io:format("options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
+								 (<<"SIZE=", Size/binary>>, InnerState) when MaxSize =:= 'infinity' ->
+									InnerState#state{envelope = Envelope#envelope{expectedsize = binary_to_integer(Size)}};
 								 (<<"SIZE=", Size/binary>>, InnerState) ->
-									case has_extension(Extensions, "SIZE") of
-										{true, Value} ->
-											case list_to_integer(binary_to_list(Size)) > list_to_integer(Value) of
-												true ->
-													{error, ["552 Estimated message length ", Size, " exceeds limit of ", Value, "\r\n"]};
-												false ->
-													InnerState#state{envelope = Envelope#envelope{expectedsize = list_to_integer(binary_to_list(Size))}}
-											end;
+									case binary_to_integer(Size) > MaxSize of
+										true ->
+											{error, ["552 Estimated message length ", Size, " exceeds limit of ", integer_to_binary(MaxSize), "\r\n"]};
 										false ->
-											{error, "555 Unsupported option SIZE\r\n"}
+											InnerState#state{envelope = Envelope#envelope{expectedsize = binary_to_integer(Size)}}
 									end;
 								(<<"BODY=", _BodyType/binary>>, InnerState) ->
 									case has_extension(Extensions, "8BITMIME") of
@@ -578,7 +567,7 @@ handle_request({<<"RCPT">>, _Args}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: need MAIL command\r\n"),
 	{ok, State};
 handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
-	case binstr:strpos(binstr:to_upper(Args), "TO:") of
+	case binstr:strpos(binstr:to_upper(Args), <<"TO:">>) of
 		1 ->
 			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
 			case parse_encoded_address(Address) of
@@ -599,9 +588,9 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 							send(State, [Message, "\r\n"]),
 							{ok, State#state{callbackstate = CallbackState}}
 					end;
-				{ParsedAddress, ExtraInfo} ->
+				{_ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
-					io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
+					% io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
 					send(State, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
 					{ok, State}
 			end;
@@ -681,8 +670,8 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
-				{error, Reason} ->
-					io:format("SSL handshake failed : ~p~n", [Reason]),
+				{error, _Reason} ->
+					%io:format("SSL handshake failed : ~p~n", [Reason]),
 					send(State, "454 TLS negotiation failed\r\n"),
 					{ok, State}
 			end;
@@ -764,11 +753,9 @@ parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
 	parse_encoded_address(Tail, [H | Acc], Quotes).
 
 -spec has_extension(Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false'.
-has_extension(Exts, Ext) ->
-	Extension = string:to_upper(Ext),
-	Extensions = [{string:to_upper(X), Y} || {X, Y} <- Exts],
+has_extension(Extensions, Ext) ->
 	%io:format("extensions ~p~n", [Extensions]),
-	case proplists:get_value(Extension, Extensions) of
+	case proplists:get_value(Ext, Extensions) of
 		undefined ->
 			false;
 		Value ->
@@ -792,7 +779,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 					{ok, NewState}
 				end;
 		false ->
-			io:format("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
+			error_logger:error_msg("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
 			send(State, "535 authentication failed (#5.7.1)\r\n"),
 			{ok, NewState}
 	end.
@@ -804,17 +791,18 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 
 
 %% @doc a tight loop to receive the message body
-receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize > 0, Size > MaxSize ->
-	io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
+receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize =/= 'infinity', Size > MaxSize ->
+	error_logger:info_msg("SMTP message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
+	% io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
 receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 	case Transport:recv(Socket, RecvSize, 1000) of
-		{ok, Packet} when Acc == [] ->
+		{ok, Packet} when Acc =:= [] ->
 			case check_bare_crlf(Packet, <<>>, proplists:get_value(allow_bare_newlines, Options, false), 0) of
 				error ->
 					Session ! {receive_data, {error, bare_newline}};
 				FixedPacket ->
-					case binstr:strpos(FixedPacket, "\r\n.\r\n") of
+					case binstr:strpos(FixedPacket, <<"\r\n.\r\n">>) of
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
@@ -834,7 +822,7 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 				error ->
 					Session ! {receive_data, {error, bare_newline}};
 				FixedPacket ->
-					case binstr:strpos(FixedPacket, "\r\n.\r\n") of
+					case binstr:strpos(FixedPacket, <<"\r\n.\r\n">>) of
 						0 ->
 							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
 							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
@@ -852,7 +840,7 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 			% check that we didn't accidentally receive a \r\n.\r\n split across 2 receives
 			[A, B | Acc2] = Acc,
 			Packet = list_to_binary([B, A]),
-			case binstr:strpos(Packet, "\r\n.\r\n") of
+			case binstr:strpos(Packet, <<"\r\n.\r\n">>) of
 				0 ->
 					% uh-oh
 					%io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
@@ -869,7 +857,7 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 		{error, timeout} ->
 			receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
-			io:format("receive error: ~p~n", [Reason]),
+			error_logger:error_msg("SMTP receive error: ~p~n", [Reason]),
 			exit(receive_error)
 	end.
 
@@ -890,7 +878,7 @@ strip_bare_crlf(Bin, Offset) ->
 
 check_bare_crlf(Binary, _, ignore, _) ->
 	Binary;
-check_bare_crlf(<<$\n, _Rest/binary>> = Bin, Prev, Op, Offset) when byte_size(Prev) > 0, Offset == 0 ->
+check_bare_crlf(<<$\n, _Rest/binary>> = Bin, Prev, Op, 0 = _Offset) when byte_size(Prev) > 0 ->
 	% check if last character of previous was a CR
 	Lastchar = binstr:substr(Prev, -1),
 	case Lastchar of
@@ -2368,5 +2356,294 @@ stray_newline_test_() ->
 		}
 	].
 
+
+smtp_session_maxsize_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				gen_smtp_application:ensure_all_started(gen_smtp),
+				{ok, Pid} = gen_smtp_server:start(
+							  smtp_server_example,
+							  [{sessionoptions,
+								[{callbackoptions, [{size, 100}]}]},
+							   {domain, "localhost"},
+							   {port, 9876}]),
+				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
+				smtp_socket:close(CSock),
+				timer:sleep(10)
+		end,
+		[
+			fun({CSock, _Pid}) ->
+					{"Message with ok size",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE 100\r\n"} ->
+												smtp_socket:active_once(CSock),
+												F(F, true);
+											{tcp, CSock, "250-SIZE"++_} ->
+												error;
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, _} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3),
+								smtp_socket:send(CSock, "RCPT TO:<test@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet4),
+								smtp_socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("354 " ++ _, Packet5),
+								smtp_socket:send(CSock, "Subject: tls message\r\n"),
+								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								smtp_socket:send(CSock, "\r\n"),
+								smtp_socket:send(CSock, "message body"),
+								smtp_socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet7)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Message with too large size",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE 100\r\n"} ->
+												smtp_socket:active_once(CSock),
+												F(F, true);
+											{tcp, CSock, "250-SIZE"++_} ->
+												error;
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, _} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3),
+								smtp_socket:send(CSock, "RCPT TO:<test@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet4),
+								smtp_socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("354 " ++ _, Packet5),
+								smtp_socket:send(CSock, "Subject: tls message\r\n"),
+								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								smtp_socket:send(CSock, "\r\n"),
+								smtp_socket:send(CSock, "message body message body message body message body message body"),
+								smtp_socket:send(CSock, "message body message body message body message body message body"),
+								smtp_socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("552 "++_, Packet7)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Message with ok size in FROM extension",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE 100\r\n"} ->
+												smtp_socket:active_once(CSock),
+												F(F, true);
+											{tcp, CSock, "250-SIZE"++_} ->
+												error;
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, _} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost> SIZE=100\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Message with not ok size in FROM extension",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE 100\r\n"} ->
+												smtp_socket:active_once(CSock),
+												F(F, true);
+											{tcp, CSock, "250-SIZE"++_} ->
+												error;
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, _} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost> SIZE=101\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("552 " ++ _, Packet3)
+						end
+					}
+			end		]
+	}.
+
+smtp_session_nomaxsize_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				gen_smtp_application:ensure_all_started(gen_smtp),
+				{ok, Pid} = gen_smtp_server:start(
+							  smtp_server_example,
+							  [{sessionoptions,
+								[{callbackoptions, [{size, infinity}]}]},
+							   {domain, "localhost"},
+							   {port, 9876}]),
+				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
+				smtp_socket:close(CSock),
+				timer:sleep(10)
+		end,
+		[
+			fun({CSock, _Pid}) ->
+					{"Message with no max size",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE"++_ = _Data} ->
+												error;
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, _Data} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3),
+								smtp_socket:send(CSock, "RCPT TO:<test@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet4),
+								smtp_socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("354 " ++ _, Packet5),
+								smtp_socket:send(CSock, "Subject: tls message\r\n"),
+								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								smtp_socket:send(CSock, "\r\n"),
+								smtp_socket:send(CSock, "message body"),
+								smtp_socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 "++_, Packet7)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"Message with ok huge size in FROM extension",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE 100\r\n"} ->
+												smtp_socket:active_once(CSock),
+												F(F, true);
+											{tcp, CSock, "250-SIZE"++_} ->
+												error;
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, _} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost> SIZE=100000000\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3)
+						end
+					}
+			end
+		]
+	}.
 
 -endif.
