@@ -2218,7 +2218,8 @@ roundtrip_test_() ->
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					?assertEqual(Email, Email)
+					%?assertEqual(Email, Email),
+                    ok
 			end
 		},
 		{"round trip plain text only email",
@@ -2232,7 +2233,8 @@ roundtrip_test_() ->
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					?assertEqual(Email, Email)
+					%?assertEqual(Email, Email),
+                    ok
 			end
 		},
 		{"round trip quoted-printable email",
@@ -2246,8 +2248,8 @@ roundtrip_test_() ->
 					%file:write(F2, Encoded),
 					%file:close(F1),
 					%file:close(F2),
-					?assertEqual(Email, Email)
-					%ok
+					%?assertEqual(Email, Email),
+					ok
 			end
 		}
 	].
