@@ -1171,7 +1171,7 @@ session_start_test_() ->
                                 PassString = binary_to_list(base64:encode("pass")),
                                 ?assertEqual({ok, PassString++"\r\n"}, smtp_socket:recv(X, 0, 1000)),
                                 smtp_socket:send(X, "235 ok\r\n"),
-                                ?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                                ?assertMatch({ok, "MAIL FROM: <test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
                                 ok
                         end
                     }
