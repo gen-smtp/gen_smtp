@@ -537,15 +537,17 @@ do_AUTH_each(Socket, Username, Password, ["XOAUTH2" | Tail], Options) ->
 	end;
 do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail], Options) ->
 	smtp_socket:send(Socket, "AUTH LOGIN\r\n"),
-	case read_possible_multiline_reply(Socket) of
-		%% base64 Username: or username:
-		{ok, Prompt} when Prompt == <<"334 VXNlcm5hbWU6\r\n">>; Prompt == <<"334 dXNlcm5hbWU6\r\n">> ->
+	{ok, Prompt} = read_possible_multiline_reply(Socket),
+    case is_auth_username_prompt(Prompt) of
+        true ->
+    		%% base64 Username: or username:
 			trace(Options, "username prompt~n", []),
 			U = base64:encode(Username),
 			smtp_socket:send(Socket, [U,"\r\n"]),
-			case read_possible_multiline_reply(Socket) of
-				%% base64 Password: or password:
-				{ok, Prompt2} when Prompt2 == <<"334 UGFzc3dvcmQ6\r\n">>; Prompt2 == <<"334 cGFzc3dvcmQ6\r\n">> ->
+			{ok, Prompt2} = read_possible_multiline_reply(Socket),
+            case is_auth_password_prompt(Prompt2) of
+                true ->
+    				%% base64 Password: or password:
 					trace(Options, "password prompt~n", []),
 					P = base64:encode(Password),
 					smtp_socket:send(Socket, [P,"\r\n"]),
@@ -557,12 +559,12 @@ do_AUTH_each(Socket, Username, Password, ["LOGIN" | Tail], Options) ->
 							trace(Options, "password rejected: ~s", [Msg]),
 							do_AUTH_each(Socket, Username, Password, Tail, Options)
 					end;
-				{ok, Msg2} ->
-					trace(Options, "username rejected: ~s", [Msg2]),
+				false ->
+					trace(Options, "username rejected: ~s", [Prompt2]),
 					do_AUTH_each(Socket, Username, Password, Tail, Options)
 			end;
-		{ok, Something} ->
-			trace(Options, "got ~s~n", [Something]),
+		false ->
+			trace(Options, "got ~s~n", [Prompt]),
 			do_AUTH_each(Socket, Username, Password, Tail, Options)
 	end;
 do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail], Options) ->
@@ -580,6 +582,20 @@ do_AUTH_each(Socket, Username, Password, ["PLAIN" | Tail], Options) ->
 do_AUTH_each(Socket, Username, Password, [Type | Tail], Options) ->
 	trace(Options, "unsupported AUTH type ~s~n", [Type]),
 	do_AUTH_each(Socket, Username, Password, Tail, Options).
+
+
+is_auth_username_prompt(<<"334 VXNlcm5hbWU6\r\n">>) -> true;
+is_auth_username_prompt(<<"334 dXNlcm5hbWU6\r\n">>) -> true;
+is_auth_username_prompt(<<"334 VXNlcm5hbWU6 ", _/binary>>) -> true;
+is_auth_username_prompt(<<"334 dXNlcm5hbWU6 ", _/binary>>) -> true;
+is_auth_username_prompt(_) -> false.
+
+is_auth_password_prompt(<<"334 UGFzc3dvcmQ6\r\n">>) -> true;
+is_auth_password_prompt(<<"334 cGFzc3dvcmQ6\r\n">>) -> true;
+is_auth_password_prompt(<<"334 UGFzc3dvcmQ6 ", _/binary>>) -> true;
+is_auth_password_prompt(<<"334 cGFzc3dvcmQ6 ", _/binary>>) -> true;
+is_auth_password_prompt(_) -> false.
+
 
 -spec try_EHLO(Socket :: smtp_socket:socket(), Options :: options()) -> {ok, extensions()}.
 try_EHLO(Socket, Options) ->
@@ -1138,6 +1154,28 @@ session_start_test_() ->
 						end
 					}
 			end,
+            fun({ListenSock}) ->
+                    {"AUTH LOGIN should work with appended methods",
+                        fun() ->
+                                Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {username, "user"}, {password, "pass"}],
+                                {ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+                                {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                                smtp_socket:send(X, "220 Some banner\r\n"),
+                                ?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                                smtp_socket:send(X, "250-hostname\r\n250 AUTH LOGIN\r\n"),
+                                ?assertEqual({ok, "AUTH LOGIN\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                                smtp_socket:send(X, "334 VXNlcm5hbWU6 R6S4yT8pcW5sQjZD3CW61N0 - hssmtp\r\n"),
+                                UserString = binary_to_list(base64:encode("user")),
+                                ?assertEqual({ok, UserString++"\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                                smtp_socket:send(X, "334 UGFzc3dvcmQ6 R6S4yT8pcW5sQjZD3CW61N0 - hssmtp\r\n"),
+                                PassString = binary_to_list(base64:encode("pass")),
+                                ?assertEqual({ok, PassString++"\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                                smtp_socket:send(X, "235 ok\r\n"),
+                                ?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                                ok
+                        end
+                    }
+            end,
 			fun({ListenSock}) ->
 					{"AUTH CRAM-MD5 should work",
 						fun() ->
