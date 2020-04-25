@@ -1,3 +1,5 @@
+BENCH_BASELINE?=baseline
+
 compile:
 	@./rebar3 compile
 
@@ -14,4 +16,13 @@ dialyze:
 xref:
 	./rebar3 as test xref
 
-.PHONY: compile clean test dialyze
+bench:
+	./rebar3 as test bench
+
+bench-init:
+	./rebar3 as test bench --save-baseline $(BENCH_BASELINE)
+
+bench-compare:
+	./rebar3 as test bench --baseline $(BENCH_BASELINE)
+
+.PHONY: compile clean test dialyze bench bench-init bench-compare
