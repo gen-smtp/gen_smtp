@@ -75,11 +75,25 @@
 		options = [] :: [tuple()]
 	}
 ).
+
+%% OTP-18: ssl:ssloption()
+%% OTP-19: ssl:ssl_option()
+%% OTP-20: ssl:ssl_option()
+%% OTP-21: ssl:tls_server_option()
+%% OTP-22: ssl:tls_server_option()
+%% OTP-23: ssl:tls_server_option()
+-ifdef(OTP_RELEASE).
+-type tls_opt() :: ssl:tls_server_option().
+-else.
+-type tls_opt() :: any().
+-endif.
+
 -type options() :: [  {callbackoptions, any()}
-					| {certfile, file:name_all()}
-					| {keyfile, file:name_all()}
+					| {certfile, file:name_all()} % deprecated, see tls_options
+					| {keyfile, file:name_all()}  % deprecated, see tls_options
 					| {allow_bare_newlines, boolean() | fix | strip}
-					| {hostname, inet:hostname()}].
+					| {hostname, inet:hostname()}
+					| {tls_options, [tls_opt()]}].
 
 -type(state() :: any()).
 -type(error_message() :: {error, string(), state()}).
@@ -92,6 +106,7 @@
     {ok, pos_integer() | 'infinity', state()} | {ok, state()} | error_message().
 -callback handle_EHLO(Hostname :: binary(), Extensions :: list(), State :: state()) ->
     {ok, list(), state()} | error_message().
+-callback handle_STARTTLS(state()) -> state().
 -callback handle_AUTH(AuthType :: login | plain | 'cram-md5', Username :: binary(),
 					  Credential :: binary() | {binary(), binary()}, State :: state()) ->
     {ok, state()} | any().
@@ -644,26 +659,28 @@ handle_request({<<"VRFY">>, Address}, #state{module= Module, callbackstate = Old
 			send(State, "501 Syntax: VRFY username/address\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, tls=false, extensions = Extensions, callbackstate = OldCallbackState, options = Options} = State) ->
+handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, tls=false,
+											  extensions = Extensions, callbackstate = OldCallbackState,
+											  options = Options} = State) ->
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
 			send(State, "220 OK\r\n"),
-			Options1 = case proplists:get_value(certfile, Options) of
+			TlsOpts0 = proplists:get_value(tls_options, Options, []),
+			TlsOpts1 = case proplists:get_value(certfile, Options) of
 				undefined ->
-					[];
+					TlsOpts0;
 				CertFile ->
-					[{certfile, CertFile}]
+					[{certfile, CertFile} | TlsOpts0]
 			end,
-			Options2 = case proplists:get_value(keyfile, Options) of
+			TlsOpts2 = case proplists:get_value(keyfile, Options) of
 				undefined ->
-					Options1;
+					TlsOpts1;
 				KeyFile ->
-					[{keyfile, KeyFile} | Options1]
+					[{keyfile, KeyFile} | TlsOpts1]
 			end,
 			%% Assert that socket is in passive state
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
-			% TODO: certfile and keyfile should be at configurable locations
-			case to_ssl(State, [{packet, line}, {mode, list}, {ssl_imp, new} | Options2]) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
+			case to_ssl(State, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2]) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					%io:format("SSL negotiation sucessful~n"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
@@ -940,11 +957,7 @@ to_ssl(#state{ranch_version = lt16, socket = Socket}, Opts) ->
 	ssl_handshake(Socket, Opts, 5000).
 
 -spec ssl_handshake(gen_tcp:socket() | ssl:sslsocket(),
-                    [{packet, line} |
-                     {mode, list} |
-                     {ssl_imp, new} |
-                     {keyfile, file:name_all()} |
-                     {certfile, file:name_all()}],
+                    [tls_opt()],
                     timeout()) ->
                            {ok, ssl:sslsocket()} |
                            {error, any()}.
@@ -1892,8 +1905,9 @@ smtp_session_tls_test_() ->
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
-								[{keyfile, "test/fixtures/server.key"},
-								 {certfile, "test/fixtures/server.crt"},
+								[{tls_options,
+								  [{keyfile, "test/fixtures/mx1.example.com-server.key"},
+								   {certfile, "test/fixtures/mx1.example.com-server.crt"}]},
 								 {callbackoptions, [{auth, true}]}]},
 							   {domain, "localhost"},
 							   {port, 9876}]),
@@ -2304,6 +2318,90 @@ smtp_session_tls_test_() ->
 			end
 		]
 	}.
+
+smtp_session_tls_sni_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				SniHosts =
+					[
+					 {"mx1.example.com",
+					  [{keyfile, "test/fixtures/mx1.example.com-server.key"},
+					   {certfile, "test/fixtures/mx1.example.com-server.crt"},
+					   {cacertfile, "test/fixtures/root.crt"}]},
+					 {"mx2.example.com",
+					  [{keyfile, "test/fixtures/mx2.example.com-server.key"},
+					   {certfile, "test/fixtures/mx2.example.com-server.crt"},
+					   {cacertfile, "test/fixtures/root.crt"}]}
+					],
+				gen_smtp_application:ensure_all_started(gen_smtp),
+				{ok, _} = gen_smtp_server:start(
+							smtp_server_example,
+							[{sessionoptions,
+							  [{tls_options, [{sni_hosts, SniHosts}]},
+							   {callbackoptions, [{auth, true}]}]},
+							 {domain, "localhost"},
+							 {port, 9876}]),
+				[Host || {Host, _} <- SniHosts]
+		end,
+		fun(_Hosts) ->
+                gen_smtp_server:stop(gen_smtp_server)
+		end,
+		[fun strict_sni/1]
+	}.
+
+strict_sni(Hosts) ->
+	{"Do strict validation based on SNI",
+	 fun() ->
+			 [begin
+				  {ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
+				  smtp_socket:active_once(CSock),
+				  receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+				  ?assertMatch("220 localhost"++_Stuff,  Packet),
+				  smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+				  receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+				  ?assertMatch("250-localhost\r\n",  Packet2),
+				  Foo = fun Foo(Acc) ->
+								receive
+									{tcp, CSock, "250-STARTTLS"++_} ->
+										smtp_socket:active_once(CSock),
+										Foo(true);
+									{tcp, CSock, "250-"++_Packet3} ->
+										smtp_socket:active_once(CSock),
+										Foo(Acc);
+									{tcp, CSock, "250 STARTTLS"++_} ->
+										smtp_socket:active_once(CSock),
+										true;
+									{tcp, CSock, "250 "++_Packet3} ->
+										smtp_socket:active_once(CSock),
+										Acc;
+									{tcp, CSock, _} ->
+										smtp_socket:active_once(CSock),
+										error
+								end
+						end,
+				  ?assertEqual(true, Foo(false)),
+				  smtp_socket:send(CSock, "STARTTLS\r\n"),
+				  receive {tcp, CSock, Packet4} -> ok end,
+				  ?assertMatch("220 "++_,  Packet4),
+				  {ok, TlsSocket} = ssl:connect(
+									  CSock,
+									  [{server_name_indication, Host},
+									   {verify, verify_peer},
+									   {cacertfile, "test/fixtures/root.crt"}]),
+				  %% Make sure server selects certificate based on SNI
+				  {ok, Cert} = ssl:peercert(TlsSocket),
+				  DecCert = public_key:pkix_decode_cert(Cert, otp),
+				  ?assert(public_key:pkix_verify_hostname(DecCert, [{dns_id, Host}])),
+				  smtp_socket:active_once(TlsSocket),
+				  smtp_socket:send(TlsSocket, "EHLO somehost.com\r\n"),
+				  receive {ssl, TlsSocket, Packet5} -> smtp_socket:active_once(TlsSocket) end,
+				  ?assertMatch("250-localhost\r\n",  Packet5),
+				  ssl:close(TlsSocket)
+			  end || Host <- Hosts]
+	 end
+	}.
+
 
 stray_newline_test_() ->
 	[
