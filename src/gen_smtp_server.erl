@@ -98,6 +98,7 @@ convert_options(CallbackModule, Options) ->
 		case RanchVer of
 			gte16 ->
 				RanchOpts = proplists:get_value(ranch_opts, Options, #{}),
+				SocketOpts = maps:get(socket_opts, RanchOpts, []),
 				NumAcceptors_ = maps:get(num_acceptors, RanchOpts, 10),
 				{NumAcceptors_,
 				 RanchOpts#{
@@ -106,7 +107,8 @@ convert_options(CallbackModule, Options) ->
 						{ip, Address},
 						{keepalive, true},
 						%% binary, {active, false}, {reuseaddr, true} - ranch defaults
-						Family]}};
+						Family
+					   | SocketOpts]}};
 			lt16 ->
 				RanchOpts = proplists:get_value(ranch_opts, Options, []),
 				NumAcceptors_ = proplists:get_value(num_acceptors, RanchOpts, 10),
