@@ -45,7 +45,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
--export_type([options/0]).
+-export_type([options/0, error_class/0]).
 
 -include_lib("hut/include/hut.hrl").
 
@@ -103,6 +103,12 @@
 
 -type(state() :: any()).
 -type(error_message() :: {error, string(), state()}).
+-type error_class() :: tcp_closed | tcp_error
+					 | ssl_closed | ssl_error
+					 | data_rejected
+					 | timeout
+					 | out_of_order
+					 | ssl_handshake_error.
 
 -callback init(Hostname :: inet:hostname(), _SessionCount,
 			   Peername :: inet:ip_address(), Opts :: any()) ->
@@ -135,9 +141,10 @@
     {noreply, NewState :: state()} |
     {noreply, NewState :: state(), timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: term()}.
+-callback handle_error(error_class(), any(), state()) -> {ok, state()} | {stop, Reason :: any(), state()}.
 -callback terminate(Reason :: any(), state()) -> {ok, Reason :: any(), state()}.
 
--optional_callbacks([handle_info/2, handle_AUTH/4]).
+-optional_callbacks([handle_info/2, handle_AUTH/4, handle_error/3]).
 
 %% @doc Start a SMTP session linked to the calling process.
 %% @see start/3
@@ -218,11 +225,13 @@ handle_cast(_Msg, State) ->
 handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
 	send(State, "552 Message too large\r\n"),
 	setopts(State, [{active, once}]),
-	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+	State1 = handle_error(data_rejected, size_exceeded, State),
+	{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = State) ->
 	send(State, "451 Bare newline detected\r\n"),
 	setopts(State, [{active, once}]),
-	{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+	State1 = handle_error(data_rejected, bare_neline, State),
+	{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
 handle_info({receive_data, Body, Rest},
 			#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
 				   callbackstate = OldCallbackState, maxsize=MaxSize} = State) ->
@@ -276,14 +285,19 @@ handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Tr
 		{stop, Reason, NewState} ->
 			{stop, Reason, NewState}
 	end;
-handle_info({tcp_closed, _Socket}, State) ->
-	{stop, normal, State};
-handle_info({ssl_closed, _Socket}, State) ->
-	{stop, normal, State};
+handle_info({Kind, _Socket}, State) when Kind == tcp_closed;
+										 Kind == ssl_closed ->
+	State1 = handle_error(Kind, [], State),
+	{stop, normal, State1};
+handle_info({Kind, _Socket, Reason}, State) when Kind == ssl_error;
+												 Kind == tcp_error ->
+	State1 = handle_error(Kind, Reason, State),
+	{stop, normal, State1};
 handle_info(timeout, #state{socket = Socket, transport = Transport} = State) ->
 	send(State, "421 Error: timeout exceeded\r\n"),
 	Transport:close(Socket),
-	{stop, normal, State};
+	State1 = handle_error(timeout, [], State),
+	{stop, normal, State1};
 handle_info(Info, #state{module=Module, callbackstate = OldCallbackState} = State) ->
 	case erlang:function_exported(Module, handle_info, 2) of
 		true ->
@@ -296,7 +310,8 @@ handle_info(Info, #state{module=Module, callbackstate = OldCallbackState} = Stat
 					{stop, Reason, State#state{callbackstate = NewCallbackState}}
 			end;
 		false ->
-			{noreply, State}
+			?log(debug, "Ignored message ~p", [Info]),
+			{noreply, State, ?TIMEOUT}
 	end.
 
 %% @hidden
@@ -407,9 +422,10 @@ handle_request({<<"EHLO">>, Hostname},
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
-handle_request({<<"AUTH">>, _Args}, #state{envelope = undefined} = State) ->
+handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: send EHLO first\r\n"),
-	{ok, State};
+	State1 = handle_error(out_of_order, C, State),
+	{ok, State1};
 handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = Envelope, options = Options} = State) ->
 	case binstr:strchr(Args, $\s) of
 		0 ->
@@ -502,9 +518,10 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	Password = base64:decode(Password64),
 	try_auth('login', Username, Password, State);
 
-handle_request({<<"MAIL">>, _Args}, #state{envelope = undefined} = State) ->
+handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: send HELO/EHLO first\r\n"),
-	{ok, State};
+	State1 = handle_error(out_of_order, C, State),
+	{ok, State1};
 handle_request({<<"MAIL">>, Args},
 			   #state{
 					module = Module, envelope = Envelope,
@@ -584,9 +601,10 @@ handle_request({<<"MAIL">>, Args},
 			send(State, "503 Error: Nested MAIL command\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"RCPT">>, _Args}, #state{envelope = undefined} = State) ->
+handle_request({<<"RCPT">> = C, _Args}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: need MAIL command\r\n"),
-	{ok, State};
+	State1 = handle_error(out_of_order, C, State),
+	{ok, State1};
 handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
 	case binstr:strpos(binstr:to_upper(Args), <<"TO:">>) of
 		1 ->
@@ -619,17 +637,20 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 			send(State, "501 Syntax: RCPT TO:<address>\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"DATA">>, <<>>}, #state{envelope = undefined} = State) ->
+handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: send HELO/EHLO first\r\n"),
-	{ok, State};
-handle_request({<<"DATA">>, <<>>}, #state{envelope = Envelope} = State) ->
+	State1 = handle_error(out_of_order, C, State),
+	{ok, State1};
+handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
 	case {Envelope#envelope.from, Envelope#envelope.to} of
 		{undefined, _} ->
 			send(State, "503 Error: need MAIL command\r\n"),
-			{ok, State};
+			State1 = handle_error(out_of_order, C, State),
+			{ok, State1};
 		{_, []} ->
 			send(State, "503 Error: need RCPT command\r\n"),
-			{ok, State};
+			State1 = handle_error(out_of_order, C, State),
+			{ok, State1};
 		_Else ->
 			send(State, "354 enter mail, end with line containing only '.'\r\n"),
 			?log(debug, "switching to data read mode~n", []),
@@ -696,15 +717,17 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 				{error, Reason} ->
 					?log(info, "SSL handshake failed : ~p~n", [Reason]),
 					send(State, "454 TLS negotiation failed\r\n"),
-					{ok, State}
+					State1 = handle_error(ssl_handshake_error, Reason, State),
+					{ok, State1}
 			end;
 		false ->
 			send(State, "500 Command unrecognized\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"STARTTLS">>, <<>>}, State) ->
+handle_request({<<"STARTTLS">> = C, <<>>}, State) ->
 	send(State, "500 TLS already negotiated\r\n"),
-	{ok, State};
+	State1 = handle_error(out_of_order, C, State),
+	{ok, State1};
 handle_request({<<"STARTTLS">>, _Args}, State) ->
 	send(State, "501 Syntax error (no parameters allowed)\r\n"),
 	{ok, State};
@@ -717,6 +740,19 @@ handle_request({Verb, Args}, #state{module = Module, callbackstate = OldCallback
                 CState1
         end,
 	{ok, State#state{callbackstate = CallbackState}}.
+
+handle_error(Kind, Details, #state{module=Module, callbackstate = OldCallbackState} = State) ->
+	case erlang:function_exported(Module, handle_error, 3) of
+		true ->
+			case Module:handle_error(Kind, Details, OldCallbackState) of
+				{ok, CallbackState} ->
+					State#state{callbackstate = CallbackState};
+				{stop, Reason, CallbackState} ->
+					throw({stop, Reason, State#state{callbackstate = CallbackState}})
+			end;
+		false ->
+			State
+	end.
 
 -spec parse_encoded_address(Address :: binary()) -> {binary(), binary()} | 'error'.
 parse_encoded_address(<<>>) ->
