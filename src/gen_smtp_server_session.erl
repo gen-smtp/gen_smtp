@@ -76,7 +76,7 @@
 	}
 ).
 
-%% OTP-18: ssl:ssloption()
+%% OTP-18: ssl:ssloption() (not exported)
 %% OTP-19: ssl:ssl_option()
 %% OTP-20: ssl:ssl_option()
 %% OTP-21: ssl:tls_server_option()
@@ -85,7 +85,11 @@
 -ifdef(OTP_RELEASE).
 -type tls_opt() :: ssl:tls_server_option().
 -else.
--type tls_opt() :: any().
+ -ifdef(OTP_18).
+ -type tls_opt() :: tuple() | atom().
+ -else.
+ -type tls_opt() :: ssl:ssl_option().
+ -endif.
 -endif.
 
 -type options() :: [  {callbackoptions, any()}
@@ -2391,8 +2395,7 @@ strict_sni(Hosts) ->
 									   {cacertfile, "test/fixtures/root.crt"}]),
 				  %% Make sure server selects certificate based on SNI
 				  {ok, Cert} = ssl:peercert(TlsSocket),
-				  DecCert = public_key:pkix_decode_cert(Cert, otp),
-				  ?assert(public_key:pkix_verify_hostname(DecCert, [{dns_id, Host}])),
+				  verify_cert_hostname(Cert, Host),
 				  smtp_socket:active_once(TlsSocket),
 				  smtp_socket:send(TlsSocket, "EHLO somehost.com\r\n"),
 				  receive {ssl, TlsSocket, Packet5} -> smtp_socket:active_once(TlsSocket) end,
@@ -2402,6 +2405,14 @@ strict_sni(Hosts) ->
 	 end
 	}.
 
+-ifdef(OTP_18).
+verify_cert_hostname(_, _) ->
+	noop.
+-else.
+verify_cert_hostname(BinCert, Host) ->
+	DecCert = public_key:pkix_decode_cert(BinCert, otp),
+	?assert(public_key:pkix_verify_hostname(DecCert, [{dns_id, Host}])).
+-endif.
 
 stray_newline_test_() ->
 	[
