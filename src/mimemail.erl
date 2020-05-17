@@ -65,6 +65,8 @@
               options/0,
               dkim_options/0]).
 
+-include_lib("hut/include/hut.hrl").
+
 -define(DEFAULT_MIME_VERSION, <<"1.0">>).
 
 -define(DEFAULT_OPTIONS, [
@@ -122,7 +124,7 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
 	decode(Headers, Body, Options).
 
 decode(OrigHeaders, Body, Options) ->
-	%io:format("headers: ~p~n", [Headers]),
+	?log(debug, "headers: ~p~n", [OrigHeaders]),
 	Encoding = proplists:get_value(encoding, Options, none),
 	%FixedHeaders = fix_headers(Headers),
 	Headers = decode_headers(OrigHeaders, [], Encoding),
@@ -169,7 +171,7 @@ encode({Type, Subtype, Headers, ContentTypeParams, Parts}, Options) ->
 					"\r\n\r\n",
 					EncodedBody]);
 encode(_, _) ->
-	io:format("Not a mime-decoded DATA~n"),
+	?log(debug, "Not a mime-decoded DATA~n"),
 	erlang:error(non_mime).
 
 
@@ -297,7 +299,7 @@ decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
 				undefined ->
 					erlang:error(no_boundary);
 				Boundary ->
-					% io:format("this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
+					?log(debug, "this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
 					Parameters2 = #{content_type_params => Parameters,
                                     disposition => Disposition,
                                     disposition_params => DispositionParams},
@@ -310,7 +312,7 @@ decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
                             disposition_params => DispositionParams},
 			{<<"message">>, <<"rfc822">>, Headers, Parameters2, decode(NewHeaders, NewBody, Options)};
 		{Type, SubType, Parameters} ->
-			%io:format("body is ~s/~s~n", [Type, SubType]),
+			?log(debug, "body is ~s/~s~n", [Type, SubType]),
 			Parameters2 = #{content_type_params => Parameters,
                             disposition => Disposition,
                             disposition_params => DispositionParams},
@@ -329,7 +331,7 @@ decode_component(_Headers, _Body, Other, _Options) ->
 -spec get_header_value(Needle :: binary(), Headers :: [{binary(), binary()}], Default :: any()) -> binary() | any().
 %% @doc Do a case-insensitive header lookup to return that header's value, or the specified default.
 get_header_value(Needle, Headers, Default) ->
-	%io:format("Headers: ~p~n", [Headers]),
+	?log(debug, "Headers: ~p~n", [Headers]),
 	F =
 	fun({Header, _Value}) ->
 			binstr:to_lower(Header) =:= binstr:to_lower(Needle)
@@ -472,7 +474,7 @@ parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
 	% folded headers
 	[{FieldName, OldFieldValue} | OtherHeaders] = Headers,
 	FieldValue = list_to_binary([OldFieldValue, T]),
-	%io:format("~p = ~p~n", [FieldName, FieldValue]),
+	?log(debug, "~p = ~p~n", [FieldName, FieldValue]),
 	case binstr:strpos(Body, "\r\n") of
 		0 ->
 			{lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
@@ -482,7 +484,7 @@ parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
 			parse_headers(binstr:substr(Body, Index2 + 2), binstr:substr(Body, 1, Index2 - 1), [{FieldName, FieldValue} | OtherHeaders])
 	end;
 parse_headers(Body, Line, Headers) ->
-	%io:format("line: ~p, nextpart ~p~n", [Line, binstr:substr(Body, 1, 10)]),
+	?log(debug, "line: ~p", [Line]),
 	case binstr:strchr(Line, $:) of
 		0 ->
 			{lists:reverse(Headers), list_to_binary([Line, "\r\n", Body])};
@@ -562,7 +564,7 @@ decode_quoted_printable(Line, Rest, Acc) ->
 		0 ->
 			decode_quoted_printable(Rest, <<>>, [decode_quoted_printable_line(Line, []) | Acc]);
 		Index ->
-			%io:format("next line ~p~nnext rest ~p~n", [binstr:substr(Rest, 1, Index +1), binstr:substr(Rest, Index + 2)]),
+			?log(debug, "next line ~p~nnext rest ~p~n", [binstr:substr(Rest, 1, Index +1), binstr:substr(Rest, Index + 2)]),
 			decode_quoted_printable(binstr:substr(Rest, 1, Index +1), binstr:substr(Rest, Index + 2),
 				[decode_quoted_printable_line(Line, []) | Acc])
 	end.
@@ -851,7 +853,7 @@ encode_component_part({Type, SubType, Headers, PartParams, Body}) ->
 			PartData
 	 );
 encode_component_part(Part) ->
-	io:format("encode_component_part couldn't match Part to: ~p~n", [Part]),
+	?log(debug, "encode_component_part couldn't match Part to: ~p~n", [Part]),
 	[].
 
 encode_body(undefined, Body) ->
@@ -1048,7 +1050,6 @@ dkim_sign_email(Headers, Body, Opts) ->
 	CanHeaders = dkim_canonicalize_headers(Headers1, HdrsCanT),
 	[DkimHeaderNoB] = dkim_canonicalize_headers([dkim_make_header([{b, undefined} | Tags])], HdrsCanT),
 	DataHash = dkim_hash_data(CanHeaders, DkimHeaderNoB),
-	%% io:format("~s~n~n", [base64:encode(DataHash)]),
 	%% sign
 	Signature = dkim_sign(DataHash, PrivateKey),
 	DkimHeader = dkim_make_header([{b, Signature} | Tags]),
@@ -2330,7 +2331,6 @@ dkim_sign_test_() ->
 			  Enc = encode(Email, Options),
 			  file:write_file("/home/seriy/relaxed-signed.eml", Enc),
 			  {_, _, [{DkimHdrName, DkimHdrVal} | _], _, _} = decode(Enc),
-			  %% io:format(user, "~p", [DkimHdrVal]),
 			  ?assertEqual(<<"DKIM-Signature">>, DkimHdrName),
 			  ?assertEqual(
 				 <<"s=foo.bar; h=from:to:subject:date; d=example.com; c=relaxed/simple; "

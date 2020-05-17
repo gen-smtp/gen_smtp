@@ -47,6 +47,8 @@
 		code_change/3]).
 -export_type([options/0]).
 
+-include_lib("hut/include/hut.hrl").
+
 -record(envelope,
 	{
 		from :: binary() | 'undefined',
@@ -301,7 +303,7 @@ parse_request(Packet) ->
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case binstr:strchr(Request, $\s) of
 		0 ->
-			% io:format("got a ~s request~n", [Request]),
+		    ?log(debug, "got a ~s request~n", [Request]),
 			case binstr:to_upper(Request) of
 				<<"QUIT">> = Res -> {Res, <<>>};
 				<<"DATA">> = Res -> {Res, <<>>};
@@ -311,7 +313,7 @@ parse_request(Packet) ->
 		Index ->
 			Verb = binstr:substr(Request, 1, Index - 1),
 			Parameters = binstr:strip(binstr:substr(Request, Index + 1), left, $\s),
-			%io:format("got a ~s request with parameters ~s~n", [Verb, Parameters]),
+			?log(debug, "got a ~s request with parameters ~s~n", [Verb, Parameters]),
 			{binstr:to_upper(Verb), Parameters}
 	end.
 
@@ -499,7 +501,7 @@ handle_request({<<"MAIL">>, Args},
 							send(State, "501 Bad sender address syntax\r\n"),
 							{ok, State};
 						{ParsedAddress, <<>>} ->
-							%io:format("From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
+							?log(debug, "From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
 									send(State, "250 sender Ok\r\n"),
@@ -509,9 +511,9 @@ handle_request({<<"MAIL">>, Args},
 									{ok, State#state{callbackstate = CallbackState}}
 							end;
 						{ParsedAddress, ExtraInfo} ->
-							%io:format("From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
+							?log(debug, "From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
 							Options = [binstr:to_upper(X) || X <- binstr:split(ExtraInfo, <<" ">>)],
-							%io:format("options are ~p~n", [Options]),
+							?log(debug, "options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
 								 (<<"SIZE=", Size/binary>>, InnerState) when MaxSize =:= 'infinity' ->
@@ -540,11 +542,11 @@ handle_request({<<"MAIL">>, Args},
 							end,
 							case lists:foldl(F, State, Options) of
 								{error, Message} ->
-									%io:format("error: ~s~n", [Message]),
+									?log(debug, "error: ~s~n", [Message]),
 									send(State, Message),
 									{ok, State};
 								NewState ->
-									%io:format("OK~n"),
+									?log(debug, "OK~n"),
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
 											send(State, "250 sender Ok\r\n"),
@@ -579,7 +581,7 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 					send(State, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
 				{ParsedAddress, <<>>} ->
-					%io:format("To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
+					?log(debug, "To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, OldCallbackState) of
 						{ok, CallbackState} ->
 							send(State, "250 recipient Ok\r\n"),
@@ -588,9 +590,9 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 							send(State, [Message, "\r\n"]),
 							{ok, State#state{callbackstate = CallbackState}}
 					end;
-				{_ParsedAddress, ExtraInfo} ->
+				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
-					% io:format("To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
+					?log(debug, "To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
 					send(State, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
 					{ok, State}
 			end;
@@ -611,7 +613,7 @@ handle_request({<<"DATA">>, <<>>}, #state{envelope = Envelope} = State) ->
 			{ok, State};
 		_Else ->
 			send(State, "354 enter mail, end with line containing only '.'\r\n"),
-			%io:format("switching to data read mode~n", []),
+			?log(debug, "switching to data read mode~n", []),
 
 			{ok, State#state{readmessage = true}}
 	end;
@@ -665,13 +667,13 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			% TODO: certfile and keyfile should be at configurable locations
 			case to_ssl(State, [{packet, line}, {mode, list}, {ssl_imp, new} | Options2]) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
-					%io:format("SSL negotiation sucessful~n"),
+					?log(debug, "SSL negotiation sucessful~n"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
 					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
-				{error, _Reason} ->
-					%io:format("SSL handshake failed : ~p~n", [Reason]),
+				{error, Reason} ->
+					?log(info, "SSL handshake failed : ~p~n", [Reason]),
 					send(State, "454 TLS negotiation failed\r\n"),
 					{ok, State}
 			end;
@@ -754,7 +756,7 @@ parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
 
 -spec has_extension(Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false'.
 has_extension(Extensions, Ext) ->
-	%io:format("extensions ~p~n", [Extensions]),
+	?log(debug, "extensions ~p~n", [Extensions]),
 	case proplists:get_value(Ext, Extensions) of
 		undefined ->
 			false;
@@ -792,8 +794,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 
 %% @doc a tight loop to receive the message body
 receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize =/= 'infinity', Size > MaxSize ->
-	error_logger:info_msg("SMTP message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
-	% io:format("message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
+	?log(info, "SMTP message body size ~B exceeded maximum allowed ~B~n", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
 receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 	case Transport:recv(Socket, RecvSize, 1000) of
@@ -804,15 +805,15 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 				FixedPacket ->
 					case binstr:strpos(FixedPacket, <<"\r\n.\r\n">>) of
 						0 ->
-							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
-							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+							?log(debug, "received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+							?log(debug, "memory usage: ~p~n", [erlang:process_info(self(), memory)]),
 							receive_data([FixedPacket | Acc], Transport, Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
-							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							?log(debug, "memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
 							Result = list_to_binary(lists:reverse([String | Acc])),
-							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							?log(debug, "memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
 							Session ! {receive_data, Result, Rest}
 					end
 			end;
@@ -824,15 +825,15 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 				FixedPacket ->
 					case binstr:strpos(FixedPacket, <<"\r\n.\r\n">>) of
 						0 ->
-							%io:format("received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
-							%io:format("memory usage: ~p~n", [erlang:process_info(self(), memory)]),
+							?log(debug, "received ~B bytes; size is now ~p~n", [RecvSize, Size + size(Packet)]),
+							?log(debug, "memory usage: ~p~n", [erlang:process_info(self(), memory)]),
 							receive_data([FixedPacket | Acc], Transport, Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
-							%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							?log(debug, "memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
 							Result = list_to_binary(lists:reverse([String | Acc])),
-							%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+							?log(debug, "memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
 							Session ! {receive_data, Result, Rest}
 					end
 			end;
@@ -843,15 +844,15 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 			case binstr:strpos(Packet, <<"\r\n.\r\n">>) of
 				0 ->
 					% uh-oh
-					%io:format("no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
+					?log(debug, "no data on socket, and no DATA terminator, retrying ~p~n", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
 					receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
-					%io:format("memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					?log(debug, "memory usage before flattening: ~p~n", [erlang:process_info(self(), memory)]),
 					Result = list_to_binary(lists:reverse([String | Acc2])),
-					%io:format("memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
+					?log(debug, "memory usage after flattening: ~p~n", [erlang:process_info(self(), memory)]),
 					Session ! {receive_data, Result, Rest}
 			end;
 		{error, timeout} ->
