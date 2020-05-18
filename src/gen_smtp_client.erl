@@ -213,7 +213,7 @@ open(Options) ->
 										_ ->
 											smtp_util:mxlookup(RelayDomain)
 									end,
-			%io:format("MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
+			trace(Options, "MX records for ~s are ~p~n", [RelayDomain, MXRecords]),
 			Hosts = case MXRecords of
 								[] ->
 									[{0, RelayDomain}]; % maybe we're supposed to relay to a host directly
