@@ -189,9 +189,12 @@ In general, following options can be specified `gen_smtp_server:options()`:
 
 Session options are:
 
-* `{certfile, file:name_all()}` - path to SSL certificate used for STARTTLS command
-* `{keyfile, file:name_all()}` - path to SSL certificate key used for STARTTLS command
 * `{allow_bare_newlines, true | false | fix | strip}` - see above
+* `{hostname, inet:hostname()}` - which hostname server should send in response
+  to `HELO` / `EHLO` commands. Default: `inet:gethostname()`.
+* `{tls_options, [ssl:server_option()]}` - options to pass to `ssl:handshake/3` (OTP-21+) / `ssl:ssl_accept/3`
+  when `STARTTLS` command is sent by the client. Only needed if `STARTTLS` extension
+  is enabled
 * `{callbackoptions, any()}` - value will be passed as 4th argument to callback module's `init/4`
 
 You can connect and test this using the `gen_smtp_client` via something like:
