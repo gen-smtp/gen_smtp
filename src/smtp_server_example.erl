@@ -7,7 +7,7 @@
 
 -export([init/4, handle_HELO/2, handle_EHLO/3, handle_MAIL/2, handle_MAIL_extension/2,
 	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4, handle_RSET/1, handle_VRFY/2,
-	handle_other/3, handle_AUTH/4, handle_STARTTLS/1, handle_info/2,
+	handle_other/3, handle_AUTH/4, handle_STARTTLS/1, handle_info/2, handle_error/3,
 	code_change/3, terminate/2]).
 -include_lib("hut/include/hut.hrl").
 -define(RELAY, true).
@@ -221,6 +221,15 @@ handle_STARTTLS(State) ->
 handle_info(_Info, State) ->
     ?log(info, "handle_info(~p, ~p)", [_Info, State]),
 	{noreply, State}.
+
+%% This optional callback is called when different kinds of protocol errors happen.
+%% Return {ok, State} to let gen_smtp decide how to act or {stop, Reason, #state{}}
+%% to stop the process with reason Reason immediately.
+-spec handle_error(gen_smtp_server_session:error_class(), any(), #state{}) ->
+		  {ok, State} | {stop, any(), State}.
+handle_error(Class, Details, State) ->
+    ?log(info, "handle_error(~p, ~p, ~p)", [Class, Details, State]),
+	{ok, State}.
 
 -spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {ok, #state{}}.
 code_change(_OldVsn, State, _Extra) ->
