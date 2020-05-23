@@ -70,8 +70,22 @@ guess_FQDN_1(Hostname, {error, nxdomain = Error}) ->
 %% @doc Compute the CRAM digest of `Key' and `Data'
 -spec compute_cram_digest(Key :: binary(), Data :: binary()) -> binary().
 compute_cram_digest(Key, Data) ->
-	Bin = crypto:hmac(md5, Key, Data),
+	Bin = hmac_md5(Key, Data),
 	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
+
+-ifdef(OTP_RELEASE).
+  -if(?OTP_RELEASE >= 23).
+    -define(CRYPTO_MAC, true).
+  -endif.
+-endif.
+
+-ifdef(CRYPTO_MAC).
+hmac_md5(Key, Data) ->
+	crypto:mac(hmac, md5, Key, Data).
+-else.
+hmac_md5(Key, Data) ->
+	crypto:hmac(md5, Key, Data).
+-endif.
 
 %% @doc Generate a seed string for CRAM.
 -spec get_cram_string(Hostname :: string()) -> string().
