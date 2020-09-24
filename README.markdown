@@ -175,7 +175,7 @@ gen_smtp_server:start(
                        {callbackoptions, [{parse, true}]}]}]).
 ```
 
-This configures the session to fix bare newlines (other options are `strip`, `true` and `false`, false rejects emails with bare newlines, true passes them through unmodified and strip removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options: `relay` - whether to relay email on, `auth` - whether to do SMTP authentication and `parse` - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own callback options.
+This configures the session to fix bare newlines (other options are `strip`, `ignore` and `false`: `false` rejects emails with bare newlines, `ignore` passes them through unmodified and `strip` removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options: `relay` - whether to relay email on, `auth` - whether to do SMTP authentication and `parse` - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own callback options.
 In general, following options can be specified `gen_smtp_server:options()`:
 
 * `{domain, string()}` - is used as server hostname (it's placed to SMTP server banner and HELO/EHLO response), default - guess from machine hostname
@@ -189,7 +189,7 @@ In general, following options can be specified `gen_smtp_server:options()`:
 
 Session options are:
 
-* `{allow_bare_newlines, true | false | fix | strip}` - see above
+* `{allow_bare_newlines, false | ignore | fix | strip}` - see above
 * `{hostname, inet:hostname()}` - which hostname server should send in response
   to `HELO` / `EHLO` commands. Default: `inet:gethostname()`.
 * `{tls_options, [ssl:server_option()]}` - options to pass to `ssl:handshake/3` (OTP-21+) / `ssl:ssl_accept/3`

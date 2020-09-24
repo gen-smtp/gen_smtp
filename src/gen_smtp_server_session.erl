@@ -97,7 +97,7 @@
 -type options() :: [  {callbackoptions, any()}
 					| {certfile, file:name_all()} % deprecated, see tls_options
 					| {keyfile, file:name_all()}  % deprecated, see tls_options
-					| {allow_bare_newlines, boolean() | fix | strip}
+					| {allow_bare_newlines, false | ignore | fix | strip}
 					| {hostname, inet:hostname()}
 					| {tls_options, [tls_opt()]}].
 
