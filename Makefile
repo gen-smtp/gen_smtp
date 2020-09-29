@@ -1,3 +1,5 @@
+MINIMAL_COVERAGE = 75
+
 compile:
 	@./rebar3 compile
 
@@ -6,7 +8,10 @@ clean:
 
 test:
 	ERL_AFLAGS="-s ssl" 
-	./rebar3 eunit
+	./rebar3 eunit -c
+
+cover:
+	./rebar3 cover --verbose --min_coverage $(MINIMAL_COVERAGE)
 
 dialyze:
 	./rebar3 as dialyzer dialyzer
