@@ -1,9 +1,8 @@
 {application,gen_smtp,
- [{description,"The extensible Erlang SMTP client and server library."},
-  {vsn,"1.0.0"},
-  {applications,[kernel,stdlib,crypto,asn1,public_key,ssl,ranch]},
-  {registered,[]},
-  {licenses,["BSD 2-clause"]},
-  {links,[{"GitHub","https://github.com/gen-smtp/gen_smtp"}]},
-  {exclude_files, ["src/smtp_rfc822_parse.erl"]}]
-}.
+             [{description,"The extensible Erlang SMTP client and server library."},
+              {vsn,"1.0.1"},
+              {applications,[kernel,stdlib,crypto,asn1,public_key,ssl,ranch]},
+              {registered,[]},
+              {licenses,["BSD 2-clause"]},
+              {links,[{"GitHub","https://github.com/gen-smtp/gen_smtp"}]},
+              {exclude_files,["src/smtp_rfc822_parse.erl"]}]}.
