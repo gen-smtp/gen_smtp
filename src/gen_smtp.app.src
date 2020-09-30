@@ -1,9 +1,9 @@
 {application,gen_smtp,
- [{description,"A generic Erlang SMTP server/client framework"},
-  {vsn,"0.15.0"},
+ [{description,"The extensible Erlang SMTP client and server library."},
+  {vsn,"1.0.0"},
   {applications,[kernel,stdlib,crypto,asn1,public_key,ssl,ranch]},
   {registered,[]},
   {licenses,["BSD 2-clause"]},
-  {links,[{"GitHub","https://github.com/Vagabond/gen_smtp"}]},
+  {links,[{"GitHub","https://github.com/gen-smtp/gen_smtp"}]},
   {exclude_files, ["src/smtp_rfc822_parse.erl"]}]
 }.
