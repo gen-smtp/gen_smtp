@@ -14,4 +14,7 @@ dialyze:
 xref:
 	./rebar3 as test xref
 
+docs:
+	./rebar3 edoc
+
 .PHONY: compile clean test dialyze

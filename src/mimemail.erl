@@ -76,9 +76,9 @@
 		{default_mime_version, ?DEFAULT_MIME_VERSION} % default mime version
 	]).
 
--type mime_type() :: binary().                  % <<"text">>
--type mime_subtype() :: binary().               % <<"plain">>
--type headers() :: [{binary(), binary()}].      % [{<<"Content-Type">>, <<"text/plain">>}]
+-type mime_type() :: binary().                  % `<<"text">>'
+-type mime_subtype() :: binary().               % `<<"plain">>'
+-type headers() :: [{binary(), binary()}].      % `[{<<"Content-Type">>, <<"text/plain">>}]'
 -type parameters() ::
         #{transfer_encoding => binary(),
           %% [{<<"charset">>, <<"utf-8">>} | {<<"boundary">>, binary()} | {<<"name">>, binary()} etc...]

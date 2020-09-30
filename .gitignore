@@ -2,6 +2,7 @@
 *.beam
 erl_crash.dump
 coverage/*
+doc/
 .DS_Store
 build
 *.xcodeproj
