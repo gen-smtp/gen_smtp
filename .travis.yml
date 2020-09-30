@@ -12,6 +12,7 @@ matrix:
       dist: trusty
 script:
   - make test
+  - make cover
   #- make xref
   - '[ "$TRAVIS_OTP_RELEASE" \< "21.0" ] || make docs'  # disable edoc on older OTP
   - make dialyze
