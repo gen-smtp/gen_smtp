@@ -39,8 +39,7 @@
 		 | {family, inet | inet6}
 		 | {port, inet:port_number()}
 		 | {protocol, 'tcp' | 'ssl'}
-		 | {ranch_opts, [ranch:opt()] | map()}	%use ranch:opts() if ranch gte16
-		 | {ranch_version, gte16 | lt16}
+		 | {ranch_opts, ranch:opts()}
 		 | {sessionoptions, gen_smtp_server_session:options()}].
 
 %% @doc Start the listener as a registered process with callback module `Module' with options `Options' linked to no process.
@@ -48,33 +47,16 @@
 			CallbackModule :: module(),
 			Options :: options()) -> {'ok', pid()} | {'error', any()}.
 start(ServerName, CallbackModule, Options) when is_list(Options) ->
-	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
+	{ok, Transport, TransportOpts, ProtocolOpts}
 		= convert_options(CallbackModule, Options),
-	ranch_start_listener(
-	  ServerName, NumAcceptors, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
-
-ranch_start_listener(ServerName, _NumAcceptors, Transport, TransportOpts, Handler,
-					 {_, gte16, _} = ProtoOpts) ->
-	ranch:start_listener(ServerName, Transport, TransportOpts, Handler, ProtoOpts);
-ranch_start_listener(ServerName, NumAcceptors, Transport, TransportOpts, Handler,
-					 {_, lt16, _} = ProtoOpts) ->
-	%% TODO: remove when ranch lt16 will be dropped
-	ranch:start_listener(ServerName, NumAcceptors, Transport, TransportOpts, Handler, ProtoOpts).
-
+	ranch:start_listener(
+	  ServerName, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
 
 child_spec(ServerName, CallbackModule, Options) ->
-	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts}
+	{ok, Transport, TransportOpts, ProtocolOpts}
 		= convert_options(CallbackModule, Options),
-	ranch_child_spec(
-	  ServerName, NumAcceptors, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
-
-ranch_child_spec(ServerName, _NumAcceptors, Transport, TransportOpts, Handler,
-				 {_, gte16, _} = ProtoOpts) ->
-	ranch:child_spec(ServerName, Transport, TransportOpts, Handler, ProtoOpts);
-ranch_child_spec(ServerName, NumAcceptors, Transport, TransportOpts, Handler,
-				 {_, lt16, _} = ProtoOpts) ->
-	%% TODO: remove when ranch lt16 will be dropped
-	ranch:child_spec(ServerName, NumAcceptors, Transport, TransportOpts, Handler, ProtoOpts).
+	ranch:child_spec(
+	  ServerName, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
 
 convert_options(CallbackModule, Options) ->
 	Transport = case proplists:get_value(protocol, Options, tcp) of
@@ -86,42 +68,18 @@ convert_options(CallbackModule, Options) ->
 	Port = proplists:get_value(port, Options, ?PORT),
 	Hostname = proplists:get_value(domain, Options, smtp_util:guess_FQDN()),
 	ProtocolOpts = proplists:get_value(sessionoptions, Options, []),
-	RanchVer = case proplists:get_value(ranch_version, Options) of
-				   undefined -> get_ranch_version();
-				   _Ver -> _Ver
-			   end,
-	ProtocolOpts1 = {CallbackModule,
-					 RanchVer,
-					 [{hostname, Hostname}
-					 | ProtocolOpts]},
-	{NumAcceptors, TransportOpts} =
-		case RanchVer of
-			gte16 ->
-				RanchOpts = proplists:get_value(ranch_opts, Options, #{}),
-				SocketOpts = maps:get(socket_opts, RanchOpts, []),
-				NumAcceptors_ = maps:get(num_acceptors, RanchOpts, 10),
-				{NumAcceptors_,
-				 RanchOpts#{
-				   socket_opts =>
-					   [{port, Port},
-						{ip, Address},
-						{keepalive, true},
-						%% binary, {active, false}, {reuseaddr, true} - ranch defaults
-						Family
-					   | SocketOpts]}};
-			lt16 ->
-				RanchOpts = proplists:get_value(ranch_opts, Options, []),
-				NumAcceptors_ = proplists:get_value(num_acceptors, RanchOpts, 10),
-				%% TODO: socket:?TCP_LISTEN_OPTIONS
-				{NumAcceptors_,
-				 [{port, Port},
-				  {ip, Address},
-				  {keepalive, true},
-				  Family
-				  %% binary, {active, false}, {reuseaddr, true} - ranch defaults
-				  | RanchOpts]}
-		end,
-	{ok, NumAcceptors, Transport, TransportOpts, ProtocolOpts1}.
+	ProtocolOpts1 = {CallbackModule, [{hostname, Hostname} | ProtocolOpts]},
+	RanchOpts = proplists:get_value(ranch_opts, Options, #{}),
+	SocketOpts = maps:get(socket_opts, RanchOpts, []),
+	TransportOpts = RanchOpts#{
+							   socket_opts =>
+								   [{port, Port},
+									{ip, Address},
+									{keepalive, true},
+									%% binary, {active, false}, {reuseaddr, true} - ranch defaults
+									Family
+								   | SocketOpts]},
+	{ok, Transport, TransportOpts, ProtocolOpts1}.
 
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
@@ -143,13 +101,3 @@ stop(Name) ->
 -spec sessions(Name :: server_name()) -> [pid()].
 sessions(Name) ->
 	ranch:procs(Name, connections).
-
-get_ranch_version() ->
-	{ranch, _, VerString} = lists:keyfind(ranch, 1, application:which_applications()),
-	Ver = lists:map(fun erlang:list_to_integer/1,
-					string:tokens(VerString, ".")),
-	if Ver < [1, 6, 0] ->
-			lt16;
-	   true ->
-			gte16
-	end.
