@@ -710,7 +710,7 @@ ssl_upgrade_test_() ->
 				end),
 			receive listening -> ok end,
 			erlang:yield(),
-			{ok, ClientSocket} = connect(tcp, "localhost", Port),
+			{ok, ClientSocket} = connect(ssl, "localhost", Port),
 			close(ClientSocket)
 		end
 		},
