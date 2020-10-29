@@ -65,7 +65,6 @@
 		module = erlang:error({undefined, module}) :: atom(),
 		transport :: module(),
 		ranch_ref :: ranch:ref(),
-		ranch_version :: lt16 | gte16,
 		envelope = undefined :: 'undefined' | #envelope{},
 		extensions = [] :: [{string(), string()}],
 		maxsize = ?DEFAULT_MAXSIZE :: pos_integer() | 'infinity',
@@ -148,23 +147,18 @@
 
 %% @doc Start a SMTP session linked to the calling process.
 %% @see start/3
--spec start_link(Ref :: ranch:ref(), _Socket :: _, Transport :: module(),
-				 {Callback :: module(), RanchVer :: lt16 | gte16, Options :: options()}) ->
-						{'ok', pid()}.
-start_link(Ref, Socket, Transport, Options) ->
-	%% TODO: drop Socket when support for ranch < 1.6 no longer needed
-	{ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Socket, Transport, Options}])}.
-
-%% Ranch 2.0 callback
 -spec start_link(Ref :: ranch:ref(), Transport :: module(),
-				 {Callback :: module(), RanchVer :: gte16, Options :: options()}) ->
+				 {Callback :: module(), Options :: options()}) ->
 						{'ok', pid()}.
 start_link(Ref, Transport, Options) ->
-	start_link(Ref, [], Transport, Options).
+	{ok, proc_lib:spawn_link(?MODULE, ranch_init, [{Ref, Transport, Options}])}.
 
-ranch_init({Ref, Sock, Transport, {Callback, RanchVer, Opts}}) ->
-	{ok, Socket} = ranch_handshake(RanchVer, Ref, Sock),
-	case init([Ref, Transport, Socket, Callback, RanchVer, Opts]) of
+start_link(Ref, _Sock, Transport, Options) ->
+	start_link(Ref, Transport, Options).
+
+ranch_init({Ref, Transport, {Callback, Opts}}) ->
+	{ok, Socket} = ranch:handshake(Ref),
+	case init([Ref, Transport, Socket, Callback, Opts]) of
 		{ok, State, Timeout} ->
 			gen_server:enter_loop(?MODULE, [], State, Timeout);
 		{stop, Reason} ->
@@ -175,7 +169,7 @@ ranch_init({Ref, Sock, Transport, {Callback, RanchVer, Opts}}) ->
 
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
-init([Ref, Transport, Socket, Module, RanchVer, Options]) ->
+init([Ref, Transport, Socket, Module, Options]) ->
 	PeerName = case Transport:peername(Socket) of
 		{ok, {IPaddr, _Port}} -> IPaddr;
 		{error, _} -> error
@@ -197,7 +191,6 @@ init([Ref, Transport, Socket, Module, RanchVer, Options]) ->
 						transport = Transport,
 						module = Module,
 						ranch_ref = Ref,
-						ranch_version = RanchVer,
 						options = Options,
 						callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
@@ -707,7 +700,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			end,
 			%% Assert that socket is in passive state
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
-			case to_ssl(State, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2]) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
+			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					?log(debug, "SSL negotiation sucessful~n"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
@@ -979,36 +972,12 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
-ranch_handshake(gte16, Ref, _Sock) ->
-	ranch:handshake(Ref);
-ranch_handshake(lt16, Ref, Sock) ->
-	ok = ranch:accept_ack(Ref),
-	{ok, Sock}.
-
 send(#state{transport = Transport, socket = Sock}, Data) ->
     %% TODO: handle send errors
     Transport:send(Sock, Data).
 
 setopts(#state{transport = Transport, socket = Sock}, Opts) ->
     ok = Transport:setopts(Sock, Opts).
-
-to_ssl(#state{ranch_version = gte16, socket = Socket}, Opts) ->
-	ranch_ssl:handshake(Socket, Opts, 5000);
-to_ssl(#state{ranch_version = lt16, socket = Socket}, Opts) ->
-	ssl_handshake(Socket, Opts, 5000).
-
--spec ssl_handshake(gen_tcp:socket() | ssl:sslsocket(),
-                    [tls_opt()],
-                    timeout()) ->
-                           {ok, ssl:sslsocket()} |
-                           {error, any()}.
--ifdef(OTP_RELEASE).
-ssl_handshake(Socket, Opts, Timeout) ->
-    ssl:handshake(Socket, Opts, Timeout).
--else.
-ssl_handshake(Socket, Opts, Timeout) ->
-	ssl:ssl_accept(Socket, Opts, Timeout).
--endif.
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).

@@ -20,8 +20,7 @@ Also included is a MIME encoder/decoder, sorta according to RFC204{5,6,7}.
 
 IPv6 is also supported (at least serverside).
 
-SMTP server uses ranch as socket acceptor. It can use Ranch 1.3 to be compatible
-with cowboy 1.x, but Ranch 1.6+ is preferred.
+SMTP server uses ranch as socket acceptor. It can use Ranch 1.6+, as well as 2.x.
 
 I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
 copies of all my email for several months and its been able to handle over 100
@@ -183,8 +182,7 @@ In general, following options can be specified `gen_smtp_server:options()`:
 * `{port, inet:port_number()}` - port to listen on, default `2525`
 * `{family, inet | inet6}` - IP address type (IPv4/IPv6), default `inet`
 * `{protocol, tcp | ssl}` - listen in tcp or ssl mode, default `tcp`
-* `{ranch_opts, [ranch:opt()] | ranch:opts()}` - format depends on ranch version. Consult Ranch documentation. List form used for Ranch<1.6 and map for Ranch>=1.6
-* `{ranch_version, gte16 | lt16}` - is Ranch version before 1.6 or not, default - autodetected
+* `{ranch_opts, ranch:opts()}` - format depends on ranch version. Consult Ranch documentation.
 * `{sessionoptions, gen_smtp_server_session:options()}` - see below
 
 Session options are:
