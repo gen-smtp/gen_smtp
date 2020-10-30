@@ -107,7 +107,9 @@
 					 | data_rejected
 					 | timeout
 					 | out_of_order
-					 | ssl_handshake_error.
+					 | ssl_handshake_error
+					 | send_error
+					 | setopts_error.
 
 -callback init(Hostname :: inet:hostname(), _SessionCount,
 			   Peername :: inet:ip_address(), Opts :: any()) ->
@@ -972,15 +974,19 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
-send(#state{transport = Transport, socket = Sock}, Data) ->
-    %% TODO: handle send errors
-    Transport:send(Sock, Data).
+send(#state{transport = Transport, socket = Sock} = St, Data) ->
+    case Transport:send(Sock, Data) of
+		ok -> ok;
+		{error, Err} ->
+			St1 = handle_error(send_error, Err, St),
+			throw({stop, {send_error, Err}, St1})
+	end.
 
 setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
     case Transport:setopts(Sock, Opts) of
 		ok -> ok;
 		{error, Err} ->
-			St1 = handle_error(setopts, Err, St),
+			St1 = handle_error(setopts_error, Err, St),
 			throw({stop, {setopts_error, Err}, St1})
 	end.
 
