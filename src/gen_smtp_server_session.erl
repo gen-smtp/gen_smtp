@@ -831,7 +831,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 					{ok, NewState}
 				end;
 		false ->
-			error_logger:error_msg("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
+			?log(warning, "Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
 			send(State, "535 authentication failed (#5.7.1)\r\n"),
 			{ok, NewState}
 	end.
@@ -908,7 +908,7 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 		{error, timeout} ->
 			receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
-			error_logger:error_msg("SMTP receive error: ~p~n", [Reason]),
+			?log(warning, "SMTP receive error: ~p", [Reason]),
 			exit(receive_error)
 	end.
 
