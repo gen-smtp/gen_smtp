@@ -77,7 +77,6 @@
 	}
 ).
 
-%% OTP-18: ssl:ssloption() (not exported)
 %% OTP-19: ssl:ssl_option()
 %% OTP-20: ssl:ssl_option()
 %% OTP-21: ssl:tls_server_option()
@@ -86,11 +85,7 @@
 -ifdef(OTP_RELEASE).
 -type tls_opt() :: ssl:tls_server_option().
 -else.
- -ifdef(OTP_18).
- -type tls_opt() :: tuple() | atom().
- -else.
- -type tls_opt() :: ssl:ssl_option().
- -endif.
+-type tls_opt() :: ssl:ssl_option().
 -endif.
 
 -type options() :: [  {callbackoptions, any()}
@@ -2411,14 +2406,9 @@ strict_sni(Hosts) ->
 	 end
 	}.
 
--ifdef(OTP_18).
-verify_cert_hostname(_, _) ->
-	noop.
--else.
 verify_cert_hostname(BinCert, Host) ->
 	DecCert = public_key:pkix_decode_cert(BinCert, otp),
 	?assert(public_key:pkix_verify_hostname(DecCert, [{dns_id, Host}])).
--endif.
 
 stray_newline_test_() ->
 	[
