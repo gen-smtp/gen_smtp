@@ -976,8 +976,13 @@ send(#state{transport = Transport, socket = Sock}, Data) ->
     %% TODO: handle send errors
     Transport:send(Sock, Data).
 
-setopts(#state{transport = Transport, socket = Sock}, Opts) ->
-    ok = Transport:setopts(Sock, Opts).
+setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
+    case Transport:setopts(Sock, Opts) of
+		ok -> ok;
+		{error, Err} ->
+			St1 = handle_error(setopts, Err, St),
+			throw({stop, {setopts_error, Err}, St1})
+	end.
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
