@@ -109,7 +109,8 @@
 					 | out_of_order
 					 | ssl_handshake_error
 					 | send_error
-					 | setopts_error.
+					 | setopts_error
+					 | data_receive_error.
 
 -callback init(Hostname :: inet:hostname(), _SessionCount,
 			   Peername :: inet:ip_address(), Opts :: any()) ->
@@ -227,6 +228,9 @@ handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = 
 	setopts(State, [{active, once}]),
 	State1 = handle_error(data_rejected, bare_neline, State),
 	{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+handle_info({receive_data, {error, Other}}, #state{readmessage = true} = State) ->
+	State1 = handle_error(data_receive_error, Other, State),
+	{stop, {error_receiving_data, Other}, State1};
 handle_info({receive_data, Body, Rest},
 			#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
 				   callbackstate = OldCallbackState, maxsize=MaxSize} = State) ->
@@ -736,6 +740,7 @@ handle_request({Verb, Args}, #state{module = Module, callbackstate = OldCallback
         end,
 	{ok, State#state{callbackstate = CallbackState}}.
 
+-spec handle_error(error_class(), any(), #state{}) -> #state{}.
 handle_error(Kind, Details, #state{module=Module, callbackstate = OldCallbackState} = State) ->
 	case erlang:function_exported(Module, handle_error, 3) of
 		true ->
@@ -911,7 +916,7 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 			receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
 			?log(warning, "SMTP receive error: ~p", [Reason]),
-			exit(receive_error)
+			Session ! {receive_data, {error, Reason}}
 	end.
 
 check_for_bare_crlf(Bin, Offset) ->
