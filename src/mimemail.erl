@@ -899,9 +899,7 @@ encode_quoted_printable(Body, Acc, L) when L >= 75 ->
 			encode_quoted_printable(Body, [$\n, $\r, $= | Acc], 0);
 		SIndex when (L - 75) < SIndex ->
 			% okay, we can safely stick some whitespace in
-			Prefix = string:substr(Acc, 1, SIndex-1),
-			Suffix = string:substr(Acc, SIndex),
-			NewAcc = lists:concat([Prefix, "\n\r=", Suffix]),
+			NewAcc = insert_soft_newline(Acc, SIndex - 1),
 			encode_quoted_printable(Body, NewAcc, 0);
 		_ ->
 			% worst case, we're over 75 characters on the line
@@ -912,9 +910,7 @@ encode_quoted_printable(Body, Acc, L) when L >= 75 ->
 
 			% TODO - fix this to be less stupid
 			I = 3, % assume we're at most 3 over our cutoff
-			Prefix = string:substr(Acc, 1, I),
-			Suffix = string:substr(Acc, I+1),
-			NewAcc = lists:concat([Prefix, "\n\r=", Suffix]),
+			NewAcc = insert_soft_newline(Acc, I),
 			encode_quoted_printable(Body, NewAcc, 0)
 	end;
 encode_quoted_printable(<<>>, Acc, _L) ->
@@ -935,6 +931,11 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) when H == $\s; H == $\t ->
 encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
 	[A, B] = lists:flatten(io_lib:format("~2.16.0B", [H])),
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
+
+insert_soft_newline([H | T], AfterPos) when AfterPos > 0 ->
+	[H | insert_soft_newline(T, AfterPos - 1)];
+insert_soft_newline(Str, 0) ->
+	[$\n, $\r, $= | Str].
 
 get_default_encoding() ->
 	<<"utf-8//IGNORE">>.
