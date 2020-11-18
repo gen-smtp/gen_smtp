@@ -102,7 +102,10 @@
 					 | data_rejected
 					 | timeout
 					 | out_of_order
-					 | ssl_handshake_error.
+					 | ssl_handshake_error
+					 | send_error
+					 | setopts_error
+					 | data_receive_error.
 
 -callback init(Hostname :: inet:hostname(), _SessionCount,
 			   Peername :: inet:ip_address(), Opts :: any()) ->
@@ -220,6 +223,9 @@ handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = 
 	setopts(State, [{active, once}]),
 	State1 = handle_error(data_rejected, bare_neline, State),
 	{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+handle_info({receive_data, {error, Other}}, #state{readmessage = true} = State) ->
+	State1 = handle_error(data_receive_error, Other, State),
+	{stop, {error_receiving_data, Other}, State1};
 handle_info({receive_data, Body, Rest},
 			#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
 				   callbackstate = OldCallbackState, maxsize=MaxSize} = State) ->
@@ -729,6 +735,7 @@ handle_request({Verb, Args}, #state{module = Module, callbackstate = OldCallback
         end,
 	{ok, State#state{callbackstate = CallbackState}}.
 
+-spec handle_error(error_class(), any(), #state{}) -> #state{}.
 handle_error(Kind, Details, #state{module=Module, callbackstate = OldCallbackState} = State) ->
 	case erlang:function_exported(Module, handle_error, 3) of
 		true ->
@@ -826,7 +833,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 					{ok, NewState}
 				end;
 		false ->
-			error_logger:error_msg("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
+			?log(warning, "Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
 			send(State, "535 authentication failed (#5.7.1)\r\n"),
 			{ok, NewState}
 	end.
@@ -903,8 +910,8 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 		{error, timeout} ->
 			receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
-			error_logger:error_msg("SMTP receive error: ~p~n", [Reason]),
-			exit(receive_error)
+			?log(warning, "SMTP receive error: ~p", [Reason]),
+			Session ! {receive_data, {error, Reason}}
 	end.
 
 check_for_bare_crlf(Bin, Offset) ->
@@ -967,12 +974,21 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
-send(#state{transport = Transport, socket = Sock}, Data) ->
-    %% TODO: handle send errors
-    Transport:send(Sock, Data).
+send(#state{transport = Transport, socket = Sock} = St, Data) ->
+    case Transport:send(Sock, Data) of
+		ok -> ok;
+		{error, Err} ->
+			St1 = handle_error(send_error, Err, St),
+			throw({stop, {send_error, Err}, St1})
+	end.
 
-setopts(#state{transport = Transport, socket = Sock}, Opts) ->
-    ok = Transport:setopts(Sock, Opts).
+setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
+    case Transport:setopts(Sock, Opts) of
+		ok -> ok;
+		{error, Err} ->
+			St1 = handle_error(setopts_error, Err, St),
+			throw({stop, {setopts_error, Err}, St1})
+	end.
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
