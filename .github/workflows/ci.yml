@@ -1,5 +1,5 @@
 ---
-name: CI for gen_smtp
+name: build
 on:
   push:
     branches:
