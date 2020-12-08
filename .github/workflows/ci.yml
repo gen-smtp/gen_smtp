@@ -19,5 +19,5 @@ jobs:
       - uses: actions/checkout@v2
       - run: make test
       - run: make cover
-      - run: [[ ${{matrix.os}} < 21 ]] || make docs
+      - run: [[ ${{matrix.otp_vsn}} < 21 ]] || make docs
       - run: make dialyze
