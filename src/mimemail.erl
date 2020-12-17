@@ -824,9 +824,10 @@ encode_parameters(Parameters) ->
 	[encode_parameter(Parameter) || Parameter <- Parameters].
 
 encode_parameter({X, Y}) ->
-	case escape_tspecial(Y, false, <<>>) of
+	YEnc = iolist_to_binary(rfc2047_utf8_encode(Y)),
+	case escape_tspecial(YEnc, false, <<>>) of
 		{true, Special} -> [X, $=, $", Special, $"];
-		false -> [X, $=, Y]
+		false -> [X, $=, YEnc]
 	end.
 
 % See also: http://www.ietf.org/rfc/rfc2045.txt section 5.1
