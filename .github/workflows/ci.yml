@@ -1,4 +1,5 @@
----
+# Build gen-smtp on various OTP versions
+
 name: build
 on:
   push:
@@ -11,15 +12,24 @@ jobs:
   ci:
     name: Run checks and tests over ${{matrix.otp_vsn}} and ${{matrix.os}}
     runs-on: ${{matrix.os}}
-    container:
-      image: erlang:${{matrix.otp_vsn}}
+
     strategy:
       matrix:
         otp_vsn: [19.3, 20.3, 21.3, 22.3, 23.1]
         os: [ubuntu-latest]
+
+    container:
+      image: erlang:${{matrix.otp_vsn}}
+
     steps:
       - uses: actions/checkout@v2
-      - run: make test
-      - run: make cover
-      - run: [[ ${{matrix.otp_vsn}} < 21 ]] || make docs
-      - run: make dialyze
+      - name: xref
+        run: make xref
+      - name: Test
+        run: make test
+      - name: Cover
+        run: make cover
+      - name: Documenntation
+        run: make docs
+      - name: Dialyze
+        run: make dialyze
