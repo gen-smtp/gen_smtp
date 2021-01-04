@@ -1,7 +1,7 @@
 # gen_smtp
 
 [![Hex pm](http://img.shields.io/hexpm/v/gen_smtp.svg?style=flat)](https://hex.pm/packages/gen_smtp)
-[![Build Status](https://travis-ci.org/gen-smtp/gen_smtp.svg?branch=master)](https://travis-ci.org/gen-smtp/gen_smtp)
+[![Build Status](https://github.com/gen-smtp/gen_smtp/workflows/build/badge.svg)](https://github.com/gen-smtp/gen_smtp)
 
 The Erlang SMTP client and server library.
 
