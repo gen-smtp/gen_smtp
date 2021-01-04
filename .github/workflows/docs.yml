@@ -1,6 +1,6 @@
-# Build gen-smtp on various OTP versions
+# Build gen-smtp edoc on various OTP versions
 
-name: CI
+name: Documentation
 on:
   push:
     branches:
@@ -15,7 +15,7 @@ jobs:
 
     strategy:
       matrix:
-        otp_vsn: [19.3, 20.3, 21.3, 22.3, 23.1]
+        otp_vsn: [21.3, 22.3, 23.1]
         os: [ubuntu-latest]
 
     container:
@@ -23,11 +23,5 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-      - name: xref
-        run: make xref
-      - name: Test
-        run: make test
-      - name: Cover
-        run: make cover
-      - name: Dialyze
-        run: make dialyze
+      - name: Documentation
+        run: make docs
