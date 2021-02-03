@@ -1,6 +1,6 @@
 {application,gen_smtp,
              [{description,"The extensible Erlang SMTP client and server library."},
-              {vsn,"1.0.1"},
+              {vsn,"1.1.0"},
               {applications,[kernel,stdlib,crypto,asn1,public_key,ssl,ranch]},
               {registered,[]},
               {licenses,["BSD 2-clause"]},
