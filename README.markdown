@@ -21,7 +21,7 @@ Also included is a MIME encoder/decoder, sorta according to RFC204{5,6,7}.
 
 IPv6 is also supported (at least serverside).
 
-SMTP server uses ranch as socket acceptor. It can use Ranch 1.6+, as well as 2.x.
+SMTP server uses ranch as socket acceptor. It can use Ranch 1.7+, as well as 2.x.
 
 I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
 copies of all my email for several months and its been able to handle over 100
