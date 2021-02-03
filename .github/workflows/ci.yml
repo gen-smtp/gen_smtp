@@ -15,7 +15,7 @@ jobs:
 
     strategy:
       matrix:
-        otp_vsn: [19.3, 20.3, 21.3, 22.3, 23.1]
+        otp_vsn: [20.3, 21.3, 22.3, 23.1]
         os: [ubuntu-latest]
 
     container:
