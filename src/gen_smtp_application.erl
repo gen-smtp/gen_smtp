@@ -9,7 +9,7 @@ ensure_all_started(App) ->
 
 -spec start_ok(atom(), ok | {error, term()}) -> ok | {error, {term(), atom()}}.
 start_ok(_App, ok) -> ok;
-start_ok(_App, {error, {already_started, _App}}) -> ok;
+start_ok(App, {error, {already_started, App}}) -> ok;
 start_ok(App, {error, {not_started, Dep}}) ->
     ok = ensure_all_started(Dep),
     ensure_all_started(App);
