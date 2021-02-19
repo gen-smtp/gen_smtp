@@ -1043,7 +1043,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "STARTTLS\r\n"}, smtp_socket:recv(X, 0, 1000)),
-								gen_smtp_application:ensure_all_started(gen_smtp),
+								application:ensure_all_started(gen_smtp),
 								smtp_socket:send(X, "220 ok\r\n"),
 								{ok, Y} = smtp_socket:to_ssl_server(X, [{certfile, "test/fixtures/mx1.example.com-server.crt"},
 																		{keyfile, "test/fixtures/mx1.example.com-server.key"}], 5000),
@@ -1073,7 +1073,7 @@ session_start_test_() ->
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
 								smtp_socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "STARTTLS\r\n"}, smtp_socket:recv(X, 0, 1000)),
-								gen_smtp_application:ensure_all_started(gen_smtp),
+								application:ensure_all_started(gen_smtp),
 								smtp_socket:send(X, "220 ok\r\n"),
 								{ok, Y} = smtp_socket:to_ssl_server(X, [{certfile, "test/fixtures/mx1.example.com-server.crt"},
 																		{keyfile, "test/fixtures/mx1.example.com-server.key"}], 5000),
@@ -1263,7 +1263,7 @@ session_start_test_() ->
 			fun({_ListenSock}) ->
 					{"Connecting to a SSL socket directly should work",
 						fun() ->
-								gen_smtp_application:ensure_all_started(gen_smtp),
+								application:ensure_all_started(gen_smtp),
 								{ok, ListenSock} = smtp_socket:listen(ssl, 9877, [{certfile, "test/fixtures/mx1.example.com-server.crt"},
 																				  {keyfile, "test/fixtures/mx1.example.com-server.key"}]),
 								Options = [{relay, <<"localhost">>}, {port, 9877}, {hostname, <<"testing">>}, {ssl, true}],
