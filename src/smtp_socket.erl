@@ -391,7 +391,7 @@ connect_test_() ->
 			Self = self(),
 			Port = ?TEST_PORT + 2,
 			Ref = make_ref(),
-	        gen_smtp_application:ensure_all_started(gen_smtp),
+	        application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/mx1.example.com-server.key"},
 																{certfile, "test/fixtures/mx1.example.com-server.crt"}]),
@@ -435,7 +435,7 @@ evented_connections_test_() ->
 		{"current process receives connection to SSL listen sockets",
 		fun() ->
 			Port = ?TEST_PORT + 4,
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/mx1.example.com-server.key"},
 													{certfile, "test/fixtures/mx1.example.com-server.crt"}]),
 			begin_inet_async(ListenSocket),
@@ -463,7 +463,7 @@ evented_connections_test_() ->
 		{"current TCP listener receives SSL connection",
 		fun() ->
 			Port = ?TEST_PORT + 5,
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(tcp, Port),
 			begin_inet_async(ListenSocket),
 			spawn(fun()-> connect(ssl, "localhost", Port) end),
@@ -502,7 +502,7 @@ accept_test_() ->
 		{"Accept via ssl",
 		fun() ->
 			Port = ?TEST_PORT + 7,
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/mx1.example.com-server.key"},
 													{certfile, "test/fixtures/mx1.example.com-server.crt"}]),
 			?assertMatch([sslsocket|_], tuple_to_list(ListenSocket)),
@@ -524,7 +524,7 @@ type_test_() ->
 		},
 		{"an ssl socket returns 'ssl'",
 		fun() ->
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			{ok, ListenSocket} = listen(ssl, ?TEST_PORT + 9, [{keyfile, "test/fixtures/mx1.example.com-server.key"},
 															  {certfile, "test/fixtures/mx1.example.com-server.crt"}]),
 			?assertMatch(ssl, type(ListenSocket)),
@@ -672,7 +672,7 @@ ssl_upgrade_test_() ->
 		fun() ->
 			Self = self(),
 			Port = ?TEST_PORT + 12,
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 			        {ok, ListenSocket} = listen(tcp, Port),
 			        Self ! listening,
@@ -699,7 +699,7 @@ ssl_upgrade_test_() ->
 		fun() ->
 			Self = self(),
 			Port = ?TEST_PORT + 13,
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/mx1.example.com-server.key"},
 																{certfile, "test/fixtures/mx1.example.com-server.crt"}]),
@@ -718,7 +718,7 @@ ssl_upgrade_test_() ->
 		fun() ->
 			Self = self(),
 			Port = ?TEST_PORT + 14,
-			gen_smtp_application:ensure_all_started(gen_smtp),
+			application:ensure_all_started(gen_smtp),
 			spawn(fun() ->
 						{ok, ListenSocket} = listen(ssl, Port, [{keyfile, "test/fixtures/mx1.example.com-server.key"},
 																{certfile, "test/fixtures/mx1.example.com-server.crt"}]),

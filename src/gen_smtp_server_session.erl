@@ -1092,7 +1092,7 @@ smtp_session_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				gen_smtp_application:ensure_all_started(gen_smtp),
+				application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{domain, "localhost"},
@@ -1420,7 +1420,7 @@ smtp_session_auth_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				gen_smtp_application:ensure_all_started(gen_smtp),
+				application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
@@ -1922,7 +1922,7 @@ smtp_session_tls_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				gen_smtp_application:ensure_all_started(gen_smtp),
+				application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
@@ -2355,7 +2355,7 @@ smtp_session_tls_sni_test_() ->
 					   {certfile, "test/fixtures/mx2.example.com-server.crt"},
 					   {cacertfile, "test/fixtures/root.crt"}]}
 					],
-				gen_smtp_application:ensure_all_started(gen_smtp),
+				application:ensure_all_started(gen_smtp),
 				{ok, _} = gen_smtp_server:start(
 							smtp_server_example,
 							[{sessionoptions,
@@ -2482,7 +2482,7 @@ smtp_session_maxsize_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				gen_smtp_application:ensure_all_started(gen_smtp),
+				application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
@@ -2669,7 +2669,7 @@ smtp_session_nomaxsize_test_() ->
 	{foreach,
 		local,
 		fun() ->
-				gen_smtp_application:ensure_all_started(gen_smtp),
+				application:ensure_all_started(gen_smtp),
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
