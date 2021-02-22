@@ -10,6 +10,9 @@ test:
 	ERL_AFLAGS="-s ssl" 
 	./rebar3 eunit -c
 
+proper:
+	./rebar3 proper -c
+
 cover:
 	./rebar3 cover --verbose --min_coverage $(MINIMAL_COVERAGE)
 
