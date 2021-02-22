@@ -174,7 +174,7 @@ init([Ref, Transport, Socket, Module, Options]) ->
 	end,
 	case PeerName =/= error
 		andalso Module:init(hostname(Options),
-							proplists:get_value(sessioncount, Options, 0), %FIXME
+							size(gen_smtp_server:sessions(Ref)),
 							PeerName,
 							proplists:get_value(callbackoptions, Options, []))
 	of
