@@ -970,12 +970,12 @@ rfc2047_utf8_encode(T, Acc, WordLen, Char) when WordLen + length(Char) > 73 ->
 rfc2047_utf8_encode([], Acc, _WordLen, Char) ->
     lists:reverse("=?" ++ Char ++ Acc);
 
-%% ASCII characters dont encode except space, ?, _, =, and .
+%% Printable ASCII characters dont encode except space, ?, _, = and .
 rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32
     andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
     rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), [C]);
 %% Encode all other ASCII
-rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C >= 32 andalso C < 127 ->
+rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 0 andalso C =< 192 ->
     rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), encode_byte(C));
 %% First byte of UTF-8 sequence
 %% ensure that encoded 2-4 byte UTF-8 characters keept in one line
