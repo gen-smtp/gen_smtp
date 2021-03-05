@@ -41,7 +41,7 @@ thousand emails without leaking any RAM or crashing the erlang virtual machine.
 + gen_smtp is used as both the SMTP server and SMTP client for [Zotonic](http://zotonic.com)
 + [Chicago Boss](http://www.chicagoboss.org/) uses gen_smtp for its mail API.
 + [Gmailbox](https://www.gmailbox.org) uses gen_smtp to provide a free email forwarding service.
-+ +[JOSHMARTIN GmbH](https://joshmartin.ch/) uses gen_smtp to send emails in [Hygeia](https://covid19-tracing.ch/) to send emails for contact tracing of SARS-CoV-2.
++ [JOSHMARTIN GmbH](https://joshmartin.ch/) uses gen_smtp to send emails in [Hygeia](https://covid19-tracing.ch/) to send emails for contact tracing of SARS-CoV-2.
 + many libraries [depend on gen_smtp](https://hex.pm/packages/gen_smtp) according to hex.pm
 
 If you'd like to share your usage of gen_smtp, please submit a PR to this readme.
