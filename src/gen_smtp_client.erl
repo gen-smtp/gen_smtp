@@ -658,7 +658,7 @@ do_STARTTLS(Socket, Options) ->
 	smtp_socket:send(Socket, "STARTTLS\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"220", _Rest/binary>>} ->
-			case catch smtp_socket:to_ssl_client(Socket, proplists:get_value(tls_options, Options, []), 5000) of
+			case catch smtp_socket:to_ssl_client(Socket, [binary | proplists:get_value(tls_options, Options, [])], 5000) of
 				{ok, NewSocket} ->
 					%NewSocket;
 					{ok, Extensions} = try_EHLO(NewSocket, Options),
@@ -1287,6 +1287,19 @@ session_start_test_() ->
 								smtp_socket:close(ListenSock),
 								ok
 						end
+					},
+
+					{"Erlang 23.2.7 compatibility",
+					 fun() ->
+							 Receipt = gen_smtp_client:send_blocking({<<"Info.ContactTracing@sg.ch">>, [<<"maennchen@joshmartin.ch">>], <<"test">>},
+																	 [{relay, <<"joshmartin.ch">>},
+																	  {port, 25},
+																	  {hostname, "smtp.covid19-tracing.ch"},
+																	  {retries, 10}]
+																	),
+							 ?assertMatch({error, send, _}, Receipt),
+							 ok
+					 end
 					}
 			end
 
