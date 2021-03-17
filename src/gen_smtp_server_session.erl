@@ -170,8 +170,16 @@ ranch_init({Ref, Transport, {Callback, Opts}}) ->
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
 init([Ref, Transport, Socket, Module, Options]) ->
+	Variant = variant(Options),
 	PeerName = case Transport:peername(Socket) of
-		{ok, {IPaddr, _Port}} -> IPaddr;
+		{ok, {IPaddr, Port}} ->
+			case {Variant, Port} of
+				{lmtp, 25} ->
+					?log(debug, "error: LMTP is different from SMTP, it MUST NOT be used on the TCP port 25."),
+					% Error defined in section 5 of https://tools.ietf.org/html/rfc2033
+					error;
+				_ -> IPaddr
+			end;
 		{error, _} -> error
 	end,
 	case PeerName =/= error
@@ -191,9 +199,9 @@ init([Ref, Transport, Socket, Module, Options]) ->
 						transport = Transport,
 						module = Module,
 						ranch_ref = Ref,
+						variant = Variant,
 						options = Options,
-						callbackstate = CallbackState,
-						variant = variant(Options)}, ?TIMEOUT};
+						callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
 			Transport:send(Socket, [Message, "\r\n"]),
 			Transport:close(Socket),
