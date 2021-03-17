@@ -73,6 +73,7 @@
 		readmessage = false :: boolean(),
 		tls = false :: boolean(),
 		callbackstate :: any(),
+		variant = smtp :: 'smtp' | 'lmtp',
 		options = [] :: [tuple()]
 	}
 ).
@@ -93,6 +94,7 @@
 					| {keyfile, file:name_all()}  % deprecated, see tls_options
 					| {allow_bare_newlines, false | ignore | fix | strip}
 					| {hostname, inet:hostname()}
+					| {variant, smtp | lmtp}
 					| {tls_options, [tls_opt()]}].
 
 -type(state() :: any()).
@@ -190,7 +192,8 @@ init([Ref, Transport, Socket, Module, Options]) ->
 						module = Module,
 						ranch_ref = Ref,
 						options = Options,
-						callbackstate = CallbackState}, ?TIMEOUT};
+						callbackstate = CallbackState,
+						variant = variant(Options)}, ?TIMEOUT};
 		{stop, Reason, Message} ->
 			Transport:send(Socket, [Message, "\r\n"]),
 			Transport:close(Socket),
@@ -349,8 +352,11 @@ parse_request(Packet) ->
 handle_request({<<>>, _Any}, State) ->
 	send(State, "500 Error: bad syntax\r\n"),
 	{ok, State};
-handle_request({<<"HELO">>, <<>>}, State) ->
+handle_request({<<"HELO">>, <<>>}, #state{variant = smtp} = State) ->
 	send(State, "501 Syntax: HELO hostname\r\n"),
+	{ok, State};
+handle_request({<<"LHLO">>, _Any}, #state{variant = smtp} = State) ->
+	send(State, "500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n"),
 	{ok, State};
 handle_request({<<"HELO">>, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
@@ -369,11 +375,19 @@ handle_request({<<"HELO">>, Hostname},
 			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
-handle_request({<<"EHLO">>, <<>>}, State) ->
+handle_request({<<"EHLO">>, <<>>}, #state{variant = smtp} = State) ->
 	send(State, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({<<"EHLO">>, Hostname},
-			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+handle_request({<<"LHLO">>, <<>>}, #state{variant = lmtp} = State) ->
+	send(State, "501 Syntax: LHLO hostname\r\n"),
+	{ok, State};
+handle_request({Msg, _Any}, #state{variant = lmtp} = State)
+			   when Msg == <<"HELO">> orelse Msg == <<"EHLO">> ->
+	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
+	{ok, State};
+handle_request({Msg, Hostname},
+			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State)
+			   when Msg == <<"EHLO">> orelse Msg == <<"LHLO">> ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, [], CallbackState} ->
 			Data = ["250 ", hostname(Options), "\r\n"],
@@ -416,8 +430,8 @@ handle_request({<<"EHLO">>, Hostname},
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
-handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: send EHLO first\r\n"),
+handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined, variant = Variant} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Variant, "EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = Envelope, options = Options} = State) ->
@@ -512,8 +526,8 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	Password = base64:decode(Password64),
 	try_auth('login', Username, Password, State);
 
-handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: send HELO/EHLO first\r\n"),
+handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, variant = Variant} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Variant, "HELO/EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"MAIL">>, Args},
@@ -631,8 +645,8 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 			send(State, "501 Syntax: RCPT TO:<address>\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: send HELO/EHLO first\r\n"),
+handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined, variant = Variant} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Variant, "HELO/EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
@@ -992,6 +1006,15 @@ setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
 
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
+
+variant(Opts) ->
+    proplists:get_value(variant, Opts, smtp).
+
+lhlo_if_lmtp(Variant, Fallback) ->
+	case Variant == lmtp of
+	    true -> "LHLO";
+	    false -> Fallback
+	end.
 
 -ifdef(TEST).
 parse_encoded_address_test_() ->
