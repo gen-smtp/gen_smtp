@@ -358,6 +358,10 @@ handle_request({<<"HELO">>, <<>>}, #state{variant = smtp} = State) ->
 handle_request({<<"LHLO">>, _Any}, #state{variant = smtp} = State) ->
 	send(State, "500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n"),
 	{ok, State};
+handle_request({Msg, _Any}, #state{variant = lmtp} = State)
+			   when Msg == <<"HELO">> orelse Msg == <<"EHLO">> ->
+	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
+	{ok, State};
 handle_request({<<"HELO">>, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
@@ -380,10 +384,6 @@ handle_request({<<"EHLO">>, <<>>}, #state{variant = smtp} = State) ->
 	{ok, State};
 handle_request({<<"LHLO">>, <<>>}, #state{variant = lmtp} = State) ->
 	send(State, "501 Syntax: LHLO hostname\r\n"),
-	{ok, State};
-handle_request({Msg, _Any}, #state{variant = lmtp} = State)
-			   when Msg == <<"HELO">> orelse Msg == <<"EHLO">> ->
-	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
 	{ok, State};
 handle_request({Msg, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State)
@@ -1091,6 +1091,7 @@ parse_request_test_() ->
 			fun() ->
 					?assertEqual({<<"HELO">>, <<>>}, parse_request(<<"HELO\r\n">>)),
 					?assertEqual({<<"EHLO">>, <<"hell.af.mil">>}, parse_request(<<"EHLO hell.af.mil\r\n">>)),
+					?assertEqual({<<"LHLO">>, <<"hell.af.mil">>}, parse_request(<<"LHLO hell.af.mil\r\n">>)),
 					?assertEqual({<<"MAIL">>, <<"FROM:God@heaven.af.mil">>}, parse_request(<<"MAIL FROM:God@heaven.af.mil">>))
 			end
 		},
@@ -1158,6 +1159,18 @@ smtp_session_test_() ->
 								smtp_socket:send(CSock, "HELO\r\n"),
 								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
 								?assertMatch("501 Syntax: HELO hostname\r\n",  Packet2)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"An error in response to an LHLO sent by SMTP",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n", Packet2)
 						end
 					}
 			end,
@@ -1436,6 +1449,69 @@ smtp_session_test_() ->
 					}
 			end
 
+		]
+	}.
+
+lmtp_session_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				application:ensure_all_started(gen_smtp),
+				{ok, Pid} = gen_smtp_server:start(
+							  smtp_server_example,
+							  [{sessionoptions,
+								[{variant, lmtp}]},
+							   {domain, "localhost"},
+							   {port, 9876}]),
+				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
+				smtp_socket:close(CSock),
+				timer:sleep(10)
+		end,
+		[fun({CSock, _Pid}) ->
+					{"An error in response to a HELO/EHLO sent by LMTP",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("500 Error: LMTP should replace HELO and EHLO with LHLO\r\n", Packet2),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("500 Error: LMTP should replace HELO and EHLO with LHLO\r\n", Packet3)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"LHLO response",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++_Packet3} ->
+												smtp_socket:active_once(CSock),
+												F(F);
+											{tcp, CSock, "250 "++_Packet3} ->
+												smtp_socket:active_once(CSock),
+												ok;
+											{tcp, CSock, _R} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo))
+						end
+					}
+			end
 		]
 	}.
 
