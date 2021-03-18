@@ -73,7 +73,7 @@
 		readmessage = false :: boolean(),
 		tls = false :: boolean(),
 		callbackstate :: any(),
-		variant = smtp :: 'smtp' | 'lmtp',
+		protocol = smtp :: 'smtp' | 'lmtp',
 		options = [] :: [tuple()]
 	}
 ).
@@ -94,7 +94,7 @@
 					| {keyfile, file:name_all()}  % deprecated, see tls_options
 					| {allow_bare_newlines, false | ignore | fix | strip}
 					| {hostname, inet:hostname()}
-					| {variant, smtp | lmtp}
+					| {protocol, smtp | lmtp}
 					| {tls_options, [tls_opt()]}].
 
 -type(state() :: any()).
@@ -171,10 +171,10 @@ ranch_init({Ref, Transport, {Callback, Opts}}) ->
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
 init([Ref, Transport, Socket, Module, Options]) ->
-	Variant = variant(Options),
+    Protocol = proplists:get_value(protocol, Options, smtp),
 	PeerName = case Transport:peername(Socket) of
 		{ok, {IPaddr, Port}} ->
-			case {Variant, Port} of
+			case {Protocol, Port} of
 				{lmtp, 25} ->
 					?log(debug, "error: LMTP is different from SMTP, it MUST NOT be used on the TCP port 25."),
 					% Error defined in section 5 of https://tools.ietf.org/html/rfc2033
@@ -200,7 +200,7 @@ init([Ref, Transport, Socket, Module, Options]) ->
 						transport = Transport,
 						module = Module,
 						ranch_ref = Ref,
-						variant = Variant,
+						protocol = Protocol,
 						options = Options,
 						callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
@@ -232,7 +232,7 @@ report_recipient(ok, Reference, State) ->
 	send(State, io_lib:format("250 ~s\r\n", [Reference]));
 report_recipient(error, Message, State) ->
 	send(State, [Message, "\r\n"]);
-report_recipient(multiple, _Any, #state{variant = smtp} = State) ->
+report_recipient(multiple, _Any, #state{protocol = smtp} = State) ->
 	Msg = "SMTP should report a single delivery status for all the recipients",
 	throw({stop, {handle_DATA_error, Msg}, State});
 report_recipient(multiple, [], _State) -> ok;
@@ -370,13 +370,13 @@ parse_request(Packet) ->
 handle_request({<<>>, _Any}, State) ->
 	send(State, "500 Error: bad syntax\r\n"),
 	{ok, State};
-handle_request({<<"HELO">>, <<>>}, #state{variant = smtp} = State) ->
+handle_request({<<"HELO">>, <<>>}, #state{protocol = smtp} = State) ->
 	send(State, "501 Syntax: HELO hostname\r\n"),
 	{ok, State};
-handle_request({<<"LHLO">>, _Any}, #state{variant = smtp} = State) ->
+handle_request({<<"LHLO">>, _Any}, #state{protocol = smtp} = State) ->
 	send(State, "500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n"),
 	{ok, State};
-handle_request({Msg, _Any}, #state{variant = lmtp} = State)
+handle_request({Msg, _Any}, #state{protocol = lmtp} = State)
 			   when Msg == <<"HELO">> orelse Msg == <<"EHLO">> ->
 	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
 	{ok, State};
@@ -397,10 +397,10 @@ handle_request({<<"HELO">>, Hostname},
 			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
-handle_request({<<"EHLO">>, <<>>}, #state{variant = smtp} = State) ->
+handle_request({<<"EHLO">>, <<>>}, #state{protocol = smtp} = State) ->
 	send(State, "501 Syntax: EHLO hostname\r\n"),
 	{ok, State};
-handle_request({<<"LHLO">>, <<>>}, #state{variant = lmtp} = State) ->
+handle_request({<<"LHLO">>, <<>>}, #state{protocol = lmtp} = State) ->
 	send(State, "501 Syntax: LHLO hostname\r\n"),
 	{ok, State};
 handle_request({Msg, Hostname},
@@ -448,8 +448,8 @@ handle_request({Msg, Hostname},
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
-handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined, variant = Variant} = State) ->
-	send(State, ["503 Error: send ", lhlo_if_lmtp(Variant, "EHLO"), " first\r\n"]),
+handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = Envelope, options = Options} = State) ->
@@ -544,8 +544,8 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	Password = base64:decode(Password64),
 	try_auth('login', Username, Password, State);
 
-handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, variant = Variant} = State) ->
-	send(State, ["503 Error: send ", lhlo_if_lmtp(Variant, "HELO/EHLO"), " first\r\n"]),
+handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"MAIL">>, Args},
@@ -663,8 +663,8 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 			send(State, "501 Syntax: RCPT TO:<address>\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined, variant = Variant} = State) ->
-	send(State, ["503 Error: send ", lhlo_if_lmtp(Variant, "HELO/EHLO"), " first\r\n"]),
+handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined, protocol = Protocol} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
@@ -1025,11 +1025,8 @@ setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
 
-variant(Opts) ->
-    proplists:get_value(variant, Opts, smtp).
-
-lhlo_if_lmtp(Variant, Fallback) ->
-	case Variant == lmtp of
+lhlo_if_lmtp(Protocol, Fallback) ->
+	case Protocol == lmtp of
 	    true -> "LHLO";
 	    false -> Fallback
 	end.
@@ -1478,9 +1475,9 @@ lmtp_session_test_() ->
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
-								[{variant, lmtp},
+								[{protocol, lmtp},
 								 {callbackoptions,
-								  [{variant, lmtp},
+								  [{protocol, lmtp},
 								   {size, infinity}]}
 								 ]},
 							   {domain, "localhost"},

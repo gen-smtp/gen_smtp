@@ -150,7 +150,7 @@ handle_RCPT_extension(Extension, _State) ->
 queue_or_deliver(From, To, Data, Reference, State) ->
 	% At this point, if we return ok, we've accepted responsibility for the emaill
 	Length = byte_size(Data),
-	case proplists:get_value(variant, State#state.options, smtp) of
+	case proplists:get_value(protocol, State#state.options, smtp) of
 		smtp ->
 			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, Length]),
 			% ... should actually handle the email,
