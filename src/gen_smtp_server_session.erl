@@ -1478,7 +1478,11 @@ lmtp_session_test_() ->
 				{ok, Pid} = gen_smtp_server:start(
 							  smtp_server_example,
 							  [{sessionoptions,
-								[{variant, lmtp}]},
+								[{variant, lmtp},
+								 {callbackoptions,
+								  [{variant, lmtp},
+								   {size, infinity}]}
+								 ]},
 							   {domain, "localhost"},
 							   {port, 9876}]),
 				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
@@ -1527,6 +1531,67 @@ lmtp_session_test_() ->
 										end
 								end,
 								?assertEqual(ok, Foo(Foo))
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"DATA with multiple RCPT TO",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE"++_ = Data} ->
+												{error, ["received: ", Data]};
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, Data} ->
+												smtp_socket:active_once(CSock),
+												{error, ["received: ", Data]}
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3),
+								smtp_socket:send(CSock, "RCPT TO:<test1@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet4),
+								smtp_socket:send(CSock, "RCPT TO:<test2@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet5),
+								smtp_socket:send(CSock, "RCPT TO:<test3@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet6),
+
+								smtp_socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("354 " ++ _, Packet7),
+
+								smtp_socket:send(CSock, "Subject: tls message\r\n"),
+								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								smtp_socket:send(CSock, "\r\n"),
+								smtp_socket:send(CSock, "message body"),
+								smtp_socket:send(CSock, "\r\n.\r\n"),
+								% We sent 3 RCPT TO, so we should have 3 delivery reports
+								AssertDelivery = fun(_) ->
+										receive {tcp, CSock, Packet8} -> smtp_socket:active_once(CSock) end,
+										?assertMatch("250 "++_, Packet8)
+									end,
+								lists:foreach(AssertDelivery, [1, 2, 3]),
+								smtp_socket:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet9} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("221 " ++ _, Packet9)
 						end
 					}
 			end
