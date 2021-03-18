@@ -14,8 +14,7 @@
 
 -record(state,
 	{
-		options = [] :: list(),
-		recipients = [] :: [string()]
+		options = [] :: list()
 	}).
 
 -type(error_message() :: {'error', string(), #state{}}).
@@ -125,10 +124,10 @@ handle_MAIL_extension(Extension, _State) ->
 -spec handle_RCPT(To :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
 handle_RCPT(<<"nobody@example.com">>, State) ->
 	{error, "550 No such recipient", State};
-handle_RCPT(To, #state{recipients = Recipients} = State) ->
+handle_RCPT(To, State) ->
 	?log(info, "Mail to ~s~n", [To]),
 	% you can accept or reject RCPT TO addresses here, one per call
-	{ok, State#state{recipients = [To | Recipients]}}.
+	{ok, State}.
 
 -spec handle_RCPT_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_RCPT_extension(<<"X-SomeExtension">> = Extension, State) ->
@@ -151,20 +150,15 @@ handle_RCPT_extension(Extension, _State) ->
 queue_or_deliver(From, To, Data, Reference, State) ->
 	% At this point, if we return ok, we've accepted responsibility for the emaill
 	Length = byte_size(Data),
-	Recipients = State#state.recipients,
-	Variant = proplists:get_value(variant, State#state.options, smtp),
-	case {Variant, Recipients} of
-		{smtp, _} ->
+	case proplists:get_value(variant, State#state.options, smtp) of
+		smtp ->
 			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, Length]),
 			% ... should actually handle the email,
 			%     if `ok` is returned we are taking the responsibility of the delivery.
 			{ok, ["queued as ~s", Reference], State};
-		{lmtp, []} ->
-			?log(info, "message from ~s to ~p rejected: no successful recipients~n", [From, To]),
-			{error, "503 Error: No successful RCPT TO command"};
-		{lmtp, _} ->
-			?log(info, "message from ~s delivered to ~p, body length ~p~n", [From, Recipients, Length]),
-			Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- Recipients],
+		lmtp ->
+			?log(info, "message from ~s delivered to ~p, body length ~p~n", [From, To, Length]),
+			Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- To],
 			% ... should actually handle the email for each recipient for each `ok`
 			{multiple, Multiple, State}
 	end.

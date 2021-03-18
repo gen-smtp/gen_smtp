@@ -235,7 +235,7 @@ report_recipient(error, Message, State) ->
 report_recipient(multiple, _Any, #state{variant = smtp} = State) ->
 	Msg = "SMTP should report a single delivery status for all the recipients",
 	throw({stop, {handle_DATA_error, Msg}, State});
-report_recipient(multiple, [], State) -> ok;
+report_recipient(multiple, [], _State) -> ok;
 report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
 	report_recipient(ResponseType, Value, State),
 	report_recipient(multiple, Rest, State).
