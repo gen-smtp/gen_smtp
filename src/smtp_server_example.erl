@@ -14,7 +14,8 @@
 
 -record(state,
 	{
-		options = [] :: list()
+		options = [] :: list(),
+		recipients = [] :: [string()]
 	}).
 
 -type(error_message() :: {'error', string(), #state{}}).
@@ -124,10 +125,10 @@ handle_MAIL_extension(Extension, _State) ->
 -spec handle_RCPT(To :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
 handle_RCPT(<<"nobody@example.com">>, State) ->
 	{error, "550 No such recipient", State};
-handle_RCPT(To, State) ->
+handle_RCPT(To, #state{recipients = Recipients} = State) ->
 	?log(info, "Mail to ~s~n", [To]),
-	% you can accept or reject RCPT TO addesses here, one per call
-	{ok, State}.
+	% you can accept or reject RCPT TO addresses here, one per call
+	{ok, State#state{recipients = [To | Recipients]}}.
 
 -spec handle_RCPT_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_RCPT_extension(<<"X-SomeExtension">> = Extension, State) ->
@@ -138,20 +139,80 @@ handle_RCPT_extension(Extension, _State) ->
 	?log(warning, "Unknown RCPT TO extension ~s~n", [Extension]),
 	error.
 
--spec handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: #state{}) -> {'ok', string(), #state{}} | {'error', string(), #state{}}.
+%% @doc Helps `handle_DATA' to deal with the received email.
+%% This function is not directly required by the behaviour.
+-spec queue_or_deliver(From :: binary(),
+					   To :: [binary(),...],
+					   Data :: binary(),
+					   Reference :: string(),
+					   State :: #state{}
+					  ) -> {ok | error, string(), #state{}} |
+						   {multiple, [{ok | error, string()}], #state{}}.
+queue_or_deliver(From, To, Data, Reference, State) ->
+	% At this point, if we return ok, we've accepted responsibility for the emaill
+	Length = byte_size(Data),
+	Recipients = State#state.recipients,
+	Variant = proplists:get_value(variant, State#state.options, smtp),
+	case {Variant, Recipients} of
+		{smtp, _} ->
+			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, Length]),
+			% ... should actually handle the email,
+			%     if `ok` is returned we are taking the responsibility of the delivery.
+			{ok, ["queued as ~s", Reference], State};
+		{lmtp, []} ->
+			?log(info, "message from ~s to ~p rejected: no successful recipients~n", [From, To]),
+			{error, "503 Error: No successful RCPT TO command"};
+		{lmtp, _} ->
+			?log(info, "message from ~s delivered to ~p, body length ~p~n", [From, Recipients, Length]),
+			Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- Recipients],
+			% ... should actually handle the email for each recipient for each `ok`
+			{multiple, Multiple, State}
+	end.
+
+%% @doc Handle the DATA verb from the client, which corresponds to the body of
+%% the message. After receiving the body, a SMTP server can put the email in
+%% a queue for later delivering while a LMTP server can handle the delivery
+%% directly (LMTP servers are supposed to be simpler and handle emails to
+%% local users directly without the need for a queue). Relaying the email to
+%% another server is also an option.
+%%
+%% When using the SMTP protocol, `handle_DATA' should return a single "aggregate" delivery status
+%% in the form of a `{ok, SuccessMsg, State}' tuple or `{error, ErrorMsg, State}'.
+%% At this point, if `ok' is returned, we have accepted the full responsibility
+%% of delivering the email.
+%%
+%% When using the LMTP protocol, `handle_DATA' should return a status for
+%% each accepted address in `handle_RCPT' in the form of a `{multiple, StatusList, State}' tuple
+%% where `StatusList' is a list of `{ok, SuccessMsg}' or `{error, ErrorMsg}' tuples
+%% (the statuses should be presented in the same order as the recipient addresses were accepted).
+%% For each `ok' in the `StatusList', we have accepted full responsibility for
+%% delivering the email to that specific recipient. When a single recipient is
+%% specified the returned value can also follow the SMTP format.
+%%
+%% `ErrorMsg' should always start with the SMTP error code, while `SuccessMsg'
+%% should not (the `250' code is automatically prepended).
+%%
+%% According to the SMTP specification the, responsibility of delivering an
+%% email must be taken seriously and the servers MUST NOT loose the message.
+-spec handle_DATA(From :: binary(),
+				  To :: [binary(),...],
+				  Data :: binary(),
+				  State :: #state{}
+				 ) -> {ok | error, string(), #state{}} |
+					  {multiple, [{ok | error, string()}], #state{}}.
 handle_DATA(_From, _To, <<>>, State) ->
 	{error, "552 Message too small", State};
 handle_DATA(From, To, Data, State) ->
 	% some kind of unique id
-    Reference = lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(unique_id()))]),
 	% if RELAY is true, then relay email to email address, else send email data to console
 	case proplists:get_value(relay, State#state.options, false) of
 		true -> relay(From, To, Data);
 		false ->
-			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, byte_size(Data)]),
+			Reference = lists:flatten([io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary(unique_id()))]),
 			case proplists:get_value(parse, State#state.options, false) of
 				false -> ok;
 				true ->
+					% In this example we try to decode the email
 					try mimemail:decode(Data) of
 						_Result ->
 							?log(info, "Message decoded successfully!~n")
@@ -171,10 +232,9 @@ handle_DATA(From, To, Data, State) ->
 								end
 							end
 					end
-			end
-	end,
-	% At this point, if we return ok, we've accepted responsibility for the email
-	{ok, Reference, State}.
+			end,
+			queue_or_deliver(From, To, Data, Reference, State)
+	end.
 
 -spec handle_RSET(State :: #state{}) -> #state{}.
 handle_RSET(State) ->

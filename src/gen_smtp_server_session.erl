@@ -130,7 +130,8 @@
 -callback handle_RCPT_extension(Extension :: binary(), State :: state()) ->
     {ok, state()} | error.
 -callback handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: state()) ->
-    {ok, string(), state()} | {error, string(), state()}.
+    {ok | error, string(), state()} | {multiple, [{ok | error, string()}], state()}.
+% the 'multiple' reply is only available for LMTP
 -callback handle_RSET(State :: state()) -> state().
 -callback handle_VRFY(Address :: binary(), State :: state()) ->
     {ok, string(), state()} | {error, string(), state()}.
@@ -222,6 +223,23 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
+
+%% @hidden
+-spec report_recipient(ResponseType :: 'ok' | 'error' | 'multiple',
+					   Value :: string() | [{'ok' | 'error', string()}],
+					   State :: #state{}) -> any().
+report_recipient(ok, Reference, State) ->
+	send(State, io_lib:format("250 ~s\r\n", [Reference]));
+report_recipient(error, Message, State) ->
+	send(State, [Message, "\r\n"]);
+report_recipient(multiple, _Any, #state{variant = smtp} = State) ->
+	Msg = "SMTP should report a single delivery status for all the recipients",
+	throw({stop, {handle_DATA_error, Msg}, State});
+report_recipient(multiple, [], State) -> ok;
+report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
+	report_recipient(ResponseType, Value, State),
+	report_recipient(multiple, Rest, State).
+
 %% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
@@ -247,24 +265,16 @@ handle_info({receive_data, Body, Rest},
 	end,
 	setopts(State, [{packet, line}]),
 	%% Unescape periods at start of line (rfc5321 4.5.2)
-	UnescapedBody = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
-	Envelope = Env#envelope{data = UnescapedBody},
-	case MaxSize =:= infinity orelse byte_size(Envelope#envelope.data) =< MaxSize of
+	Data = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
+	#envelope{from = From, to = To} = Env,
+	case MaxSize =:= infinity orelse byte_size(Data) =< MaxSize of
 		true ->
-			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
-				{ok, Reference, CallbackState} ->
-					send(State, io_lib:format("250 queued as ~s\r\n", [Reference])),
-					setopts(State, [{active, once}]),
-					{noreply, State#state{readmessage = false,
-										  envelope = #envelope{},
-										  callbackstate = CallbackState}, ?TIMEOUT};
-				{error, Message, CallbackState} ->
-					send(State, [Message, "\r\n"]),
-					setopts(State, [{active, once}]),
-					{noreply, State#state{readmessage = false,
-										  envelope = #envelope{},
-										  callbackstate = CallbackState}, ?TIMEOUT}
-			end;
+			{ResponseType, Value, CallbackState} = Module:handle_DATA(From, To, Data, OldCallbackState),
+			report_recipient(ResponseType, Value, State),
+			setopts(State, [{active, once}]),
+			{noreply, State#state{readmessage = false,
+								  envelope = #envelope{},
+								  callbackstate = CallbackState}, ?TIMEOUT};
 		false ->
 			send(State, "552 Message too large\r\n"),
 			setopts(State, [{active, once}]),
