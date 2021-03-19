@@ -45,7 +45,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
--export_type([options/0, error_class/0]).
+-export_type([options/0, error_class/0, protocol_message/0]).
 
 -include_lib("hut/include/hut.hrl").
 
@@ -109,6 +109,8 @@
 					 | setopts_error
 					 | data_receive_error.
 
+-type protocol_message() :: string() | iodata().
+
 -callback init(Hostname :: inet:hostname(), _SessionCount,
 			   Peername :: inet:ip_address(), Opts :: any()) ->
 	{ok, Banner :: iodata(), CallbackState :: state()} | {stop, Reason :: any(), Message :: iodata()} | ignore.
@@ -130,7 +132,7 @@
 -callback handle_RCPT_extension(Extension :: binary(), State :: state()) ->
     {ok, state()} | error.
 -callback handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: state()) ->
-    {ok | error, string(), state()} | {multiple, [{ok | error, string()}], state()}.
+    {ok | error, protocol_message(), state()} | {multiple, [{ok | error, protocol_message()}], state()}.
 % the 'multiple' reply is only available for LMTP
 -callback handle_RSET(State :: state()) -> state().
 -callback handle_VRFY(Address :: binary(), State :: state()) ->
@@ -229,7 +231,7 @@ handle_cast(_Msg, State) ->
 					   Value :: string() | [{'ok' | 'error', string()}],
 					   State :: #state{}) -> any().
 report_recipient(ok, Reference, State) ->
-	send(State, io_lib:format("250 ~s\r\n", [Reference]));
+	send(State, ["250 ", Reference, "\r\n"]);
 report_recipient(error, Message, State) ->
 	send(State, [Message, "\r\n"]);
 report_recipient(multiple, _Any, #state{protocol = smtp} = State) ->
