@@ -27,6 +27,8 @@ jobs:
         run: make xref
       - name: Test
         run: make test
+      - name: Proper
+        run: make proper
       - name: Cover
         run: make cover
       - name: Dialyze
