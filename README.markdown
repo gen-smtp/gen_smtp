@@ -213,6 +213,12 @@ gen_smtp_client:send(
 
 If you want to listen on IPv6, you can use the `{family, inet6}` and `{address, "::"}` options to enable listening on IPv6.
 
+Please notice that when using the LMTP protocol, the `handle_EHLO` callback will be used
+to handle the `LHLO` command as defined in [RFC2033](https://tools.ietf.org/html/rfc2033),
+due to their similarities. Although not used, the implementation of `handle_HELO` is still
+mandatory for the general `gen_smtp_server_session` behaviour (you can simply
+return a 500 error, e.g. `{error, "500 LMTP server, not SMTP"}`).
+
 ## Dependency on iconv
 
 gen_smtp relies on iconv for text encoding and decoding when parsing is activated.
