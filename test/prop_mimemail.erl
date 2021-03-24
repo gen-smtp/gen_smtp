@@ -6,12 +6,13 @@
 -module(prop_mimemail).
 
 -export([
-    prop_plaintext_encode_no_crash/1,
-    prop_multipart_encode_no_crash/1,
+	prop_plaintext_encode_no_crash/1,
+	prop_multipart_encode_no_crash/1,
 	prop_plaintext_encode_decode_match/1,
-	prop_multipart_encode_decode_match/1
+	prop_multipart_encode_decode_match/1,
+	prop_quoted_printable/1,
+	prop_smtp_compatible/1
 ]).
--export([nonull_utf8/0]).
 
 -include_lib("proper/include/proper.hrl").
 -include_lib("stdlib/include/assert.hrl").
@@ -99,6 +100,80 @@ match({TypeA, SubTypeA, HeadersA, _ParamsA, BodyA},
 			  end, Bodies)
 	end.
 
+prop_quoted_printable(doc) ->
+	"Make sure quoted-printable encoder works as expected: "
+		"* No lines longer than 76 chars "
+		"* decode(encode(data)) returns the same result as original input".
+
+prop_quoted_printable() ->
+	Trim = fun(B) -> binstr:reverse(trim(binstr:reverse(trim(B)))) end,
+	?FORALL(
+	   Body,
+	   proper_types:oneof([?SIZED(Size, printable_ascii(Size * 50)),
+						   ?SIZED(Size, printable_ascii_and_cariage(Size * 50)),
+						   printable_ascii(),
+						   printable_ascii_and_cariage(),
+						   nonull_utf8(),
+						   proper_types:binary()]),
+	   begin
+		   [QPEncoded] = mimemail:encode_quoted_printable(Body),
+		   ?assertEqual(Trim(Body), Trim(mimemail:decode_quoted_printable(QPEncoded))),
+		   ?assertNot(has_lines_over(QPEncoded, 76), #{encoded => QPEncoded, orig => Body}),
+		   true
+	   end).
+
+trim(<<C, Tail/binary>>) when C == $\s; C == $\t ->
+	trim(Tail);
+trim(Tail) ->
+	Tail.
+
+prop_smtp_compatible(doc) ->
+    "Makes sure mimemail never produces output that is not compatible with SMTP, "
+		"See https://tools.ietf.org/html/rfc2045 and https://tools.ietf.org/html/rfc2049:"
+		"* Should not contain bare '\r' or '\n' (ie, $\r or $\n in any other form than '\r\n' pair). "
+		"* Should not contain ASCII codes above 127"
+		"* Should not contain 0 byte"
+		"* Should not have too long (over 1000 chars) lines".
+
+prop_smtp_compatible() ->
+    ?FORALL(
+       Mail,
+       proper_types:oneof([gen_multipart_mail(), gen_plaintext_mail()]),
+	   begin
+		   SevenByte = mimemail:encode(Mail),
+		   ?assertNot(has_bare_cr_or_lf(SevenByte), SevenByte),
+		   ?assertNot(has_bytes_above_127(SevenByte), SevenByte),
+		   ?assertNot(has_zero_byte(SevenByte), SevenByte),
+		   ?assertNot(has_lines_over(SevenByte, 1000), SevenByte),
+		   true
+	   end
+    ).
+
+has_bare_cr_or_lf(Mime) ->
+	WithoutCRLF = binary:replace(Mime, <<"\r\n">>, <<"">>, [global]),
+	case binary:match(WithoutCRLF, [<<"\r">>, <<"\n">>]) of
+		nomatch -> false;
+		{_, _} -> true
+	end.
+
+has_bytes_above_127(<<C, _/binary>>) when C > 127 ->
+	true;
+has_bytes_above_127(<<_, Tail/binary>>) ->
+	has_bytes_above_127(Tail);
+has_bytes_above_127(<<>>) ->
+	false.
+
+has_zero_byte(Mime) ->
+	case binary:match(Mime, <<0>>) of
+		nomatch -> false;
+		{match, _} -> true
+	end.
+
+has_lines_over(Mime, Limit) ->
+	lists:any(fun(Line) ->
+					  byte_size(Line) > Limit
+			  end, binary:split(Mime, <<"\r\n">>, [global])).
+
 %%
 %% Generators
 %%
@@ -124,7 +199,7 @@ gen_plaintext_mail() ->
     {<<"text">>, <<"plain">>,
      gen_top_headers(),
      gen_props(),
-     gen_body()}.
+     proper_types:oneof([gen_body(), gen_nonempty_body()])}.
 
 %% Plaintext mimemail(), that is safe to use inside multipart mails
 gen_embedded_plaintext_mail() ->
@@ -170,9 +245,10 @@ gen_headers() ->
 
 %% This can generate invalid header when it requires some specific format
 gen_any_header() ->
-	{proper_types:non_empty(header_name()),
+	{header_name(),
 	 proper_types:oneof(
 	   [nonull_utf8(),
+		printable_ascii_and_cariage(),
 		printable_ascii()])}.
 
 %% #{atom() => any()}
@@ -189,36 +265,56 @@ gen_props() ->
 		  ),
 		 maps:from_list(KV)).
 
-%% binary(), guaranteed to be not `<<>>'
+%% binary(), guaranteed to be not `<<>>'. Also, try to generate relatively large body
 gen_nonempty_body() ->
-    proper_types:oneof(
-      [
-       proper_types:non_empty(printable_ascii()),
-       proper_types:non_empty(nonull_utf8())
-      ]).
+	proper_types:oneof(
+	  [
+	   proper_types:non_empty(?SIZED(Size, printable_ascii(Size * 30))),
+	   proper_types:non_empty(?SIZED(Size, printable_ascii_and_cariage(Size * 30))),
+	   proper_types:non_empty(nonull_utf8())
+	  ]).
 
 %% binary()
 gen_body() ->
-    proper_types:oneof(
-      [
-       printable_ascii(),
-       nonull_utf8()
-      ]).
+	proper_types:oneof(
+	  [
+	   printable_ascii(),
+	   printable_ascii_and_cariage(),
+	   nonull_utf8()
+	  ]).
 
 %% `[0-9a-zA-Z_-]*'
 header_name() ->
-	binary_of("-_" ++
-				  lists:seq($0, $9) ++
-				  lists:seq($A, $Z) ++
-				  lists:seq($a, $z)).
+	%% let's limit header names to 20 characters. Too long header names can easily create very long lines
+	?LET(OrigHdr,
+		 proper_types:non_empty(
+		   binary_of("-_" ++
+						 lists:seq($0, $9) ++
+						 lists:seq($A, $Z) ++
+						 lists:seq($a, $z))),
+		 case OrigHdr of
+			 <<Max20:20/binary, _/binary>> -> Max20;
+			 _ -> OrigHdr
+		 end).
 
-%% Name is not very accurate, because it includes \t\r\n as well
+printable_ascii_and_cariage() ->
+	?SIZED(Size, printable_ascii_and_cariage(Size)).
+
+printable_ascii_and_cariage(Size) ->
+    binary_of("\t\r\n" ++ lists:seq(32, 126), Size).
+
 printable_ascii() ->
-    binary_of("\t\r\n" ++ lists:seq(32, 126)).
+	?SIZED(Size, printable_ascii(Size)).
+
+printable_ascii(Size) ->
+    binary_of(lists:seq(32, 126), Size).
 
 binary_of(Bytes) ->
+	?SIZED(Size, binary_of(Bytes, Size)).
+
+binary_of(Bytes, Size) ->
 	?LET(List,
-         proper_types:list(proper_types:oneof(Bytes)),
+         proper_types:resize(Size, proper_types:list(proper_types:oneof(Bytes))),
          list_to_binary(List)).
 
 %% any utf-8, except 0
