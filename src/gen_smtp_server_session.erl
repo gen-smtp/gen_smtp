@@ -175,14 +175,7 @@ ranch_init({Ref, Transport, {Callback, Opts}}) ->
 init([Ref, Transport, Socket, Module, Options]) ->
     Protocol = proplists:get_value(protocol, Options, smtp),
 	PeerName = case Transport:peername(Socket) of
-		{ok, {IPaddr, Port}} ->
-			case {Protocol, Port} of
-				{lmtp, 25} ->
-					?log(debug, "error: LMTP is different from SMTP, it MUST NOT be used on the TCP port 25."),
-					% Error defined in section 5 of https://tools.ietf.org/html/rfc2033
-					error;
-				_ -> IPaddr
-			end;
+		{ok, {IPaddr, _Port}} -> IPaddr;
 		{error, _} -> error
 	end,
 	case PeerName =/= error
