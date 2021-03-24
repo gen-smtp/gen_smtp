@@ -218,7 +218,6 @@ handle_call(Request, _From, State) ->
 handle_cast(_Msg, State) ->
 	{noreply, State}.
 
-
 %% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
@@ -999,6 +998,7 @@ setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
 
+%% @hidden
 lhlo_if_lmtp(Protocol, Fallback) ->
 	case Protocol == lmtp of
 	    true -> "LHLO";
