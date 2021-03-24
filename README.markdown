@@ -114,7 +114,7 @@ SignedMailBody = \
                   [{<<"Subject">>, <<"DKIM testing">>},
                    {<<"From">>, <<"Andrew Thompson <andrew@hijacked.us>">>},
                    {<<"To">>, <<"Some Dude <foo@bar.com>">>}],
-                  [],
+                  #{},
                   <<"This is the email body">>},
                   [{dkim, DKIMOptions}]),
 gen_smtp_client:send({"whatever@example.com", ["andrew@hijacked.us"], SignedMailBody}, []).
