@@ -220,22 +220,6 @@ handle_cast(_Msg, State) ->
 
 
 %% @hidden
--spec report_recipient(ResponseType :: 'ok' | 'error' | 'multiple',
-					   Value :: string() | [{'ok' | 'error', string()}],
-					   State :: #state{}) -> any().
-report_recipient(ok, Reference, State) ->
-	send(State, ["250 ", Reference, "\r\n"]);
-report_recipient(error, Message, State) ->
-	send(State, [Message, "\r\n"]);
-report_recipient(multiple, _Any, #state{protocol = smtp} = State) ->
-	Msg = "SMTP should report a single delivery status for all the recipients",
-	throw({stop, {handle_DATA_error, Msg}, State});
-report_recipient(multiple, [], _State) -> ok;
-report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
-	report_recipient(ResponseType, Value, State),
-	report_recipient(multiple, Rest, State).
-
-%% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
 handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
 	send(State, "552 Message too large\r\n"),
@@ -365,14 +349,15 @@ parse_request(Packet) ->
 handle_request({<<>>, _Any}, State) ->
 	send(State, "500 Error: bad syntax\r\n"),
 	{ok, State};
-handle_request({<<"HELO">>, <<>>}, #state{protocol = smtp} = State) ->
-	send(State, "501 Syntax: HELO hostname\r\n"),
+handle_request({Command, <<>>}, State)
+	when Command == <<"HELO">>; Command == <<"EHLO">>; Command == <<"LHLO">> ->
+	send(State, ["501 Syntax: ", Command, " hostname\r\n"]),
 	{ok, State};
 handle_request({<<"LHLO">>, _Any}, #state{protocol = smtp} = State) ->
 	send(State, "500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n"),
 	{ok, State};
 handle_request({Msg, _Any}, #state{protocol = lmtp} = State)
-			   when Msg == <<"HELO">> orelse Msg == <<"EHLO">> ->
+			   when Msg == <<"HELO">>; Msg == <<"EHLO">> ->
 	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
 	{ok, State};
 handle_request({<<"HELO">>, Hostname},
@@ -392,15 +377,9 @@ handle_request({<<"HELO">>, Hostname},
 			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
-handle_request({<<"EHLO">>, <<>>}, #state{protocol = smtp} = State) ->
-	send(State, "501 Syntax: EHLO hostname\r\n"),
-	{ok, State};
-handle_request({<<"LHLO">>, <<>>}, #state{protocol = lmtp} = State) ->
-	send(State, "501 Syntax: LHLO hostname\r\n"),
-	{ok, State};
 handle_request({Msg, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State)
-			   when Msg == <<"EHLO">> orelse Msg == <<"LHLO">> ->
+			   when Msg == <<"EHLO">>; Msg == <<"LHLO">> ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, [], CallbackState} ->
 			Data = ["250 ", hostname(Options), "\r\n"],
@@ -1025,6 +1004,22 @@ lhlo_if_lmtp(Protocol, Fallback) ->
 	    true -> "LHLO";
 	    false -> Fallback
 	end.
+
+%% @hidden
+-spec report_recipient(ResponseType :: 'ok' | 'error' | 'multiple',
+					   Value :: string() | [{'ok' | 'error', string()}],
+					   State :: #state{}) -> any().
+report_recipient(ok, Reference, State) ->
+	send(State, ["250 ", Reference, "\r\n"]);
+report_recipient(error, Message, State) ->
+	send(State, [Message, "\r\n"]);
+report_recipient(multiple, _Any, #state{protocol = smtp} = State) ->
+	Msg = "SMTP should report a single delivery status for all the recipients",
+	throw({stop, {handle_DATA_error, Msg}, State});
+report_recipient(multiple, [], _State) -> ok;
+report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
+	report_recipient(ResponseType, Value, State),
+	report_recipient(multiple, Rest, State).
 
 -ifdef(TEST).
 parse_encoded_address_test_() ->

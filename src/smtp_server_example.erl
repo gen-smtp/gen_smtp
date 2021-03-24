@@ -138,31 +138,6 @@ handle_RCPT_extension(Extension, _State) ->
 	?log(warning, "Unknown RCPT TO extension ~s~n", [Extension]),
 	error.
 
-%% @doc Helps `handle_DATA' to deal with the received email.
-%% This function is not directly required by the behaviour.
--spec queue_or_deliver(From :: binary(),
-					   To :: [binary(),...],
-					   Data :: binary(),
-					   Reference :: string(),
-					   State :: #state{}
-					  ) -> {ok | error, string(), #state{}} |
-						   {multiple, [{ok | error, string()}], #state{}}.
-queue_or_deliver(From, To, Data, Reference, State) ->
-	% At this point, if we return ok, we've accepted responsibility for the emaill
-	Length = byte_size(Data),
-	case proplists:get_value(protocol, State#state.options, smtp) of
-		smtp ->
-			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, Length]),
-			% ... should actually handle the email,
-			%     if `ok` is returned we are taking the responsibility of the delivery.
-			{ok, ["queued as ~s", Reference], State};
-		lmtp ->
-			?log(info, "message from ~s delivered to ~p, body length ~p~n", [From, To, Length]),
-			Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- To],
-			% ... should actually handle the email for each recipient for each `ok`
-			{multiple, Multiple, State}
-	end.
-
 %% @doc Handle the DATA verb from the client, which corresponds to the body of
 %% the message. After receiving the body, a SMTP server can put the email in
 %% a queue for later delivering while a LMTP server can handle the delivery
@@ -306,3 +281,28 @@ relay(From, [To|Rest], Data) ->
 	[_User, Host] = string:tokens(binary_to_list(To), "@"),
 	gen_smtp_client:send({From, [To], erlang:binary_to_list(Data)}, [{relay, Host}]),
 	relay(From, Rest, Data).
+
+%% @doc Helps `handle_DATA' to deal with the received email.
+%% This function is not directly required by the behaviour.
+-spec queue_or_deliver(From :: binary(),
+					   To :: [binary(),...],
+					   Data :: binary(),
+					   Reference :: string(),
+					   State :: #state{}
+					  ) -> {ok | error, string(), #state{}} |
+						   {multiple, [{ok | error, string()}], #state{}}.
+queue_or_deliver(From, To, Data, Reference, State) ->
+	% At this point, if we return ok, we've accepted responsibility for the emaill
+	Length = byte_size(Data),
+	case proplists:get_value(protocol, State#state.options, smtp) of
+		smtp ->
+			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, Length]),
+			% ... should actually handle the email,
+			%     if `ok` is returned we are taking the responsibility of the delivery.
+			{ok, ["queued as ~s", Reference], State};
+		lmtp ->
+			?log(info, "message from ~s delivered to ~p, body length ~p~n", [From, To, Length]),
+			Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- To],
+			% ... should actually handle the email for each recipient for each `ok`
+			{multiple, Multiple, State}
+	end.
