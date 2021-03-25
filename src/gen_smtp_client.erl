@@ -296,7 +296,7 @@ try_smtp_sessions([{_Distance, Host} | _Tail] = Hosts, Options, RetryList) ->
 	end.
 
 -spec handle_smtp_throw(failure(), [{non_neg_integer(), smtp_host()}], options(), list()) ->
-                               smtp_client_socket() |
+                               {ok, smtp_client_socket()} |
                                smtp_session_error().
 handle_smtp_throw({permanent_failure, Message}, [{_Distance, Host} | _Tail], _Options, _RetryList) ->
 	% permanent failure means no retries, and don't even continue with other hosts
@@ -307,7 +307,7 @@ handle_smtp_throw({temporary_failure, tls_failed}, [{_Distance, Host} | _Tail] =
 		if_available ->
 			NoTLSOptions = [{tls,never} | proplists:delete(tls, Options)],
 			try open_smtp_session(Host, NoTLSOptions) of
-				Res -> Res
+				Res -> {ok, Res}
 			catch
 				throw:FailMsg ->
 					handle_smtp_throw(FailMsg, Hosts, Options, RetryList)
@@ -1077,6 +1077,40 @@ session_start_test_() ->
 								smtp_socket:send(X, "220 ok\r\n"),
 								{ok, Y} = smtp_socket:to_ssl_server(X, [{certfile, "test/fixtures/mx1.example.com-server.crt"},
 																		{keyfile, "test/fixtures/mx1.example.com-server.key"}], 5000),
+								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								smtp_socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
+								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								smtp_socket:send(Y, "250 ok\r\n"),
+								?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								smtp_socket:send(Y, "250 ok\r\n"),
+								?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								smtp_socket:send(Y, "354 ok\r\n"),
+								?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								smtp_socket:send(Y, "250 ok\r\n"),
+								?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"Transaction with TLS advertised, but broken, should be restarted without TLS, if allowed",
+						fun() ->
+								Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}, {tls, if_available}],
+								{ok, _Pid} = send({<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>}, Options),
+								{ok, X} = smtp_socket:accept(ListenSock, 1000),
+								smtp_socket:send(X, "220 Some banner\r\n"),
+								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								smtp_socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
+								?assertMatch({ok, "STARTTLS\r\n"}, smtp_socket:recv(X, 0, 1000)),
+								smtp_socket:send(X, "220 ok\r\n"),
+								%% Now, send some invalid data instead of TLS handshake and close the socket
+								{ok, [22, V1, V2 | _]} = smtp_socket:recv(X, 0, 1000),
+								smtp_socket:send(X, [22, V1, V2, 0, 0]),
+								smtp_socket:close(X),
+								%% Client would make another attempt to connect, without TLS
+								{ok, Y} = smtp_socket:accept(ListenSock, 1000),
+								smtp_socket:send(Y, "220 Some banner\r\n"),
 								?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								smtp_socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
 								?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
