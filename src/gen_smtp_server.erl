@@ -26,6 +26,8 @@
 
 -define(PORT, 2525).
 
+-include_lib("hut/include/hut.hrl").
+
 %% External API
 -export([
 	start/3, start/2, start/1,
@@ -47,16 +49,24 @@
 			CallbackModule :: module(),
 			Options :: options()) -> {'ok', pid()} | {'error', any()}.
 start(ServerName, CallbackModule, Options) when is_list(Options) ->
-	{ok, Transport, TransportOpts, ProtocolOpts}
-		= convert_options(CallbackModule, Options),
-	ranch:start_listener(
-	  ServerName, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
+	case convert_options(CallbackModule, Options) of
+		{ok, Transport, TransportOpts, ProtocolOpts} ->
+			ranch:start_listener(
+			  ServerName, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts);
+		{error, Reason} -> {error, Reason}
+	end.
 
 child_spec(ServerName, CallbackModule, Options) ->
-	{ok, Transport, TransportOpts, ProtocolOpts}
-		= convert_options(CallbackModule, Options),
-	ranch:child_spec(
-	  ServerName, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts).
+	case convert_options(CallbackModule, Options) of
+		{ok, Transport, TransportOpts, ProtocolOpts} ->
+			ranch:child_spec(
+			  ServerName, Transport, TransportOpts, gen_smtp_server_session, ProtocolOpts);
+		{error, Reason} ->
+			% `supervisor:child_spec' is not compatible with ok/error tuples.
+			% This error is likely to occur when starting the application,
+			% so the user can sort out the configuration parameters and try again.
+			erlang:error(Reason)
+	end.
 
 convert_options(CallbackModule, Options) ->
 	Transport = case proplists:get_value(protocol, Options, tcp) of
@@ -68,18 +78,26 @@ convert_options(CallbackModule, Options) ->
 	Port = proplists:get_value(port, Options, ?PORT),
 	Hostname = proplists:get_value(domain, Options, smtp_util:guess_FQDN()),
 	ProtocolOpts = proplists:get_value(sessionoptions, Options, []),
-	ProtocolOpts1 = {CallbackModule, [{hostname, Hostname} | ProtocolOpts]},
-	RanchOpts = proplists:get_value(ranch_opts, Options, #{}),
-	SocketOpts = maps:get(socket_opts, RanchOpts, []),
-	TransportOpts = RanchOpts#{
-							   socket_opts =>
-								   [{port, Port},
-									{ip, Address},
-									{keepalive, true},
-									%% binary, {active, false}, {reuseaddr, true} - ranch defaults
-									Family
-								   | SocketOpts]},
-	{ok, Transport, TransportOpts, ProtocolOpts1}.
+	EmailTransferProtocol = proplists:get_value(protocol, ProtocolOpts, smtp),
+	case {EmailTransferProtocol, Port} of
+		{lmtp, 25} ->
+			?log(error, "LMTP is different from SMTP, it MUST NOT be used on the TCP port 25"),
+			% Error defined in section 5 of https://tools.ietf.org/html/rfc2033
+			{error, invalid_lmtp_port};
+		_ ->
+			ProtocolOpts1 = {CallbackModule, [{hostname, Hostname} | ProtocolOpts]},
+			RanchOpts = proplists:get_value(ranch_opts, Options, #{}),
+			SocketOpts = maps:get(socket_opts, RanchOpts, []),
+			TransportOpts = RanchOpts#{
+									   socket_opts =>
+										   [{port, Port},
+											{ip, Address},
+											{keepalive, true},
+											%% binary, {active, false}, {reuseaddr, true} - ranch defaults
+											Family
+										   | SocketOpts]},
+			{ok, Transport, TransportOpts, ProtocolOpts1}
+	end.
 
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.

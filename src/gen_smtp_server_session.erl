@@ -45,7 +45,7 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
 		code_change/3]).
--export_type([options/0, error_class/0]).
+-export_type([options/0, error_class/0, protocol_message/0]).
 
 -include_lib("hut/include/hut.hrl").
 
@@ -73,6 +73,7 @@
 		readmessage = false :: boolean(),
 		tls = false :: boolean(),
 		callbackstate :: any(),
+		protocol = smtp :: 'smtp' | 'lmtp',
 		options = [] :: [tuple()]
 	}
 ).
@@ -93,6 +94,7 @@
 					| {keyfile, file:name_all()}  % deprecated, see tls_options
 					| {allow_bare_newlines, false | ignore | fix | strip}
 					| {hostname, inet:hostname()}
+					| {protocol, smtp | lmtp}
 					| {tls_options, [tls_opt()]}].
 
 -type(state() :: any()).
@@ -106,6 +108,8 @@
 					 | send_error
 					 | setopts_error
 					 | data_receive_error.
+
+-type protocol_message() :: string() | iodata().
 
 -callback init(Hostname :: inet:hostname(), _SessionCount,
 			   Peername :: inet:ip_address(), Opts :: any()) ->
@@ -128,7 +132,8 @@
 -callback handle_RCPT_extension(Extension :: binary(), State :: state()) ->
     {ok, state()} | error.
 -callback handle_DATA(From :: binary(), To :: [binary(),...], Data :: binary(), State :: state()) ->
-    {ok, string(), state()} | {error, string(), state()}.
+    {ok | error, protocol_message(), state()} | {multiple, [{ok | error, protocol_message()}], state()}.
+% the 'multiple' reply is only available for LMTP
 -callback handle_RSET(State :: state()) -> state().
 -callback handle_VRFY(Address :: binary(), State :: state()) ->
     {ok, string(), state()} | {error, string(), state()}.
@@ -168,6 +173,7 @@ ranch_init({Ref, Transport, {Callback, Opts}}) ->
 %% @private
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
 init([Ref, Transport, Socket, Module, Options]) ->
+    Protocol = proplists:get_value(protocol, Options, smtp),
 	PeerName = case Transport:peername(Socket) of
 		{ok, {IPaddr, _Port}} -> IPaddr;
 		{error, _} -> error
@@ -189,6 +195,7 @@ init([Ref, Transport, Socket, Module, Options]) ->
 						transport = Transport,
 						module = Module,
 						ranch_ref = Ref,
+						protocol = Protocol,
 						options = Options,
 						callbackstate = CallbackState}, ?TIMEOUT};
 		{stop, Reason, Message} ->
@@ -236,24 +243,16 @@ handle_info({receive_data, Body, Rest},
 	end,
 	setopts(State, [{packet, line}]),
 	%% Unescape periods at start of line (rfc5321 4.5.2)
-	UnescapedBody = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
-	Envelope = Env#envelope{data = UnescapedBody},
-	case MaxSize =:= infinity orelse byte_size(Envelope#envelope.data) =< MaxSize of
+	Data = re:replace(Body, <<"^\\\.">>, <<>>, [global, multiline, {return, binary}]),
+	#envelope{from = From, to = To} = Env,
+	case MaxSize =:= infinity orelse byte_size(Data) =< MaxSize of
 		true ->
-			case Module:handle_DATA(Envelope#envelope.from, Envelope#envelope.to, Envelope#envelope.data, OldCallbackState) of
-				{ok, Reference, CallbackState} ->
-					send(State, io_lib:format("250 queued as ~s\r\n", [Reference])),
-					setopts(State, [{active, once}]),
-					{noreply, State#state{readmessage = false,
-										  envelope = #envelope{},
-										  callbackstate = CallbackState}, ?TIMEOUT};
-				{error, Message, CallbackState} ->
-					send(State, [Message, "\r\n"]),
-					setopts(State, [{active, once}]),
-					{noreply, State#state{readmessage = false,
-										  envelope = #envelope{},
-										  callbackstate = CallbackState}, ?TIMEOUT}
-			end;
+			{ResponseType, Value, CallbackState} = Module:handle_DATA(From, To, Data, OldCallbackState),
+			report_recipient(ResponseType, Value, State),
+			setopts(State, [{active, once}]),
+			{noreply, State#state{readmessage = false,
+								  envelope = #envelope{},
+								  callbackstate = CallbackState}, ?TIMEOUT};
 		false ->
 			send(State, "552 Message too large\r\n"),
 			setopts(State, [{active, once}]),
@@ -349,8 +348,16 @@ parse_request(Packet) ->
 handle_request({<<>>, _Any}, State) ->
 	send(State, "500 Error: bad syntax\r\n"),
 	{ok, State};
-handle_request({<<"HELO">>, <<>>}, State) ->
-	send(State, "501 Syntax: HELO hostname\r\n"),
+handle_request({Command, <<>>}, State)
+	when Command == <<"HELO">>; Command == <<"EHLO">>; Command == <<"LHLO">> ->
+	send(State, ["501 Syntax: ", Command, " hostname\r\n"]),
+	{ok, State};
+handle_request({<<"LHLO">>, _Any}, #state{protocol = smtp} = State) ->
+	send(State, "500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n"),
+	{ok, State};
+handle_request({Msg, _Any}, #state{protocol = lmtp} = State)
+			   when Msg == <<"HELO">>; Msg == <<"EHLO">> ->
+	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
 	{ok, State};
 handle_request({<<"HELO">>, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
@@ -369,11 +376,9 @@ handle_request({<<"HELO">>, Hostname},
 			send(State, [Message, "\r\n"]),
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
-handle_request({<<"EHLO">>, <<>>}, State) ->
-	send(State, "501 Syntax: EHLO hostname\r\n"),
-	{ok, State};
-handle_request({<<"EHLO">>, Hostname},
-			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State) ->
+handle_request({Msg, Hostname},
+			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State)
+			   when Msg == <<"EHLO">>; Msg == <<"LHLO">> ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, [], CallbackState} ->
 			Data = ["250 ", hostname(Options), "\r\n"],
@@ -416,8 +421,8 @@ handle_request({<<"EHLO">>, Hostname},
 			{ok, State#state{callbackstate = CallbackState}}
 	end;
 
-handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: send EHLO first\r\n"),
+handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = Envelope, options = Options} = State) ->
@@ -512,8 +517,8 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	Password = base64:decode(Password64),
 	try_auth('login', Username, Password, State);
 
-handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: send HELO/EHLO first\r\n"),
+handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"MAIL">>, Args},
@@ -631,8 +636,8 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 			send(State, "501 Syntax: RCPT TO:<address>\r\n"),
 			{ok, State}
 	end;
-handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: send HELO/EHLO first\r\n"),
+handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined, protocol = Protocol} = State) ->
+	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
 handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
@@ -993,6 +998,29 @@ setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
 hostname(Opts) ->
     proplists:get_value(hostname, Opts, smtp_util:guess_FQDN()).
 
+%% @hidden
+lhlo_if_lmtp(Protocol, Fallback) ->
+	case Protocol == lmtp of
+	    true -> "LHLO";
+	    false -> Fallback
+	end.
+
+%% @hidden
+-spec report_recipient(ResponseType :: 'ok' | 'error' | 'multiple',
+					   Value :: string() | [{'ok' | 'error', string()}],
+					   State :: #state{}) -> any().
+report_recipient(ok, Reference, State) ->
+	send(State, ["250 ", Reference, "\r\n"]);
+report_recipient(error, Message, State) ->
+	send(State, [Message, "\r\n"]);
+report_recipient(multiple, _Any, #state{protocol = smtp} = State) ->
+	Msg = "SMTP should report a single delivery status for all the recipients",
+	throw({stop, {handle_DATA_error, Msg}, State});
+report_recipient(multiple, [], _State) -> ok;
+report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
+	report_recipient(ResponseType, Value, State),
+	report_recipient(multiple, Rest, State).
+
 -ifdef(TEST).
 parse_encoded_address_test_() ->
 	[
@@ -1068,6 +1096,7 @@ parse_request_test_() ->
 			fun() ->
 					?assertEqual({<<"HELO">>, <<>>}, parse_request(<<"HELO\r\n">>)),
 					?assertEqual({<<"EHLO">>, <<"hell.af.mil">>}, parse_request(<<"EHLO hell.af.mil\r\n">>)),
+					?assertEqual({<<"LHLO">>, <<"hell.af.mil">>}, parse_request(<<"LHLO hell.af.mil\r\n">>)),
 					?assertEqual({<<"MAIL">>, <<"FROM:God@heaven.af.mil">>}, parse_request(<<"MAIL FROM:God@heaven.af.mil">>))
 			end
 		},
@@ -1135,6 +1164,18 @@ smtp_session_test_() ->
 								smtp_socket:send(CSock, "HELO\r\n"),
 								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
 								?assertMatch("501 Syntax: HELO hostname\r\n",  Packet2)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"An error in response to an LHLO sent by SMTP",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n", Packet2)
 						end
 					}
 			end,
@@ -1413,6 +1454,134 @@ smtp_session_test_() ->
 					}
 			end
 
+		]
+	}.
+
+lmtp_session_test_() ->
+	{foreach,
+		local,
+		fun() ->
+				application:ensure_all_started(gen_smtp),
+				{ok, Pid} = gen_smtp_server:start(
+							  smtp_server_example,
+							  [{sessionoptions,
+								[{protocol, lmtp},
+								 {callbackoptions,
+								  [{protocol, lmtp},
+								   {size, infinity}]}
+								 ]},
+							   {domain, "localhost"},
+							   {port, 9876}]),
+				{ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
+				{CSock, Pid}
+		end,
+		fun({CSock, _Pid}) ->
+                gen_smtp_server:stop(gen_smtp_server),
+				smtp_socket:close(CSock),
+				timer:sleep(10)
+		end,
+		[fun({CSock, _Pid}) ->
+					{"An error in response to a HELO/EHLO sent by LMTP",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("500 Error: LMTP should replace HELO and EHLO with LHLO\r\n", Packet2),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("500 Error: LMTP should replace HELO and EHLO with LHLO\r\n", Packet3)
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"LHLO response",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F) ->
+										receive
+											{tcp, CSock, "250-"++_Packet3} ->
+												smtp_socket:active_once(CSock),
+												F(F);
+											{tcp, CSock, "250 "++_Packet3} ->
+												smtp_socket:active_once(CSock),
+												ok;
+											{tcp, CSock, _R} ->
+												smtp_socket:active_once(CSock),
+												error
+										end
+								end,
+								?assertEqual(ok, Foo(Foo))
+						end
+					}
+			end,
+			fun({CSock, _Pid}) ->
+					{"DATA with multiple RCPT TO",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								Foo = fun(F, Acc) ->
+										receive
+											{tcp, CSock, "250-SIZE"++_ = Data} ->
+												{error, ["received: ", Data]};
+											{tcp, CSock, "250-"++_} ->
+												smtp_socket:active_once(CSock),
+												F(F, Acc);
+											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, Data} ->
+												smtp_socket:active_once(CSock),
+												{error, ["received: ", Data]}
+										end
+								end,
+								?assertEqual(true, Foo(Foo, false)),
+
+								smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet3),
+								smtp_socket:send(CSock, "RCPT TO:<test1@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet4),
+								smtp_socket:send(CSock, "RCPT TO:<test2@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet5),
+								smtp_socket:send(CSock, "RCPT TO:<test3@somehost.com>\r\n"),
+								receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 " ++ _, Packet6),
+
+								smtp_socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("354 " ++ _, Packet7),
+
+								smtp_socket:send(CSock, "Subject: tls message\r\n"),
+								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+								smtp_socket:send(CSock, "\r\n"),
+								smtp_socket:send(CSock, "message body"),
+								smtp_socket:send(CSock, "\r\n.\r\n"),
+								% We sent 3 RCPT TO, so we should have 3 delivery reports
+								AssertDelivery = fun(_) ->
+										receive {tcp, CSock, Packet8} -> smtp_socket:active_once(CSock) end,
+										?assertMatch("250 "++_, Packet8)
+									end,
+								lists:foreach(AssertDelivery, [1, 2, 3]),
+								smtp_socket:send(CSock, "QUIT\r\n"),
+								receive {tcp, CSock, Packet9} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("221 " ++ _, Packet9)
+						end
+					}
+			end
 		]
 	}.
 

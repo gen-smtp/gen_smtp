@@ -195,6 +195,12 @@ Session options are:
 * `{tls_options, [ssl:server_option()]}` - options to pass to `ssl:handshake/3` (OTP-21+) / `ssl:ssl_accept/3`
   when `STARTTLS` command is sent by the client. Only needed if `STARTTLS` extension
   is enabled
+* `{protocol, smtp | lmtp}` - when `lmtp` is passed, the control flow of the
+  [Local Mail Tranfer Protocol](https://tools.ietf.org/html/rfc2033) is applied.
+  LMTP is derived from SMTP with just a few variations and is used by standard
+  [Mail Transfer Agents (MTA)](https://en.wikipedia.org/wiki/Message_transfer_agent), like Postfix, Exim and OpenSMTPD to
+  send incoming email to local mail-handling applications that usually don't have a delivery queue.
+  The default value of this option is `smtp`.
 * `{callbackoptions, any()}` - value will be passed as 4th argument to callback module's `init/4`
 
 You can connect and test this using the `gen_smtp_client` via something like:
@@ -206,6 +212,12 @@ gen_smtp_client:send(
 ```
 
 If you want to listen on IPv6, you can use the `{family, inet6}` and `{address, "::"}` options to enable listening on IPv6.
+
+Please notice that when using the LMTP protocol, the `handle_EHLO` callback will be used
+to handle the `LHLO` command as defined in [RFC2033](https://tools.ietf.org/html/rfc2033),
+due to their similarities. Although not used, the implementation of `handle_HELO` is still
+mandatory for the general `gen_smtp_server_session` behaviour (you can simply
+return a 500 error, e.g. `{error, "500 LMTP server, not SMTP"}`).
 
 ## Dependency on iconv
 
