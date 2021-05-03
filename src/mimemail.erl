@@ -885,7 +885,7 @@ encode_component(_Type, _SubType, Headers, _Params, Body) ->
 
 encode_component_part({<<"multipart">>, SubType, Headers, PartParams, Body}) ->
 	{FixedParams, FixedHeaders} = ensure_content_headers(<<"multipart">>, SubType, PartParams, Headers, Body, false),
-	encode_headers(FixedHeaders) ++ [<<>>] ++
+	encode_headers(FixedHeaders) ++
 	encode_component(<<"multipart">>, SubType, FixedHeaders, FixedParams, Body);
 encode_component_part({Type, SubType, Headers, PartParams, Body}) ->
 	PartData = case Body of
@@ -1528,6 +1528,16 @@ parse_example_mails_test_() ->
 				?assertEqual(?IMAGE_MD5, erlang:md5(element(5, Image)))
 			end
 		},
+		{"alternative text/html with calendar attachment.",
+			fun() ->
+				Decoded = Getmail("message-text-html-attachment.eml"),
+				?assertMatch({<<"multipart">>, <<"mixed">>, _, _, [
+					{<<"multipart">>, <<"alternative">>, _, _, [
+						{<<"text">>, <<"plain">>, _, _, _}, 
+						{<<"text">>, <<"html">>, _, _, _}]}, 
+					{<<"text">>, <<"calendar">>, _, _, _}]}, Decoded)
+			end
+		},
 		{"Outlook 2007 with leading tabs in quoted-printable.",
 			fun() ->
 				Decoded = Getmail("outlook-2007.eml"),
@@ -1950,6 +1960,10 @@ rfc2047_decode_test_() ->
 	].
 
 encoding_test_() ->
+	Getmail = fun(File) ->
+		{ok, Email} = file:read_file(filename:join("test/fixtures/", File)),
+		decode(Email)
+	end,
 	[
 		{"Simple email",
 			fun() ->
@@ -2078,6 +2092,14 @@ encoding_test_() ->
 									"HTML and is base64",
 									"encoded\r\n\r\n</body></html>">>}]},
 						Result)
+			end
+		},
+		{"multipart/mixed email with multipart/alternative does not add an extra empty lines",
+			fun() ->
+					Email = Getmail("message-text-html-attachment.eml"),
+					Encoded = encode(Email),
+					Re = re:run(Encoded, "(?:\\r\\n){3}", [global, {capture, all, binary}]),
+					?assertMatch({match, [_]}, Re)
 			end
 		},
 		{"Missing headers should be added",

@@ -1,0 +1,57 @@
+Return-Path: <sender@example.com>
+From: sender@example.com
+To: recipient@example.com
+Subject: A message with text, html and a calendar attachment
+Reply-To: sender@example.com
+Mime-Version: 1.0
+Sender: sender@example.com
+Content-Type: multipart/mixed;
+	boundary="_=4g116a4p31245o2q4h634e3y354m3103=_"
+Date: Tue, 27 Apr 2021 12:45:20 +0200
+Message-ID: <3c52f2b1dd3d53eff90acf73500fc058@someclient.example.com>
+
+
+--_=4g116a4p31245o2q4h634e3y354m3103=_
+Content-Type: multipart/alternative;
+	boundary="_=513719676i276h6k6a4h1j326j3m5c32=_"
+Content-Disposition: inline
+
+
+--_=513719676i276h6k6a4h1j326j3m5c32=_
+Content-Type: text/plain;
+	 charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+
+some text
+--_=513719676i276h6k6a4h1j326j3m5c32=_
+Content-Type: text/html;
+	 charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+
+<html></html>
+--_=513719676i276h6k6a4h1j326j3m5c32=_--
+
+--_=4g116a4p31245o2q4h634e3y354m3103=_
+Content-Transfer-Encoding: base64
+Content-Id: <calendar.ics>
+Content-Type: text/calendar;
+	 method="REQUEST"
+Content-Disposition: inline
+
+QkVHSU46VkNBTEVOREFSDQpQUk9ESUQ6LS8vS0JSVy8vQ2FsaWJleCAwLjEuMC8vRU4NClZFUlNJ
+T046Mi4wDQpDQUxTQ0FMRTpHUkVHT1JJQU4NCk1FVEhPRDpSRVFVRVNUDQpCRUdJTjpWRVZFTlQN
+CkxBU1QtTU9ESUZJRUQ6MjAyMTA0MjdUMTA0NTIwWg0KU0VRVUVOQ0U6MA0KRFRTVEFNUDoyMDIx
+MDQyN1QxMDQ1MjBaDQpDUkVBVEVEOjIwMjEwNDI3VDEwNDUyMFoNClNVTU1BUlk6QSB0ZXN0IGV2
+ZW50DQpPUkdBTklaRVI7Q049c2VuZGVyQGV4YW1wZS5jb206bWFpbHRvOnNlbmRlckBleGFtcGUu
+Y29tDQpEVFNUQVJUOjIwMjEwNDI3VDEwNDUwMFoNCkRURU5EOjIwMjEwNDI3VDExNDUwMFoNCkFU
+VEVOREVFO1JPTEU9Q0hBSVI7UlNWUD1GQUxTRTtDVVRZUEU9SU5ESVZJRFVBTDtQQVJUU1RBVD1B
+Q0NFUFRFRDtDTj1zZW5kZXJAZXhhbXBlLmNvbTtYLU5VTS1HVUVTVFM9MDpzZW5kZXJAZXhhbXBl
+LmNvbQ0KQVRURU5ERUU7Q1VUWVBFPUlORElWSURVQUw7Uk9MRT1SRVEtUEFSVElDSVBBTlQ7UEFS
+VFNUQVQ9TkVFRFMtQUNUSU9OO1JTVlA9DQogVFJVRTtYLU5VTS1HVUVTVFM9MDtDTj1yZWNpcGll
+bnRAZXhhbXBlLmNvbTptYWlsdG86cmVjaXBpZW50QGV4YW1wZS5jb20NCkRFU0NSSVBUSU9OOkFu
+IEV2ZW50DQpVSUQ6TXpNME5FQjJiMmx6YldGeWRDNW9iMnh2WTI5dExuWnBaR1Z2DQpTVEFUVVM6
+Q09ORklSTUVEDQpFTkQ6VkVWRU5UDQpFTkQ6VkNBTEVOREFSDQo=
+
+--_=4g116a4p31245o2q4h634e3y354m3103=_--
