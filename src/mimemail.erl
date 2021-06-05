@@ -47,6 +47,10 @@
 %% in the case of a message/rfc822 attachment, body can be a single 5-tuple MIME structure.
 %%
 %% You should see the relevant RFCs (2045, 2046, 2047, etc.) for more information.
+%%
+%% Note that parts of this module (e.g., `decode/2') use the
+%% <a href="https://hex.pm/packages/iconv"><tt>iconv</tt></a> library for string conversion,
+%% which you will need to explicitly list as a dependency.
 
 -module(mimemail).
 
@@ -187,13 +191,12 @@ decode_header(Value, Charset) ->
 	RTokens = tokenize_header(Value, []),
 	Tokens = lists:reverse(RTokens),
 	Decoded = try decode_header_tokens_strict(Tokens, Charset)
-		catch Type:Reason ->
+		catch Type:Reason:Stacktrace ->
 			case decode_header_tokens_permissive(Tokens, Charset, []) of
 				{ok, Dec} -> Dec;
 				error ->
 					% re-throw original error
-					% may also use erlang:raise/3 to preserve original traceback
-					erlang:Type(Reason)
+					erlang:raise(Type, Reason, Stacktrace)
 			end
 		end,
 	iolist_to_binary(Decoded).
