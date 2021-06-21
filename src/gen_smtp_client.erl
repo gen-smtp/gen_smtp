@@ -695,7 +695,12 @@ connect(Host, Options) ->
 		undefined -> [];
 		Other -> Other
 	end,
-	SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
+	AddTLSOpts = case proplists:get_value(tls_options, Options) of
+		undefined -> [];
+		TLSOpts -> TLSOpts
+	end,
+	AdditionalOpts = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
+	SockOpts = [AdditionalOpts | AddTLSOpts],
 	Proto = case proplists:get_value(ssl, Options) of
 		true ->
 			ssl;
