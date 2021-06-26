@@ -26,7 +26,7 @@
 
 -define(PORT, 2525).
 
--include_lib("hut/include/hut.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% External API
 -export([
@@ -81,7 +81,7 @@ convert_options(CallbackModule, Options) ->
 	EmailTransferProtocol = proplists:get_value(protocol, ProtocolOpts, smtp),
 	case {EmailTransferProtocol, Port} of
 		{lmtp, 25} ->
-			?log(error, "LMTP is different from SMTP, it MUST NOT be used on the TCP port 25"),
+			?LOG_ERROR("LMTP is different from SMTP, it MUST NOT be used on the TCP port 25", []),
 			% Error defined in section 5 of https://tools.ietf.org/html/rfc2033
 			{error, invalid_lmtp_port};
 		_ ->

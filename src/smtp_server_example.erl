@@ -9,7 +9,7 @@
 	handle_RCPT/2, handle_RCPT_extension/2, handle_DATA/4, handle_RSET/1, handle_VRFY/2,
 	handle_other/3, handle_AUTH/4, handle_STARTTLS/1, handle_info/2, handle_error/3,
 	code_change/3, terminate/2]).
--include_lib("hut/include/hut.hrl").
+-include_lib("kernel/include/logger.hrl").
 -define(RELAY, true).
 
 -record(state,
@@ -34,14 +34,14 @@
 -spec init(Hostname :: inet:hostname(), SessionCount :: non_neg_integer(),
            Address :: inet:ip_address(), Options :: list()) -> {'ok', iodata(), #state{}} | {'stop', any(), iodata()}.
 init(Hostname, SessionCount, Address, Options) ->
-	?log(info, "peer: ~p~n", [Address]),
+	?LOG_INFO("peer: ~p", [Address]),
 	case SessionCount > 20 of
 		false ->
 			Banner = [Hostname, " ESMTP smtp_server_example"],
 			State = #state{options = Options},
 			{ok, Banner, State};
 		true ->
-			?log(warning, "Connection limit exceeded~n"),
+			?LOG_WARNING("Connection limit exceeded", []),
 			{stop, normal, ["421 ", Hostname, " is too busy to accept mail right now"]}
 	end.
 
@@ -60,7 +60,7 @@ handle_HELO(<<"invalid">>, State) ->
 handle_HELO(<<"trusted_host">>, State) ->
 	{ok, State}; %% no size limit because we trust them.
 handle_HELO(Hostname, State) ->
-	?log(info, "HELO from ~s~n", [Hostname]),
+	?LOG_INFO("HELO from ~s", [Hostname]),
 	% 640kb of HELO should be enough for anyone.
 	MaxSize = proplists:get_value(size, State#state.options, 655360),
 	{ok, MaxSize, State}.
@@ -78,7 +78,7 @@ handle_EHLO(<<"invalid">>, _Extensions, State) ->
 	% contrived example
 	{error, "554 invalid hostname", State};
 handle_EHLO(Hostname, Extensions, State) ->
-	?log(info, "EHLO from ~s~n", [Hostname]),
+	?LOG_INFO("EHLO from ~s", [Hostname]),
 	% You can advertise additional extensions, or remove some defaults
 	MyExtensions1 = case proplists:get_value(auth, State#state.options, false) of
 		true ->
@@ -106,7 +106,7 @@ handle_EHLO(Hostname, Extensions, State) ->
 handle_MAIL(<<"badguy@blacklist.com">>, State) ->
 	{error, "552 go away", State};
 handle_MAIL(From, State) ->
-	?log(info, "Mail from ~s~n", [From]),
+	?LOG_INFO("Mail from ~s", [From]),
 	% you can accept or reject the FROM address here
 	{ok, State}.
 
@@ -114,28 +114,28 @@ handle_MAIL(From, State) ->
 %% the option.
 -spec handle_MAIL_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_MAIL_extension(<<"X-SomeExtension">> = Extension, State) ->
-	?log(info, "Mail from extension ~s~n", [Extension]),
+	?LOG_INFO("Mail from extension ~s", [Extension]),
 	% any MAIL extensions can be handled here
 	{ok, State};
 handle_MAIL_extension(Extension, _State) ->
-	?log(warning, "Unknown MAIL FROM extension ~s~n", [Extension]),
+	?LOG_WARNING("Unknown MAIL FROM extension ~s", [Extension]),
 	error.
 
 -spec handle_RCPT(To :: binary(), State :: #state{}) -> {'ok', #state{}} | {'error', string(), #state{}}.
 handle_RCPT(<<"nobody@example.com">>, State) ->
 	{error, "550 No such recipient", State};
 handle_RCPT(To, State) ->
-	?log(info, "Mail to ~s~n", [To]),
+	?LOG_INFO("Mail to ~s", [To]),
 	% you can accept or reject RCPT TO addresses here, one per call
 	{ok, State}.
 
 -spec handle_RCPT_extension(Extension :: binary(), State :: #state{}) -> {'ok', #state{}} | 'error'.
 handle_RCPT_extension(<<"X-SomeExtension">> = Extension, State) ->
 	% any RCPT TO extensions can be handled here
-	?log(info, "Mail to extension ~s~n", [Extension]),
+	?LOG_INFO("Mail to extension ~s", [Extension]),
 	{ok, State};
 handle_RCPT_extension(Extension, _State) ->
-	?log(warning, "Unknown RCPT TO extension ~s~n", [Extension]),
+	?LOG_WARNING("Unknown RCPT TO extension ~s", [Extension]),
 	error.
 
 %% @doc Handle the DATA verb from the client, which corresponds to the body of
@@ -184,10 +184,10 @@ handle_DATA(From, To, Data, State) ->
 					% In this example we try to decode the email
 					try mimemail:decode(Data) of
 						_Result ->
-							?log(info, "Message decoded successfully!~n")
+							?LOG_INFO("Message decoded successfully!", [])
 					catch
 						What:Why ->
-							?log(warning, "Message decode FAILED with ~p:~p~n", [What, Why]),
+							?LOG_WARNING("Message decode FAILED with ~p:~p", [What, Why]),
 							case proplists:get_value(dump, State#state.options, false) of
 							false -> ok;
 							true ->
@@ -240,15 +240,15 @@ handle_AUTH(_Type, _Username, _Password, _State) ->
 %% it only gets called if you add STARTTLS to your ESMTP extensions
 -spec handle_STARTTLS(#state{}) -> #state{}.
 handle_STARTTLS(State) ->
-    ?log(info, "TLS Started~n"),
-    State.
+  ?LOG_INFO("Start TLS", []),
+  State.
 
 -spec handle_info(Info :: term(), State :: term()) ->
     {noreply, NewState :: term()} |
     {noreply, NewState :: term(), timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: term()}.
 handle_info(_Info, State) ->
-    ?log(info, "handle_info(~p, ~p)", [_Info, State]),
+  ?LOG_INFO("handle_info(~p, ~p)", [_Info, State]),
 	{noreply, State}.
 
 %% This optional callback is called when different kinds of protocol errors happen.
@@ -257,7 +257,7 @@ handle_info(_Info, State) ->
 -spec handle_error(gen_smtp_server_session:error_class(), any(), #state{}) ->
 		  {ok, State} | {stop, any(), State}.
 handle_error(Class, Details, State) ->
-    ?log(info, "handle_error(~p, ~p, ~p)", [Class, Details, State]),
+  ?LOG_INFO("handle_error(~p, ~p, ~p)", [Class, Details, State]),
 	{ok, State}.
 
 -spec code_change(OldVsn :: any(), State :: #state{}, Extra :: any()) -> {ok, #state{}}.
@@ -296,12 +296,12 @@ queue_or_deliver(From, To, Data, Reference, State) ->
 	Length = byte_size(Data),
 	case proplists:get_value(protocol, State#state.options, smtp) of
 		smtp ->
-			?log(info, "message from ~s to ~p queued as ~s, body length ~p~n", [From, To, Reference, Length]),
+			?LOG_INFO("message from ~s to ~p queued as ~s, body length ~p", [From, To, Reference, Length]),
 			% ... should actually handle the email,
 			%     if `ok` is returned we are taking the responsibility of the delivery.
 			{ok, ["queued as ~s", Reference], State};
 		lmtp ->
-			?log(info, "message from ~s delivered to ~p, body length ~p~n", [From, To, Length]),
+			?LOG_INFO("message from ~s delivered to ~p, body length ~p", [From, To, Length]),
 			Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- To],
 			% ... should actually handle the email for each recipient for each `ok`
 			{multiple, Multiple, State}
