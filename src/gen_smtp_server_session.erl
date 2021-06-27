@@ -47,7 +47,7 @@
 		code_change/3]).
 -export_type([options/0, error_class/0, protocol_message/0]).
 
--include_lib("kernel/include/logger.hrl").
+-include_lib("gen_smtp/include/logger.hrl").
 
 -record(envelope,
 	{
@@ -303,7 +303,7 @@ handle_info(Info, #state{module=Module, callbackstate = OldCallbackState} = Stat
 					{stop, Reason, State#state{callbackstate = NewCallbackState}}
 			end;
 		false ->
-			?LOG_DEBUG("Ignored message ~p", [Info]),
+			?LOG_DEBUG_FMT("Ignored message ~p", [Info]),
 			{noreply, State, ?TIMEOUT}
 	end.
 
@@ -330,7 +330,7 @@ parse_request(Packet) ->
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case binstr:strchr(Request, $\s) of
 		0 ->
-		    ?LOG_DEBUG("got a ~s request", [Request]),
+		    ?LOG_DEBUG_FMT("got a ~s request", [Request]),
 			case binstr:to_upper(Request) of
 				<<"QUIT">> = Res -> {Res, <<>>};
 				<<"DATA">> = Res -> {Res, <<>>};
@@ -340,7 +340,7 @@ parse_request(Packet) ->
 		Index ->
 			Verb = binstr:substr(Request, 1, Index - 1),
 			Parameters = binstr:strip(binstr:substr(Request, Index + 1), left, $\s),
-			?LOG_DEBUG("got a ~s request with parameters ~s", [Verb, Parameters]),
+			?LOG_DEBUG_FMT("got a ~s request with parameters ~s", [Verb, Parameters]),
 			{binstr:to_upper(Verb), Parameters}
 	end.
 
@@ -536,7 +536,7 @@ handle_request({<<"MAIL">>, Args},
 							send(State, "501 Bad sender address syntax\r\n"),
 							{ok, State};
 						{ParsedAddress, <<>>} ->
-							?LOG_DEBUG("From address ~s (parsed as ~s)", [Address, ParsedAddress]),
+							?LOG_DEBUG_FMT("From address ~s (parsed as ~s)", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
 									send(State, "250 sender Ok\r\n"),
@@ -546,9 +546,9 @@ handle_request({<<"MAIL">>, Args},
 									{ok, State#state{callbackstate = CallbackState}}
 							end;
 						{ParsedAddress, ExtraInfo} ->
-							?LOG_DEBUG("From address ~s (parsed as ~s) with extra info ~s", [Address, ParsedAddress, ExtraInfo]),
+							?LOG_DEBUG_FMT("From address ~s (parsed as ~s) with extra info ~s", [Address, ParsedAddress, ExtraInfo]),
 							Options = [binstr:to_upper(X) || X <- binstr:split(ExtraInfo, <<" ">>)],
-							?LOG_DEBUG("options are ~p", [Options]),
+							?LOG_DEBUG_FMT("options are ~p", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
 								 (<<"SIZE=", Size/binary>>, InnerState) when MaxSize =:= 'infinity' ->
@@ -577,11 +577,11 @@ handle_request({<<"MAIL">>, Args},
 							end,
 							case lists:foldl(F, State, Options) of
 								{error, Message} ->
-									?LOG_DEBUG("error: ~s", [Message]),
+									?LOG_DEBUG_FMT("error: ~s", [Message]),
 									send(State, Message),
 									{ok, State};
 								NewState ->
-									?LOG_DEBUG("OK", []),
+									?LOG_DEBUG_FMT("OK"),
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
 											send(State, "250 sender Ok\r\n"),
@@ -617,7 +617,7 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 					send(State, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
 				{ParsedAddress, <<>>} ->
-					?LOG_DEBUG("To address ~s (parsed as ~s)", [Address, ParsedAddress]),
+					?LOG_DEBUG_FMT("To address ~s (parsed as ~s)", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, OldCallbackState) of
 						{ok, CallbackState} ->
 							send(State, "250 recipient Ok\r\n"),
@@ -628,7 +628,7 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 					end;
 				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
-					?LOG_DEBUG("To address ~s (parsed as ~s) with extra info ~s", [Address, ParsedAddress, ExtraInfo]),
+					?LOG_DEBUG_FMT("To address ~s (parsed as ~s) with extra info ~s", [Address, ParsedAddress, ExtraInfo]),
 					send(State, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
 					{ok, State}
 			end;
@@ -652,7 +652,7 @@ handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
 			{ok, State1};
 		_Else ->
 			send(State, "354 enter mail, end with line containing only '.'\r\n"),
-			?LOG_DEBUG("switching to data read mode", []),
+			?LOG_DEBUG_FMT("switching to data read mode"),
 
 			{ok, State#state{readmessage = true}}
 	end;
@@ -708,13 +708,13 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
 			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
-					?LOG_DEBUG("SSL negotiation sucessful", []),
+					?LOG_DEBUG_FMT("SSL negotiation sucessful"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
 					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
 				{error, Reason} ->
-					?LOG_INFO("SSL handshake failed : ~p", [Reason]),
+					?LOG_INFO_FMT("SSL handshake failed : ~p", [Reason]),
 					send(State, "454 TLS negotiation failed\r\n"),
 					State1 = handle_error(ssl_handshake_error, Reason, State),
 					{ok, State1}
@@ -813,7 +813,7 @@ parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
 
 -spec has_extension(Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false'.
 has_extension(Extensions, Ext) ->
-	?LOG_DEBUG("extensions ~p", [Extensions]),
+	?LOG_DEBUG_FMT("extensions ~p", [Extensions]),
 	case proplists:get_value(Ext, Extensions) of
 		undefined ->
 			false;
@@ -838,7 +838,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 					{ok, NewState}
 				end;
 		false ->
-			?LOG_WARNING("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions", []),
+			?LOG_WARNING_FMT("Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions"),
 			send(State, "535 authentication failed (#5.7.1)\r\n"),
 			{ok, NewState}
 	end.
@@ -851,7 +851,7 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 
 %% @doc a tight loop to receive the message body
 receive_data(_Acc, _Transport, _Socket, _, Size, MaxSize, Session, _Options) when MaxSize =/= 'infinity', Size > MaxSize ->
-	?LOG_INFO("SMTP message body size ~B exceeded maximum allowed ~B", [Size, MaxSize]),
+	?LOG_INFO_FMT("SMTP message body size ~B exceeded maximum allowed ~B", [Size, MaxSize]),
 	Session ! {receive_data, {error, size_exceeded}};
 receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) ->
 	case Transport:recv(Socket, RecvSize, 1000) of
@@ -862,15 +862,15 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 				FixedPacket ->
 					case binstr:strpos(FixedPacket, <<"\r\n.\r\n">>) of
 						0 ->
-							?LOG_DEBUG("received ~B bytes; size is now ~p", [RecvSize, Size + size(Packet)]),
-							?LOG_DEBUG("memory usage: ~p", [erlang:process_info(self(), memory)]),
+							?LOG_DEBUG_FMT("received ~B bytes; size is now ~p", [RecvSize, Size + size(Packet)]),
+							?LOG_DEBUG_FMT("memory usage: ~p", [erlang:process_info(self(), memory)]),
 							receive_data([FixedPacket | Acc], Transport, Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
-							?LOG_DEBUG("memory usage before flattening: ~p", [erlang:process_info(self(), memory)]),
+							?LOG_DEBUG_FMT("memory usage before flattening: ~p", [erlang:process_info(self(), memory)]),
 							Result = list_to_binary(lists:reverse([String | Acc])),
-							?LOG_DEBUG("memory usage after flattening: ~p", [erlang:process_info(self(), memory)]),
+							?LOG_DEBUG_FMT("memory usage after flattening: ~p", [erlang:process_info(self(), memory)]),
 							Session ! {receive_data, Result, Rest}
 					end
 			end;
@@ -882,15 +882,15 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 				FixedPacket ->
 					case binstr:strpos(FixedPacket, <<"\r\n.\r\n">>) of
 						0 ->
-							?LOG_DEBUG("received ~B bytes; size is now ~p", [RecvSize, Size + size(Packet)]),
-							?LOG_DEBUG("memory usage: ~p", [erlang:process_info(self(), memory)]),
+							?LOG_DEBUG_FMT("received ~B bytes; size is now ~p", [RecvSize, Size + size(Packet)]),
+							?LOG_DEBUG_FMT("memory usage: ~p", [erlang:process_info(self(), memory)]),
 							receive_data([FixedPacket | Acc], Transport, Socket, RecvSize, Size + byte_size(FixedPacket), MaxSize, Session, Options);
 						Index ->
 							String = binstr:substr(FixedPacket, 1, Index - 1),
 							Rest = binstr:substr(FixedPacket, Index+5),
-							?LOG_DEBUG("memory usage before flattening: ~p", [erlang:process_info(self(), memory)]),
+							?LOG_DEBUG_FMT("memory usage before flattening: ~p", [erlang:process_info(self(), memory)]),
 							Result = list_to_binary(lists:reverse([String | Acc])),
-							?LOG_DEBUG("memory usage after flattening: ~p", [erlang:process_info(self(), memory)]),
+							?LOG_DEBUG_FMT("memory usage after flattening: ~p", [erlang:process_info(self(), memory)]),
 							Session ! {receive_data, Result, Rest}
 					end
 			end;
@@ -901,21 +901,21 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
 			case binstr:strpos(Packet, <<"\r\n.\r\n">>) of
 				0 ->
 					% uh-oh
-					?LOG_DEBUG("no data on socket, and no DATA terminator, retrying ~p", [Session]),
+					?LOG_DEBUG_FMT("no data on socket, and no DATA terminator, retrying ~p", [Session]),
 					% eventually we'll either get data or a different error, just keep retrying
 					receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 				Index ->
 					String = binstr:substr(Packet, 1, Index - 1),
 					Rest = binstr:substr(Packet, Index+5),
-					?LOG_DEBUG("memory usage before flattening: ~p", [erlang:process_info(self(), memory)]),
+					?LOG_DEBUG_FMT("memory usage before flattening: ~p", [erlang:process_info(self(), memory)]),
 					Result = list_to_binary(lists:reverse([String | Acc2])),
-					?LOG_DEBUG("memory usage after flattening: ~p", [erlang:process_info(self(), memory)]),
+					?LOG_DEBUG_FMT("memory usage after flattening: ~p", [erlang:process_info(self(), memory)]),
 					Session ! {receive_data, Result, Rest}
 			end;
 		{error, timeout} ->
 			receive_data(Acc, Transport, Socket, 0, Size, MaxSize, Session, Options);
 		{error, Reason} ->
-			?LOG_WARNING("SMTP receive error: ~p", [Reason]),
+			?LOG_WARNING_FMT("SMTP receive error: ~p", [Reason]),
 			Session ! {receive_data, {error, Reason}}
 	end.
 
