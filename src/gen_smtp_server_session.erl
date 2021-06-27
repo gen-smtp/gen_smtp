@@ -326,7 +326,7 @@ code_change(OldVsn, #state{module = Module, callbackstate = CallbackState} = Sta
 	{ok, State#state{callbackstate = CallbackState}}.
 
 -spec parse_request(Packet :: binary()) -> {binary(), binary()}.
-parse_request(Packet) ->
+parse_request(Packet) when is_binary(Packet) ->
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case binstr:strchr(Request, $\s) of
 		0 ->
@@ -706,7 +706,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			end,
 			%% Assert that socket is in passive state
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
-			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
+			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, binary}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					?LOG_DEBUG_FMT("SSL negotiation sucessful"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
