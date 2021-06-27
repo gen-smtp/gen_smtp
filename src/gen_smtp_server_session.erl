@@ -287,7 +287,7 @@ handle_info({Kind, _Socket, Reason}, State) when Kind == ssl_error;
 	State1 = handle_error(Kind, Reason, State),
 	{stop, normal, State1};
 handle_info(timeout, #state{socket = Socket, transport = Transport} = State) ->
-	send(State, "421 Error: timeout exceeded\r\n"),
+	send(State, "421 Error: timeout exceeded\r\n", true),
 	Transport:close(Socket),
 	State1 = handle_error(timeout, [], State),
 	{stop, normal, State1};
@@ -715,9 +715,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
 				{error, Reason} ->
 					?LOG_INFO_FMT("SSL handshake failed : ~p", [Reason]),
-					send(State, "454 TLS negotiation failed\r\n"),
-					State1 = handle_error(ssl_handshake_error, Reason, State),
-					{ok, State1}
+					reply_and_handle_error(State, "454 TLS negotiation failed\r\n", ssl_handshake_error, Reason)
 			end;
 		false ->
 			send(State, "500 Command unrecognized\r\n"),
@@ -979,16 +977,31 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
-send(#state{transport = Transport, socket = Sock} = St, Data) ->
-    case Transport:send(Sock, Data) of
-		ok -> ok;
+reply_and_handle_error(State, Reply, ErrType, Reason) when is_atom(ErrType) ->
+	case send(State, Reply, true) of
+		ok ->
+			State1 = handle_error(ErrType, Reason, State),
+			{ok, State1};
+		{error, closed} ->
+			State1 = handle_error(ErrType, Reason, State),
+			{stop, normal, State1}
+	end.
+
+send(State, Data) ->
+    send(State, Data, false).
+send(#state{transport = Transport, socket = Sock} = St, Data, IgnoreSockClosedError) ->
+	case Transport:send(Sock, Data) of
+		ok ->
+			ok;
+		{error, closed} when IgnoreSockClosedError ->
+			{error, closed};
 		{error, Err} ->
 			St1 = handle_error(send_error, Err, St),
 			throw({stop, {send_error, Err}, St1})
 	end.
 
 setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
-    case Transport:setopts(Sock, Opts) of
+	case Transport:setopts(Sock, Opts) of
 		ok -> ok;
 		{error, Err} ->
 			St1 = handle_error(setopts_error, Err, St),
