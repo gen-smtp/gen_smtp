@@ -326,7 +326,7 @@ code_change(OldVsn, #state{module = Module, callbackstate = CallbackState} = Sta
 	{ok, State#state{callbackstate = CallbackState}}.
 
 -spec parse_request(Packet :: binary()) -> {binary(), binary()}.
-parse_request(Packet) ->
+parse_request(Packet) when is_binary(Packet) ->
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case binstr:strchr(Request, $\s) of
 		0 ->
@@ -624,7 +624,12 @@ handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, 
 							{ok, State#state{envelope = Envelope#envelope{to = Envelope#envelope.to ++ [ParsedAddress]}, callbackstate = CallbackState}};
 						{error, Message, CallbackState} ->
 							send(State, [Message, "\r\n"]),
-							{ok, State#state{callbackstate = CallbackState}}
+							{ok, State#state{callbackstate = CallbackState}};
+						{stop, Message, Reason, CallbackState} ->
+							send(State, [Message, "\r\n"]),
+							{stop, Reason, State#state{callbackstate = CallbackState}};
+						{stop, Reason, CallbackState} ->
+							{stop, Reason, State#state{callbackstate = CallbackState}}
 					end;
 				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
@@ -706,7 +711,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			end,
 			%% Assert that socket is in passive state
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
-			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
+			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, binary}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					?log(debug, "SSL negotiation sucessful~n"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}]),
@@ -715,9 +720,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
 				{error, Reason} ->
 					?log(info, "SSL handshake failed : ~p~n", [Reason]),
-					send(State, "454 TLS negotiation failed\r\n"),
-					State1 = handle_error(ssl_handshake_error, Reason, State),
-					{ok, State1}
+					reply_and_handle_error(State, "454 TLS negotiation failed\r\n", ssl_handshake_error, Reason)
 			end;
 		false ->
 			send(State, "500 Command unrecognized\r\n"),
@@ -979,16 +982,31 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
-send(#state{transport = Transport, socket = Sock} = St, Data) ->
-    case Transport:send(Sock, Data) of
-		ok -> ok;
+reply_and_handle_error(State, Reply, ErrType, Reason) when is_atom(ErrType) ->
+	case send(State, Reply, true) of
+		ok ->
+			State1 = handle_error(ErrType, Reason, State),
+			{ok, State1};
+		{error, closed} ->
+			State1 = handle_error(ErrType, Reason, State),
+			{stop, normal, State1}
+	end.
+
+send(State, Data) ->
+    send(State, Data, false).
+send(#state{transport = Transport, socket = Sock} = St, Data, IgnoreSockClosedError) ->
+	case Transport:send(Sock, Data) of
+		ok ->
+			ok;
+		{error, closed} when IgnoreSockClosedError ->
+			{error, closed};
 		{error, Err} ->
 			St1 = handle_error(send_error, Err, St),
 			throw({stop, {send_error, Err}, St1})
 	end.
 
 setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
-    case Transport:setopts(Sock, Opts) of
+	case Transport:setopts(Sock, Opts) of
 		ok -> ok;
 		{error, Err} ->
 			St1 = handle_error(setopts_error, Err, St),
