@@ -1,3 +1,4 @@
+%%% vim:ts=2:sw=2:et
 %%% Copyright 2009 Jack Danger Canty <code@jackcanty.com>. All rights reserved.
 %%%
 %%% Permission is hereby granted, free of charge, to any person obtaining

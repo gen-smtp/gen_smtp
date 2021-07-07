@@ -1,3 +1,4 @@
+%%% vim:ts=2:sw=2:et
 %% @doc A simple example callback module for `gen_smtp_server_session' that also serves as
 %% documentation for the required callback API.
 
