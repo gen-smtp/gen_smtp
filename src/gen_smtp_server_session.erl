@@ -1,3 +1,4 @@
+%%% vim:ts=2:sw=2:et
 %%% Copyright 2009 Andrew Thompson <andrew@hijacked.us>. All rights reserved.
 %%%
 %%% Redistribution and use in source and binary forms, with or without
@@ -188,16 +189,20 @@ init([Ref, Transport, Socket, Module, Options]) ->
 			Transport:close(Socket),
 			ignore;
 		{ok, Banner, CallbackState} ->
-			Transport:send(Socket, ["220 ", Banner, "\r\n"]),
-			ok = Transport:setopts(Socket, [{active, once},
-											{packet, line}]),
-			{ok, #state{socket = Socket,
-						transport = Transport,
-						module = Module,
-						ranch_ref = Ref,
-						protocol = Protocol,
-						options = Options,
-						callbackstate = CallbackState}, ?TIMEOUT};
+			send_and_run(["220 ", Banner, "\r\n"],
+										fun(State1) ->
+											ok = Transport:setopts(Socket, [{active, once},
+																											{packet, line}]),
+											{ok, State1, ?TIMEOUT}
+										end,
+										#state{
+											socket = Socket,
+											transport = Transport,
+											module = Module,
+											ranch_ref = Ref,
+											protocol = Protocol,
+											options = Options,
+											callbackstate = CallbackState});
 		{stop, Reason, Message} ->
 			Transport:send(Socket, [Message, "\r\n"]),
 			Transport:close(Socket),
@@ -220,22 +225,26 @@ handle_cast(_Msg, State) ->
 
 %% @hidden
 -spec handle_info(Message :: any(), State :: #state{}) -> {'noreply', #state{}} | {'stop', any(), #state{}}.
-handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State) ->
-	send(State, "552 Message too large\r\n"),
-	setopts(State, [{active, once}]),
-	State1 = handle_error(data_rejected, size_exceeded, State),
-	{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
-handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = State) ->
-	send(State, "451 Bare newline detected\r\n"),
-	setopts(State, [{active, once}]),
-	State1 = handle_error(data_rejected, bare_neline, State),
-	{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT};
+handle_info({receive_data, {error, size_exceeded}}, #state{readmessage = true} = State0) ->
+	Fun = fun(State) ->
+		setopts(State, [{active, once}]),
+		State1 = handle_error(data_rejected, size_exceeded, State),
+		{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
+	end,
+	send_and_run("552 Message too large\r\n", Fun, State0);
+handle_info({receive_data, {error, bare_newline}}, #state{readmessage = true} = State0) ->
+	Fun = fun(State) ->
+		setopts(State, [{active, once}]),
+		State1 = handle_error(data_rejected, bare_neline, State),
+		{noreply, State1#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
+	end,
+	send_and_run("451 Bare newline detected\r\n", Fun, State0);
 handle_info({receive_data, {error, Other}}, #state{readmessage = true} = State) ->
 	State1 = handle_error(data_receive_error, Other, State),
 	{stop, {error_receiving_data, Other}, State1};
 handle_info({receive_data, Body, Rest},
-			#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
-				   callbackstate = OldCallbackState, maxsize=MaxSize} = State) ->
+	#state{socket = Socket, transport = Transport, readmessage = true, envelope = Env, module=Module,
+				 callbackstate = OldCallbackState, maxsize=MaxSize} = State) ->
 	% send the remainder of the data...
 	case Rest of
 		<<>> -> ok; % no remaining data
@@ -248,16 +257,22 @@ handle_info({receive_data, Body, Rest},
 	case MaxSize =:= infinity orelse byte_size(Data) =< MaxSize of
 		true ->
 			{ResponseType, Value, CallbackState} = Module:handle_DATA(From, To, Data, OldCallbackState),
-			report_recipient(ResponseType, Value, State),
-			setopts(State, [{active, once}]),
-			{noreply, State#state{readmessage = false,
-								  envelope = #envelope{},
-								  callbackstate = CallbackState}, ?TIMEOUT};
+			case report_recipient(ResponseType, Value, State) of
+				{ok, State1} ->
+					setopts(State1, [{active, once}]),
+					{noreply, State1#state{readmessage = false,
+																 envelope = #envelope{},
+																 callbackstate = CallbackState}, ?TIMEOUT};
+				{stop, Reason, State1} ->
+					{stop, Reason, State1}
+			end;
 		false ->
-			send(State, "552 Message too large\r\n"),
-			setopts(State, [{active, once}]),
-			% might not even be able to get here anymore...
-			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
+			Fun = fun(S) ->
+				setopts(S, [{active, once}]),
+				% might not even be able to get here anymore...
+				{noreply, S#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
+			end,
+			send_and_run("552 Message too large\r\n", Fun, State)
 	end;
 handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport} = State)
   when SocketType =:= tcp; SocketType =:= ssl ->
@@ -286,11 +301,11 @@ handle_info({Kind, _Socket, Reason}, State) when Kind == ssl_error;
 												 Kind == tcp_error ->
 	State1 = handle_error(Kind, Reason, State),
 	{stop, normal, State1};
-handle_info(timeout, #state{socket = Socket, transport = Transport} = State) ->
-	send(State, "421 Error: timeout exceeded\r\n"),
-	Transport:close(Socket),
-	State1 = handle_error(timeout, [], State),
-	{stop, normal, State1};
+handle_info(timeout, #state{} = State) ->
+	case reply_and_handle_error(State, "421 Error: timeout exceeded\r\n", timeout, []) of
+		{ok,      State1} -> {stop, normal, State1};
+		{stop, _, State1} -> {stop, normal, State1}
+	end;
 handle_info(Info, #state{module=Module, callbackstate = OldCallbackState} = State) ->
 	case erlang:function_exported(Module, handle_info, 2) of
 		true ->
@@ -326,7 +341,7 @@ code_change(OldVsn, #state{module = Module, callbackstate = CallbackState} = Sta
 	{ok, State#state{callbackstate = CallbackState}}.
 
 -spec parse_request(Packet :: binary()) -> {binary(), binary()}.
-parse_request(Packet) ->
+parse_request(Packet) when is_binary(Packet) ->
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	case binstr:strchr(Request, $\s) of
 		0 ->
@@ -344,46 +359,39 @@ parse_request(Packet) ->
 			{binstr:to_upper(Verb), Parameters}
 	end.
 
+ok_state(State) ->
+	{ok, State}.
+
 -spec handle_request({Verb :: binary(), Args :: binary()}, State :: #state{}) -> {'ok', #state{}} | {'stop', any(), #state{}}.
 handle_request({<<>>, _Any}, State) ->
-	send(State, "500 Error: bad syntax\r\n"),
-	{ok, State};
+	safe_send("500 Error: bad syntax\r\n", State);
 handle_request({Command, <<>>}, State)
 	when Command == <<"HELO">>; Command == <<"EHLO">>; Command == <<"LHLO">> ->
-	send(State, ["501 Syntax: ", Command, " hostname\r\n"]),
-	{ok, State};
+	safe_send(["501 Syntax: ", Command, " hostname\r\n"], State);
 handle_request({<<"LHLO">>, _Any}, #state{protocol = smtp} = State) ->
-	send(State, "500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n"),
-	{ok, State};
+	safe_send("500 Error: SMTP should send HELO or EHLO instead of LHLO\r\n", State);
 handle_request({Msg, _Any}, #state{protocol = lmtp} = State)
-			   when Msg == <<"HELO">>; Msg == <<"EHLO">> ->
-	send(State, "500 Error: LMTP should replace HELO and EHLO with LHLO\r\n"),
-	{ok, State};
+		   when Msg == <<"HELO">>; Msg == <<"EHLO">> ->
+	safe_send("500 Error: LMTP should replace HELO and EHLO with LHLO\r\n", State);
 handle_request({<<"HELO">>, Hostname},
-			   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
+		   #state{options = Options, module = Module, callbackstate = OldCallbackState} = State) ->
 	case Module:handle_HELO(Hostname, OldCallbackState) of
 		{ok, MaxSize, CallbackState} when MaxSize =:= infinity; is_integer(MaxSize) ->
-			Data = ["250 ", hostname(Options), "\r\n"],
-			send(State, Data),
-			{ok, State#state{maxsize = MaxSize,
-							 envelope = #envelope{},
-							 callbackstate = CallbackState}};
+			safe_send(["250 ", hostname(Options), "\r\n"],
+								State#state{maxsize = MaxSize, envelope = #envelope{}, callbackstate = CallbackState});
 		{ok, CallbackState} ->
-			Data = ["250 ", hostname(Options), "\r\n"],
-			send(State, Data),
-			{ok, State#state{envelope = #envelope{}, callbackstate = CallbackState}};
+			safe_send(["250 ", hostname(Options), "\r\n"],
+								State#state{envelope = #envelope{}, callbackstate = CallbackState});
 		{error, Message, CallbackState} ->
-			send(State, [Message, "\r\n"]),
-			{ok, State#state{callbackstate = CallbackState}}
+			safe_send([Message, "\r\n"], State#state{callbackstate = CallbackState})
 	end;
 handle_request({Msg, Hostname},
 			   #state{options = Options, module = Module, callbackstate = OldCallbackState, tls = Tls} = State)
 			   when Msg == <<"EHLO">>; Msg == <<"LHLO">> ->
 	case Module:handle_EHLO(Hostname, ?BUILTIN_EXTENSIONS, OldCallbackState) of
 		{ok, [], CallbackState} ->
-			Data = ["250 ", hostname(Options), "\r\n"],
-			send(State, Data),
-			{ok, State#state{extensions = [], callbackstate = CallbackState}};
+			safe_send(["250 ", hostname(Options), "\r\n"],
+								State#state{extensions = [], callbackstate = CallbackState});
 		{ok, Extensions, CallbackState} ->
 			ExtensionsUpper = lists:map( fun({X, Y}) -> {string:to_upper(X), Y} end, Extensions),
 			{Extensions1, MaxSize} = case lists:keyfind("SIZE", 1, ExtensionsUpper) of
@@ -414,17 +422,16 @@ handle_request({Msg, Hostname},
 				{1, length(Extensions2), [ ["250-", hostname(Options), "\r\n"] ]},
 				Extensions2),
 			%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
-			send(State, lists:reverse(Response)),
-			{ok, State#state{extensions = Extensions2, maxsize = MaxSize, envelope = #envelope{}, callbackstate = CallbackState}};
+			safe_send(lists:reverse(Response),
+			State#state{extensions = Extensions2, maxsize = MaxSize,
+									envelope = #envelope{}, callbackstate = CallbackState});
 		{error, Message, CallbackState} ->
-			send(State, [Message, "\r\n"]),
-			{ok, State#state{callbackstate = CallbackState}}
+			safe_send([Message, "\r\n"], State#state{callbackstate = CallbackState})
 	end;
 
 handle_request({<<"AUTH">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
-	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "EHLO"), " first\r\n"]),
-	State1 = handle_error(out_of_order, C, State),
-	{ok, State1};
+	send_and_run(["503 Error: send ", lhlo_if_lmtp(Protocol, "EHLO"), " first\r\n"],
+							 fun(S) -> {ok, handle_error(out_of_order, C, S)} end, State);
 handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = Envelope, options = Options} = State) ->
 	case binstr:strchr(Args, $\s) of
 		0 ->
@@ -437,20 +444,18 @@ handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = En
 
 	case has_extension(Extensions, "AUTH") of
 		false ->
-			send(State, "502 Error: AUTH not implemented\r\n"),
-			{ok, State};
+			safe_send("502 Error: AUTH not implemented\r\n", State);
 		{true, AvailableTypes} ->
 			case lists:member(string:to_upper(binary_to_list(AuthType)),
                               string:tokens(AvailableTypes, " ")) of
 				false ->
-					send(State, "504 Unrecognized authentication type\r\n"),
-					{ok, State};
+					safe_send("504 Unrecognized authentication type\r\n", State);
 				true ->
 					case binstr:to_upper(AuthType) of
 						<<"LOGIN">> ->
 							% smtp_socket:send(Socket, "334 " ++ base64:encode_to_string("Username:")),
-							send(State, "334 VXNlcm5hbWU6\r\n"),
-							{ok, State#state{waitingauth = 'login', envelope = Envelope#envelope{auth = {<<>>, <<>>}}}};
+							safe_send("334 VXNlcm5hbWU6\r\n",
+												State#state{waitingauth = 'login', envelope = Envelope#envelope{auth = {<<>>, <<>>}}});
 						<<"PLAIN">> when Parameters =/= false ->
 							% TODO - duplicated below in handle_request waitingauth PLAIN
 							case binstr:split(base64:decode(Parameters), <<0>>) of
@@ -463,13 +468,13 @@ handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = En
 									{ok, State}
 							end;
 						<<"PLAIN">> ->
-							send(State, "334\r\n"),
-							{ok, State#state{waitingauth = 'plain', envelope = Envelope#envelope{auth = {<<>>, <<>>}}}};
+							safe_send("334\r\n", State#state{waitingauth = 'plain', envelope = Envelope#envelope{auth = {<<>>, <<>>}}});
 						<<"CRAM-MD5">> ->
 							crypto:start(), % ensure crypto is started, we're gonna need it
 							String = smtp_util:get_cram_string(hostname(Options)),
-							send(State, ["334 ", String, "\r\n"]),
-							{ok, State#state{waitingauth = 'cram-md5', authdata=base64:decode(String), envelope = Envelope#envelope{auth = {<<>>, <<>>}}}}
+							safe_send(["334 ", String, "\r\n"],
+												State#state{waitingauth = 'cram-md5', authdata=base64:decode(String), envelope = Envelope#envelope{auth = {<<>>, <<>>}}})
+
 						%"DIGEST-MD5" -> % TODO finish this? (see rfc 2831)
 							%crypto:start(), % ensure crypto is started, we're gonna need it
 							%Nonce = get_digest_nonce(),
@@ -507,10 +512,8 @@ handle_request({Username64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	Envelope = State#state.envelope,
 	Username = base64:decode(Username64),
 	% smtp_socket:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
-	send(State, "334 UGFzc3dvcmQ6\r\n"),
 	% store the provided username in envelope.auth
-	NewState = State#state{envelope = Envelope#envelope{auth = {Username, <<>>}}},
-	{ok, NewState};
+	safe_send("334 UGFzc3dvcmQ6\r\n", State#state{envelope = Envelope#envelope{auth = {Username, <<>>}}});
 
 % the client sends a password response to auth-login
 handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {Username,<<>>}}} = State) ->
@@ -518,9 +521,12 @@ handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #env
 	try_auth('login', Username, Password, State);
 
 handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
-	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
-	State1 = handle_error(out_of_order, C, State),
-	{ok, State1};
+	send_and_run(["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"],
+							 	fun(S) ->
+									State1 = handle_error(out_of_order, C, S),
+									{ok, State1#state{waitingauth=false}}
+								end,
+								State);
 handle_request({<<"MAIL">>, Args},
 			   #state{
 					module = Module, envelope = Envelope,
@@ -533,17 +539,15 @@ handle_request({<<"MAIL">>, Args},
 					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
 					case parse_encoded_address(Address) of
 						error ->
-							send(State, "501 Bad sender address syntax\r\n"),
-							{ok, State};
+							safe_send("501 Bad sender address syntax\r\n", State);
 						{ParsedAddress, <<>>} ->
 							?log(debug, "From address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
-									send(State, "250 sender Ok\r\n"),
-									{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
+									safe_send("250 sender Ok\r\n",
+														State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState});
 								{error, Message, CallbackState} ->
-									send(State, [Message, "\r\n"]),
-									{ok, State#state{callbackstate = CallbackState}}
+									safe_send([Message, "\r\n"], State#state{callbackstate = CallbackState})
 							end;
 						{ParsedAddress, ExtraInfo} ->
 							?log(debug, "From address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
@@ -578,86 +582,80 @@ handle_request({<<"MAIL">>, Args},
 							case lists:foldl(F, State, Options) of
 								{error, Message} ->
 									?log(debug, "error: ~s~n", [Message]),
-									send(State, Message),
-									{ok, State};
+									safe_send(Message, State);
 								NewState ->
 									?log(debug, "OK~n"),
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
-											send(State, "250 sender Ok\r\n"),
-											{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
+											safe_send("250 sender Ok\r\n",
+																State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState});
 										{error, Message, CallbackState} ->
-											send(State, [Message, "\r\n"]),
-											{ok, NewState#state{callbackstate = CallbackState}}
+											safe_send([Message, "\r\n"], NewState#state{callbackstate = CallbackState})
 									end
 							end
 					end;
 				_Else ->
-					send(State, "501 Syntax: MAIL FROM:<address>\r\n"),
-					{ok, State}
+					safe_send("501 Syntax: MAIL FROM:<address>\r\n", State)
 			end;
 		_Other ->
-			send(State, "503 Error: Nested MAIL command\r\n"),
-			{ok, State}
+			safe_send("503 Error: Nested MAIL command\r\n", State)
 	end;
 handle_request({<<"RCPT">> = C, _Args}, #state{envelope = undefined} = State) ->
-	send(State, "503 Error: need MAIL command\r\n"),
-	State1 = handle_error(out_of_order, C, State),
-	{ok, State1};
+	send_and_run("503 Error: need MAIL command\r\n", fun(S) -> {ok, handle_error(out_of_order, C, S)} end, State);
 handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
 	case binstr:strpos(binstr:to_upper(Args), <<"TO:">>) of
 		1 ->
 			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
 			case parse_encoded_address(Address) of
 				error ->
-					send(State, "501 Bad recipient address syntax\r\n"),
-					{ok, State};
+					safe_send("501 Bad recipient address syntax\r\n", State);
 				{<<>>, _} ->
 					% empty rcpt to addresses aren't cool
-					send(State, "501 Bad recipient address syntax\r\n"),
-					{ok, State};
+					safe_send("501 Bad recipient address syntax\r\n", State);
 				{ParsedAddress, <<>>} ->
 					?log(debug, "To address ~s (parsed as ~s)~n", [Address, ParsedAddress]),
 					case Module:handle_RCPT(ParsedAddress, OldCallbackState) of
 						{ok, CallbackState} ->
-							send(State, "250 recipient Ok\r\n"),
-							{ok, State#state{envelope = Envelope#envelope{to = Envelope#envelope.to ++ [ParsedAddress]}, callbackstate = CallbackState}};
+							safe_send("250 recipient Ok\r\n",
+												State#state{envelope = Envelope#envelope{to = Envelope#envelope.to ++ [ParsedAddress]}, callbackstate = CallbackState});
 						{error, Message, CallbackState} ->
-							send(State, [Message, "\r\n"]),
-							{ok, State#state{callbackstate = CallbackState}}
+							safe_send([Message, "\r\n"], State#state{callbackstate = CallbackState});
+						{stop, Message, Reason, CallbackState} ->
+							send_and_run([Message, "\r\n"], fun(S) -> {stop, Reason, S#state{callbackstate = CallbackState}} end, State);
+						{stop, Reason, CallbackState} ->
+							{stop, Reason, State#state{callbackstate = CallbackState}}
 					end;
 				{ParsedAddress, ExtraInfo} ->
 					% TODO - are there even any RCPT extensions?
 					?log(debug, "To address ~s (parsed as ~s) with extra info ~s~n", [Address, ParsedAddress, ExtraInfo]),
-					send(State, ["555 Unsupported option: ", ExtraInfo, "\r\n"]),
-					{ok, State}
+					safe_send(["555 Unsupported option: ", ExtraInfo, "\r\n"], State)
 			end;
 		_Else ->
-			send(State, "501 Syntax: RCPT TO:<address>\r\n"),
-			{ok, State}
+			safe_send("501 Syntax: RCPT TO:<address>\r\n", State)
 	end;
 handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined, protocol = Protocol} = State) ->
-	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
-	State1 = handle_error(out_of_order, C, State),
-	{ok, State1};
+	send_and_run(["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"],
+							 fun(S) -> {ok, handle_error(out_of_order, C, S)} end,
+							 State);
 handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
 	case {Envelope#envelope.from, Envelope#envelope.to} of
 		{undefined, _} ->
-			send(State, "503 Error: need MAIL command\r\n"),
-			State1 = handle_error(out_of_order, C, State),
-			{ok, State1};
+			send_and_run("503 Error: need MAIL command\r\n",
+									 fun(S) -> {ok, handle_error(out_of_order, C, S)} end,
+									 State);
 		{_, []} ->
-			send(State, "503 Error: need RCPT command\r\n"),
-			State1 = handle_error(out_of_order, C, State),
-			{ok, State1};
+			send_and_run("503 Error: need RCPT command\r\n",
+									 fun(S) -> {ok, handle_error(out_of_order, C, S)} end,
+									 State);
 		_Else ->
-			send(State, "354 enter mail, end with line containing only '.'\r\n"),
-			?log(debug, "switching to data read mode~n", []),
-
-			{ok, State#state{readmessage = true}}
+			send_and_run("354 enter mail, end with line containing only '.'\r\n",
+									 fun(S) ->
+										 ?log(debug, "switching to data read mode~n", []),
+										 {ok, S#state{readmessage = true}}
+									 end,
+									 State)
 	end;
 handle_request({<<"RSET">>, _Any}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
-	send(State, "250 Ok\r\n"),
 	% if the client sends a RSET before a HELO/EHLO don't give them a valid envelope
 	NewEnvelope = case Envelope of
 		undefined -> undefined;
@@ -665,80 +663,69 @@ handle_request({<<"RSET">>, _Any}, #state{envelope = Envelope, module = Module, 
 	end,
 	{ok, State#state{envelope = NewEnvelope, callbackstate = Module:handle_RSET(OldCallbackState)}};
 handle_request({<<"NOOP">>, _Any}, State) ->
-	send(State, "250 Ok\r\n"),
-	{ok, State};
+	safe_send("250 Ok\r\n", State);
 handle_request({<<"QUIT">>, _Any}, State) ->
-	send(State, "221 Bye\r\n"),
-	{stop, normal, State};
+	safe_send_and_stop("221 Bye\r\n", State);
 handle_request({<<"VRFY">>, Address}, #state{module= Module, callbackstate = OldCallbackState} = State) ->
 	case parse_encoded_address(Address) of
 		{ParsedAddress, <<>>} ->
 			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
-					send(State, ["250 ", Reply, "\r\n"]),
-					{ok, State#state{callbackstate = CallbackState}};
+					safe_send(["250 ", Reply, "\r\n"], State#state{callbackstate = CallbackState});
 				{error, Message, CallbackState} ->
-					send(State, [Message, "\r\n"]),
-					{ok, State#state{callbackstate = CallbackState}}
+					safe_send([Message, "\r\n"], State#state{callbackstate = CallbackState})
 			end;
 		_Other ->
-			send(State, "501 Syntax: VRFY username/address\r\n"),
-			{ok, State}
+			safe_send("501 Syntax: VRFY username/address\r\n", State)
 	end;
 handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, tls=false,
 											  extensions = Extensions, callbackstate = OldCallbackState,
-											  options = Options} = State) ->
+											  options = Options} = State0) ->
 	case has_extension(Extensions, "STARTTLS") of
 		{true, _} ->
-			send(State, "220 OK\r\n"),
-			TlsOpts0 = proplists:get_value(tls_options, Options, []),
-			TlsOpts1 = case proplists:get_value(certfile, Options) of
-				undefined ->
-					TlsOpts0;
-				CertFile ->
-					[{certfile, CertFile} | TlsOpts0]
+      F = fun(State) ->
+				TlsOpts0 = proplists:get_value(tls_options, Options, []),
+				TlsOpts1 = case proplists:get_value(certfile, Options) of
+					undefined ->
+						TlsOpts0;
+					CertFile ->
+						[{certfile, CertFile} | TlsOpts0]
+				end,
+				TlsOpts2 = case proplists:get_value(keyfile, Options) of
+					undefined ->
+						TlsOpts1;
+					KeyFile ->
+						[{keyfile, KeyFile} | TlsOpts1]
+				end,
+				%% Assert that socket is in passive state
+				{ok, [{active, false}]} = inet:getopts(Socket, [active]),
+				case ranch_ssl:handshake(Socket, [{packet, line}, {mode, binary}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
+					{ok, NewSocket} ->
+						?log(debug, "SSL negotiation sucessful~n"),
+						ranch_ssl:setopts(NewSocket, [{packet, line}]),
+						{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
+								authdata=undefined, waitingauth=false, readmessage=false,
+								tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
+					{error, Reason} ->
+						?log(info, "SSL handshake failed : ~p~n", [Reason]),
+						reply_and_handle_error(State, "454 TLS negotiation failed\r\n", ssl_handshake_error, Reason)
+				end
 			end,
-			TlsOpts2 = case proplists:get_value(keyfile, Options) of
-				undefined ->
-					TlsOpts1;
-				KeyFile ->
-					[{keyfile, KeyFile} | TlsOpts1]
-			end,
-			%% Assert that socket is in passive state
-			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
-			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
-				{ok, NewSocket} ->
-					?log(debug, "SSL negotiation sucessful~n"),
-					ranch_ssl:setopts(NewSocket, [{packet, line}]),
-					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
-							authdata=undefined, waitingauth=false, readmessage=false,
-							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
-				{error, Reason} ->
-					?log(info, "SSL handshake failed : ~p~n", [Reason]),
-					send(State, "454 TLS negotiation failed\r\n"),
-					State1 = handle_error(ssl_handshake_error, Reason, State),
-					{ok, State1}
-			end;
+			send_and_run("220 OK\r\n", F, State0);
 		false ->
-			send(State, "500 Command unrecognized\r\n"),
-			{ok, State}
+			safe_send("500 Command unrecognized\r\n", State0)
 	end;
 handle_request({<<"STARTTLS">> = C, <<>>}, State) ->
-	send(State, "500 TLS already negotiated\r\n"),
-	State1 = handle_error(out_of_order, C, State),
-	{ok, State1};
+	safe_send("500 TLS already negotiated\r\n", handle_error(out_of_order, C, State));
 handle_request({<<"STARTTLS">>, _Args}, State) ->
-	send(State, "501 Syntax error (no parameters allowed)\r\n"),
-	{ok, State};
+	safe_send("501 Syntax error (no parameters allowed)\r\n", State);
 handle_request({Verb, Args}, #state{module = Module, callbackstate = OldCallbackState} = State) ->
-    CallbackState =
-        case Module:handle_other(Verb, Args, OldCallbackState) of
-            {noreply, CState1} -> CState1;
-            {Message, CState1} ->
-                send(State, [Message, "\r\n"]),
-                CState1
-        end,
-	{ok, State#state{callbackstate = CallbackState}}.
+	case Module:handle_other(Verb, Args, OldCallbackState) of
+		{noreply, CState} ->
+			{ok, State#state{callbackstate = CState}};
+		{Message, CState} ->
+			safe_send([Message, "\r\n"], State#state{callbackstate = CState})
+	end.
 
 -spec handle_error(error_class(), any(), #state{}) -> #state{}.
 handle_error(Kind, Details, #state{module=Module, callbackstate = OldCallbackState} = State) ->
@@ -830,17 +817,15 @@ try_auth(AuthType, Username, Credential, #state{module = Module, envelope = Enve
 		true ->
 			case Module:handle_AUTH(AuthType, Username, Credential, OldCallbackState) of
 				{ok, CallbackState} ->
-					send(State, "235 Authentication successful.\r\n"),
+					safe_send("235 Authentication successful.\r\n",
 					{ok, NewState#state{callbackstate = CallbackState,
-					                    envelope = Envelope#envelope{auth = {Username, Credential}}}};
+					                    envelope = Envelope#envelope{auth = {Username, Credential}}}});
 				_Other ->
-					send(State, "535 Authentication failed.\r\n"),
-					{ok, NewState}
-				end;
+					safe_send("535 Authentication failed.\r\n", NewState)
+			end;
 		false ->
 			?log(warning, "Please define handle_AUTH/4 in your server module or remove AUTH from your module extensions~n"),
-			send(State, "535 authentication failed (#5.7.1)\r\n"),
-			{ok, NewState}
+			safe_send("535 authentication failed (#5.7.1)\r\n", NewState)
 	end.
 
 %get_digest_nonce() ->
@@ -979,16 +964,70 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
 			end
 	end.
 
-send(#state{transport = Transport, socket = Sock} = St, Data) ->
-    case Transport:send(Sock, Data) of
-		ok -> ok;
+-spec safe_send(Msg::list(), #state{}) -> {ok, #state{}}.
+safe_send(Msg, #state{} = State) when is_list(Msg) ->
+  send_and_run(Msg, fun ok_state/1, State).
+
+-spec safe_send_and_stop(Msg::list(), #state{}) -> {stop, any(), #state{}}.
+safe_send_and_stop(Msg, #state{} = State) ->
+	case safe_send(Msg, State) of
+  {ok, State1} ->
+      {stop, normal, State1};
+  {stop, Reason, State1} ->
+      {stop, Reason, State1}
+	end.
+
+-spec send_and_run(Msg::list(), fun((#state{}) -> {ok, #state{}}), #state{}) -> {ok, #state{}}.
+send_and_run(Msg, Fun, State) when is_list(Msg), is_function(Fun, 1) ->
+	case reply_and_handle_error(State, Msg, send_error, closed) of
+  {ok, State1} ->
+  	try Fun(State1) of
+    {ok, State2} ->
+    	{ok, State2};
+    {ok, State2, Timeout} ->
+    	{ok, State2, Timeout};
+    {noreply, State2, Timeout} ->
+          {noreply, State2, Timeout};
+    {noreply, State2} ->
+          {noreply, State2, ?TIMEOUT};
+    {stop, Reason, State2} ->
+    	{stop, Reason, State2}
+  	catch
+    throw:{stop, Why, State3} ->
+          {stop, Why, State3};
+    throw:Other ->
+          throw(Other);
+    error:Other ->
+          throw(Other)
+  	end;
+  {stop, normal, _State} = StopResult ->
+  	StopResult
+	end.
+
+reply_and_handle_error(State, Reply, ErrType, Reason) when is_atom(ErrType) ->
+	case send(State, Reply, true) of
+		ok ->
+			State1 = handle_error(ErrType, Reason, State),
+			{ok, State1};
+		{error, closed} ->
+			State1 = handle_error(ErrType, Reason, State),
+			{stop, normal, State1}
+	end.
+
+send(#state{transport = Transport, socket = Sock} = St, Data, IgnoreSockClosedError) ->
+	case Transport:send(Sock, Data) of
+		ok ->
+			ok;
+		{error, closed} when IgnoreSockClosedError ->
+			{error, closed};
 		{error, Err} ->
 			St1 = handle_error(send_error, Err, St),
+				Transport:close(Sock),
 			throw({stop, {send_error, Err}, St1})
 	end.
 
 setopts(#state{transport = Transport, socket = Sock} = St, Opts) ->
-    case Transport:setopts(Sock, Opts) of
+	case Transport:setopts(Sock, Opts) of
 		ok -> ok;
 		{error, Err} ->
 			St1 = handle_error(setopts_error, Err, St),
@@ -1010,9 +1049,9 @@ lhlo_if_lmtp(Protocol, Fallback) ->
 					   Value :: string() | [{'ok' | 'error', string()}],
 					   State :: #state{}) -> any().
 report_recipient(ok, Reference, State) ->
-	send(State, ["250 ", Reference, "\r\n"]);
+	safe_send(["250 ", Reference, "\r\n"], State);
 report_recipient(error, Message, State) ->
-	send(State, [Message, "\r\n"]);
+	safe_send([Message, "\r\n"], State);
 report_recipient(multiple, _Any, #state{protocol = smtp} = State) ->
 	Msg = "SMTP should report a single delivery status for all the recipients",
 	throw({stop, {handle_DATA_error, Msg}, State});

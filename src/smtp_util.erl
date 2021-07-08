@@ -1,3 +1,4 @@
+%%% vim:ts=2:sw=2:et
 %%% Copyright 2009 Andrew Thompson <andrew@hijacked.us>. All rights reserved.
 %%%
 %%% Redistribution and use in source and binary forms, with or without
