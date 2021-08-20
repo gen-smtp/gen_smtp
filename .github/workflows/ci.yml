@@ -25,11 +25,27 @@ jobs:
       - uses: actions/checkout@v2
       - name: xref
         run: make xref
+
+      - name: Test ranch-2
+        run: make test REBAR_PROFILE=ranch20
+        if: "${{ matrix.otp_vsn == '24.0' }}"
+      - name: Proper ranch-2
+        run: make proper REBAR_PROFILE=ranch20
+        if: "${{ matrix.otp_vsn == '24.0' }}"
+      - name: Cover ranch-2
+        run: make cover REBAR_PROFILE=ranch20
+        if: "${{ matrix.otp_vsn == '24.0' }}"
+
       - name: Test
         run: make test
+        if: "${{ matrix.otp_vsn != '24.0' }}"
       - name: Proper
         run: make proper
+        if: "${{ matrix.otp_vsn != '24.0' }}"
       - name: Cover
         run: make cover
+        if: "${{ matrix.otp_vsn != '24.0' }}"
+
+
       - name: Dialyze
         run: make dialyze

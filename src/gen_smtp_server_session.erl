@@ -191,7 +191,8 @@ init([Ref, Transport, Socket, Module, Options]) ->
 		{ok, Banner, CallbackState} ->
 			Transport:send(Socket, ["220 ", Banner, "\r\n"]),
 			ok = Transport:setopts(Socket, [{active, once},
-											{packet, line}]),
+											{packet, line},
+											binary]),
 			{ok, #state{socket = Socket,
 						transport = Transport,
 						module = Module,
@@ -683,7 +684,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
 					?log(debug, "SSL negotiation sucessful~n"),
-					ranch_ssl:setopts(NewSocket, [{packet, line}]),
+					ranch_ssl:setopts(NewSocket, [{packet, line}, binary]),
 					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,
 							tls=true, callbackstate = Module:handle_STARTTLS(OldCallbackState)}};
