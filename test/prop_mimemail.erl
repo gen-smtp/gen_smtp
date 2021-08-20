@@ -1,8 +1,9 @@
 %% @doc property-based tests for `mimemail' module
 %%
-%% We only have 2 types of tests:
-%% * Testing that we can encode valid `mimetuple()' without crashes
-%% * Testing that we can encode and then decode `mimetuple()' without loosing information
+%% Following limitations of mimemail are discovered and modelled in this suite:
+%% * We may truncate leading and trailing whitespaces " " from header values
+%% * We may truncate trailing tabs and whitespaces from payload when Content-Transfer-Encoding is not base64
+%% * For binary payload it's highly recommended to set `#{transfer_encoding => <<"base64">>}' explicitly
 -module(prop_mimemail).
 
 -export([
@@ -89,8 +90,8 @@ match({TypeA, SubTypeA, HeadersA, _ParamsA, BodyA},
 	  end, HeadersA),
 	case is_binary(BodyA) of
 		true ->
-			?assertEqual(string:trim(BodyA, trailing, "\t "),
-						 string:trim(BodyB, trailing, "\t ")),
+			?assertEqual(trim_trail(BodyA, "\t "),
+						 trim_trail(BodyB, "\t ")),
 			true;
 		false ->
 			Bodies = lists:zip(BodyA, BodyB),
@@ -106,7 +107,7 @@ prop_quoted_printable(doc) ->
 		"* decode(encode(data)) returns the same result as original input".
 
 prop_quoted_printable() ->
-	Trim = fun(B) -> binstr:reverse(trim(binstr:reverse(trim(B)))) end,
+	Trim = fun(B) -> trim_both(B, "\t ") end,
 	?FORALL(
 	   Body,
 	   proper_types:oneof([?SIZED(Size, printable_ascii(Size * 50)),
@@ -122,10 +123,22 @@ prop_quoted_printable() ->
 		   true
 	   end).
 
-trim(<<C, Tail/binary>>) when C == $\s; C == $\t ->
-	trim(Tail);
-trim(Tail) ->
-	Tail.
+trim(B) ->
+	trim(B, "\t ").
+
+trim_both(B, Chars) ->
+	trim_trail(trim(B, Chars), Chars).
+
+trim_trail(B, Chars) ->
+	binstr:reverse(trim(binstr:reverse(B), Chars)).
+
+trim(<<C, Tail/binary>> = B, Chars) ->
+	case lists:member(C, Chars) of
+		true -> trim(Tail);
+		false -> B
+	end;
+trim(<<>>, _) ->
+	<<>>.
 
 prop_smtp_compatible(doc) ->
     "Makes sure mimemail never produces output that is not compatible with SMTP, "
@@ -191,7 +204,8 @@ gen_multipart_mail() ->
 			  proper_types:list(
 				proper_types:oneof(
 				  [gen_embedded_plaintext_mail(),
-				   gen_embedded_html_mail()]))))
+				   gen_embedded_html_mail(),
+				   gen_embedded_attachment_mail()]))))
 	}.
 
 %% top-level plaintext mimemail()
@@ -217,6 +231,12 @@ gen_embedded_html_mail() ->
 	 ?LET(Body,
 		  gen_body(),
 		  <<"<!doctype html><html><body><p>", Body/binary, "</p></body></html>">>)}.
+
+gen_embedded_attachment_mail() ->
+	{<<"application">>, <<"pdf">>,
+	 gen_headers(),
+	 gen_attachment_props(),
+	 proper_types:non_empty(proper_types:binary())}.
 
 %% like gen_headers/0, but `From' is always there
 gen_top_headers() ->
@@ -264,6 +284,23 @@ gen_props() ->
 			)
 		  ),
 		 maps:from_list(KV)).
+
+gen_attachment_props() ->
+	?LET(KV,
+		 proper_types:list(
+		   proper_types:oneof(
+			 [{content_type_params, gen_params()},
+			  {disposition_params, gen_params()}]
+			)),
+		 maps:from_list([{disposition, <<"attachment">>},
+						 {transfer_encoding, <<"base64">>} | KV])).
+
+gen_params() ->
+	proper_types:list(
+	  {
+	   header_name(),
+	   header_name()
+	  }).
 
 %% binary(), guaranteed to be not `<<>>'. Also, try to generate relatively large body
 gen_nonempty_body() ->
