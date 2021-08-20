@@ -41,16 +41,12 @@
                               {keyfile, "server.key"},
                               {packet, line},
                               {reuse_sessions, false},
-                              {reuseaddr, true},
-                              {ssl_imp, new}]).
+                              {reuseaddr, true}]).
 -define(SSL_CONNECT_OPTIONS,[ {active, false},
                               {depth, 0},
                               {packet, line},
                               {ip, {0,0,0,0}},
-                              {versions, ['tlsv1', 'tlsv1.1', 'tlsv1.2']},
                               {port, 0}]).
-
--define(SSL_CONNECT_OPTIONS_KEYS, [ciphers]).
 
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
@@ -320,12 +316,8 @@ proplist_merge(PrimaryList, DefaultList) ->
 		lists:keysort(1, PrimaryTuples),
 		lists:keysort(1, DefaultTuples)
 	),
-	MergedOther = lists:merge(lists:sort(PrimaryOther), lists:sort(DefaultOther)),
-
-	%% remove all the values that don't belong here
-	[Option || Option = {Key, _} <- MergedTuples,
-			   lists:member(Key, ?SSL_CONNECT_OPTIONS_KEYS) or proplists:is_defined(Key, DefaultList)]
-		++ [Option || Option <- MergedOther, Option == inet6 ].
+	MergedOther = lists:umerge(lists:sort(PrimaryOther), lists:sort(DefaultOther)),
+	MergedTuples ++ MergedOther.
 
 parse_address(Options) ->
 	case proplists:get_value(ip, Options) of
@@ -558,11 +550,6 @@ active_once_test_() ->
 
 option_test_() ->
 	[
-		{"options removes bogus values",
-		fun() ->
-			?assertEqual(lists:sort([list|?TCP_LISTEN_OPTIONS]), lists:sort(tcp_listen_options([{notvalid,whatever}])))
-		end
-		},
 		{"tcp_listen_options has defaults",
 		fun() ->
 			?assertEqual(lists:sort([list|?TCP_LISTEN_OPTIONS]), lists:sort(tcp_listen_options([])))
@@ -637,8 +624,7 @@ option_test_() ->
 			                   {keyfile, "server.key"},
 			                   {packet, 2},
 			                   {reuse_sessions, false},
-			                   {reuseaddr, true},
-			                   {ssl_imp, new}])],
+			                   {reuseaddr, true}])],
 			             ssl_listen_options([{active, true},{packet,2}])),
 			?assertEqual([list|lists:keysort(1, [{active, false},
 			                   {backlog, 30},
@@ -648,8 +634,7 @@ option_test_() ->
 			                   {keyfile, "../server.key"},
 			                   {packet, line},
 			                   {reuse_sessions, false},
-			                   {reuseaddr, true},
-			                   {ssl_imp, new}])],
+			                   {reuseaddr, true}])],
 			             ssl_listen_options([{certfile, "../server.crt"}, {keyfile, "../server.key"}]))
 		end
 		},
@@ -659,8 +644,7 @@ option_test_() ->
 									 {depth, 0},
 									 {ip, {0,0,0,0}},
 									 {port, 0},
-									 {packet, 2},
-									 {versions, [tlsv1,'tlsv1.1','tlsv1.2']}]),
+									 {packet, 2}]),
 			             lists:sort(ssl_connect_options([{active, true},{packet,2}])))
 		end
 		}
