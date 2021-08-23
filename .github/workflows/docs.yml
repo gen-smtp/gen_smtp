@@ -10,7 +10,7 @@ on:
       - master
 jobs:
   ci:
-    name: Run checks and tests over ${{matrix.otp_vsn}} and ${{matrix.os}}
+    name: Build edocs ${{matrix.otp_vsn}} and ${{matrix.os}}
     runs-on: ${{matrix.os}}
 
     strategy:
