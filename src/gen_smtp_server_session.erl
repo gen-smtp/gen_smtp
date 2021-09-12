@@ -335,7 +335,7 @@ parse_request(Packet) ->
 				<<"QUIT">> = Res -> {Res, <<>>};
 				<<"DATA">> = Res -> {Res, <<>>};
 				% likely a base64-encoded client reply
-				_ -> {Request, <<>>}
+				UpperRequest -> {UpperRequest, <<>>}
 			end;
 		Index ->
 			Verb = binstr:substr(Request, 1, Index - 1),
@@ -1102,7 +1102,8 @@ parse_request_test_() ->
 		},
 		{"Verbs should be uppercased",
 			fun() ->
-					?assertEqual({<<"HELO">>, <<"hell.af.mil">>}, parse_request(<<"helo hell.af.mil">>))
+					?assertEqual({<<"HELO">>, <<"hell.af.mil">>}, parse_request(<<"helo hell.af.mil">>)),
+					?assertEqual({<<"RSET">>, <<>>}, parse_request(<<"rset\r\n">>))
 			end
 		},
 		{"Leading and trailing spaces are removed",
