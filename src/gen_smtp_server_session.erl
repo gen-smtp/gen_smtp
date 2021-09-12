@@ -259,7 +259,7 @@ handle_info({receive_data, Body, Rest},
 			% might not even be able to get here anymore...
 			{noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
 	end;
-handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport} = State)
+handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Transport, waitingauth = false} = State)
   when SocketType =:= tcp; SocketType =:= ssl ->
 	case handle_request(parse_request(Packet), State) of
 		{ok, #state{options = Options, readmessage = true, maxsize = MaxSize} = NewState} ->
@@ -278,6 +278,14 @@ handle_info({SocketType, Socket, Packet}, #state{socket = Socket, transport = Tr
 		{stop, Reason, NewState} ->
 			{stop, Reason, NewState}
 	end;
+handle_info({SocketType, Socket, Packet}, #state{socket = Socket} = State)
+  when SocketType =:= tcp; SocketType =:= ssl ->
+	%% We are in SASL state RFC-4954
+	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
+	?log(debug, "Got SASL request ~p", [Request]),
+	{ok, NewState} = handle_sasl(base64:decode(Request), State),
+	setopts(NewState, [{active, once}]),
+	{noreply, NewState, ?TIMEOUT};
 handle_info({Kind, _Socket}, State) when Kind == tcp_closed;
 										 Kind == ssl_closed ->
 	State1 = handle_error(Kind, [], State),
@@ -331,12 +339,7 @@ parse_request(Packet) ->
 	case binstr:strchr(Request, $\s) of
 		0 ->
 		    ?log(debug, "got a ~s request~n", [Request]),
-			case binstr:to_upper(Request) of
-				<<"QUIT">> = Res -> {Res, <<>>};
-				<<"DATA">> = Res -> {Res, <<>>};
-				% likely a base64-encoded client reply
-				_ -> {Request, <<>>}
-			end;
+			{binstr:to_upper(Request), <<>>};
 		Index ->
 			Verb = binstr:substr(Request, 1, Index - 1),
 			Parameters = binstr:strip(binstr:substr(Request, Index + 1), left, $\s),
@@ -479,43 +482,6 @@ handle_request({<<"AUTH">>, Args}, #state{extensions = Extensions, envelope = En
 					end
 			end
 	end;
-
-% the client sends a response to auth-cram-md5
-handle_request({Username64, <<>>}, #state{waitingauth = 'cram-md5', envelope = #envelope{auth = {<<>>, <<>>}}, authdata = AuthData} = State) ->
-	case binstr:split(base64:decode(Username64), <<" ">>) of
-		[Username, Digest] ->
-			try_auth('cram-md5', Username, {Digest, AuthData}, State#state{authdata=undefined});
-		_ ->
-			% TODO error
-			{ok, State#state{waitingauth=false, authdata=undefined}}
-	end;
-
-% the client sends a \0username\0password response to auth-plain
-handle_request({Username64, <<>>}, #state{waitingauth = 'plain', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
-	case binstr:split(base64:decode(Username64), <<0>>) of
-		[_Identity, Username, Password] ->
-			try_auth('plain', Username, Password, State);
-		[Username, Password] ->
-			try_auth('plain', Username, Password, State);
-		_ ->
-			% TODO error
-			{ok, State#state{waitingauth=false}}
-	end;
-
-% the client sends a username response to auth-login
-handle_request({Username64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
-	Envelope = State#state.envelope,
-	Username = base64:decode(Username64),
-	% smtp_socket:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
-	send(State, "334 UGFzc3dvcmQ6\r\n"),
-	% store the provided username in envelope.auth
-	NewState = State#state{envelope = Envelope#envelope{auth = {Username, <<>>}}},
-	{ok, NewState};
-
-% the client sends a password response to auth-login
-handle_request({Password64, <<>>}, #state{waitingauth = 'login', envelope = #envelope{auth = {Username,<<>>}}} = State) ->
-	Password = base64:decode(Password64),
-	try_auth('login', Username, Password, State);
 
 handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
 	send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
@@ -739,6 +705,42 @@ handle_request({Verb, Args}, #state{module = Module, callbackstate = OldCallback
                 CState1
         end,
 	{ok, State#state{callbackstate = CallbackState}}.
+
+%% @doc handle SASL client response to `334' challenge - RFC-4954
+% the client sends a response to auth-cram-md5
+handle_sasl(UserDigest, #state{waitingauth = 'cram-md5', envelope = #envelope{auth = {<<>>, <<>>}}, authdata = AuthData} = State) ->
+	case binstr:split(UserDigest, <<" ">>) of
+		[Username, Digest] ->
+			try_auth('cram-md5', Username, {Digest, AuthData}, State#state{authdata=undefined});
+		_ ->
+			% TODO error
+			{ok, State#state{waitingauth=false, authdata=undefined}}
+	end;
+
+% the client sends a \0username\0password response to auth-plain
+handle_sasl(UserPass, #state{waitingauth = 'plain', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
+	case binstr:split(UserPass, <<0>>) of
+		[_Identity, Username, Password] ->
+			try_auth('plain', Username, Password, State);
+		[Username, Password] ->
+			try_auth('plain', Username, Password, State);
+		_ ->
+			% TODO error
+			{ok, State#state{waitingauth=false}}
+	end;
+
+% the client sends a username response to auth-login
+handle_sasl(Username, #state{waitingauth = 'login', envelope = #envelope{auth = {<<>>,<<>>}}} = State) ->
+	Envelope = State#state.envelope,
+	% smtp_socket:send(Socket, "334 " ++ base64:encode_to_string("Password:")),
+	send(State, "334 UGFzc3dvcmQ6\r\n"),
+	% store the provided username in envelope.auth
+	NewState = State#state{envelope = Envelope#envelope{auth = {Username, <<>>}}},
+	{ok, NewState};
+
+% the client sends a password response to auth-login
+handle_sasl(Password, #state{waitingauth = 'login', envelope = #envelope{auth = {Username,<<>>}}} = State) ->
+	try_auth('login', Username, Password, State).
 
 -spec handle_error(error_class(), any(), #state{}) -> #state{}.
 handle_error(Kind, Details, #state{module=Module, callbackstate = OldCallbackState} = State) ->
@@ -1102,7 +1104,8 @@ parse_request_test_() ->
 		},
 		{"Verbs should be uppercased",
 			fun() ->
-					?assertEqual({<<"HELO">>, <<"hell.af.mil">>}, parse_request(<<"helo hell.af.mil">>))
+					?assertEqual({<<"HELO">>, <<"hell.af.mil">>}, parse_request(<<"helo hell.af.mil">>)),
+					?assertEqual({<<"RSET">>, <<>>}, parse_request(<<"rset\r\n">>))
 			end
 		},
 		{"Leading and trailing spaces are removed",
