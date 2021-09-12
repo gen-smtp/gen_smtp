@@ -283,13 +283,9 @@ handle_info({SocketType, Socket, Packet}, #state{socket = Socket} = State)
 	%% We are in SASL state RFC-4954
 	Request = binstr:strip(binstr:strip(binstr:strip(binstr:strip(Packet, right, $\n), right, $\r), right, $\s), left, $\s),
 	?log(debug, "Got SASL request ~p", [Request]),
-	case handle_sasl(base64:decode(Request), State) of
-		{ok, NewState} ->
-			setopts(NewState, [{active, once}]),
-			{noreply, NewState, ?TIMEOUT};
-		{stop, Reason, NewState} ->
-			{stop, Reason, NewState}
-	end;
+	{ok, NewState} = handle_sasl(base64:decode(Request), State),
+	setopts(NewState, [{active, once}]),
+	{noreply, NewState, ?TIMEOUT};
 handle_info({Kind, _Socket}, State) when Kind == tcp_closed;
 										 Kind == ssl_closed ->
 	State1 = handle_error(Kind, [], State),
