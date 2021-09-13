@@ -1,3 +1,4 @@
+%% coding: utf-8
 -module(gen_smtp_util_test).
 
 -compile([export_all, nowarn_export_all]).
@@ -8,42 +9,72 @@ test_test() ->
     smtp_util:parse_rfc822_addresses("foo bar").
 
 parse_rfc822_addresses_test_() ->
-    [
-     {"Empty address list",
+	F = fun smtp_util:parse_rfc822_addresses/1,
+	[{"Empty address list parse_rfc2822_addresses_test",
       fun() ->
-              ?assertEqual({ok, []}, smtp_util:parse_rfc822_addresses(<<>>)),
-              ?assertEqual({ok, []}, smtp_util:parse_rfc822_addresses(<<"   ">>)),
-              ?assertEqual({ok, []}, smtp_util:parse_rfc822_addresses(<<" \r\n\t  ">>)),
-              ?assertEqual({ok, []}, smtp_util:parse_rfc822_addresses(<<"
+              ?assertEqual({ok, []}, F(<<>>)),
+              ?assertEqual({ok, []}, F(<<"   ">>)),
+              ?assertEqual({ok, []}, F(<<" \r\n\t  ">>)),
+              ?assertEqual({ok, []}, F(<<"
 ">>))
       end},
-     {"Single addresses",
+	 {"Group parse_rfc2822_addresses_test",
+	  fun() ->
+			  %% XXX: this is incorrect...
+			  ?assertEqual({ok, [{undefined, "undisclosed-recipients:;"}]},
+						   F(<<"undisclosed-recipients:;">>))
+	  end},
+	 {"Multiple with comma  parse_rfc2822_addresses_test",
+	  fun() ->
+			  ?assertEqual({ok, [{"Jan", "a,a@a.com"}, {undefined, "b@b.com"}]},
+                           F(<<"Jan <a,a@a.com>,b@b.com">>))
+
+	  end}| parse_adresses_t(F)].
+
+parse_rfc2822_addresses_test_() ->
+	F = fun smtp_util:parse_rfc5322_addresses/1,
+	[{"Group parse_rfc822_addresses_test",
+	  fun() ->
+			  %% rfc5322#section-3.4
+			  %% empty group
+			  ?assertEqual({ok, []},
+						   F(<<"undisclosed-recipients:;">>)),
+			  %% group with recipient list
+			  ?assertEqual({ok, [{undefined, "a@a.com"}, {undefined, "b@b.com"}]},
+						  F(<<"friends:a@a.com,b@b.com;">>))
+	  end} | parse_adresses_t(F)].
+
+parse_adresses_t(F) ->
+	{_, FName} = erlang:fun_info(F, name),
+	FStr = atom_to_list(FName),
+    [
+     {"Single addresses " ++ FStr,
       fun() ->
               ?assertEqual({ok, [{undefined, "john@doe.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"john@doe.com">>)),
+                           F(<<"john@doe.com">>)),
               ?assertEqual({ok, [{"Fræderik Hølljen", "me@example.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"Fræderik Hølljen <me@example.com>">>)),
+                           F(<<"Fræderik Hølljen <me@example.com>"/utf8>>)),
               ?assertEqual({ok, [{undefined, "john@doe.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"<john@doe.com>">>)),
+                           F(<<"<john@doe.com>">>)),
               ?assertEqual({ok, [{"John", "john@doe.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"John <john@doe.com>">>)),
+                           F(<<"John <john@doe.com>">>)),
               ?assertEqual({ok, [{"John Doe", "john@doe.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"John Doe <john@doe.com>">>)),
+                           F(<<"John Doe <john@doe.com>">>)),
               ?assertEqual({ok, [{"John Doe", "john@doe.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"\"John Doe\" <john@doe.com>">>)),
+                           F(<<"\"John Doe\" <john@doe.com>">>)),
               ?assertEqual({ok, [{"John \"Mighty\" Doe", "john@doe.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"\"John \\\"Mighty\\\" Doe\" <john@doe.com>">>))
+                           F(<<"\"John \\\"Mighty\\\" Doe\" <john@doe.com>">>))
       end},
-     {"Multiple addresses",
+     {"Multiple addresses " ++ FStr,
       fun() ->
               ?assertEqual({ok, [{undefined, "a@a.com"}, {undefined, "b@b.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"a@a.com,b@b.com">>)),
-              ?assertEqual({ok, [{undefined, "a,a@a.com"}, {undefined, "b@b.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"<a,a@a.com>,b@b.com">>)),
-              ?assertEqual({ok, [{"Jan", "a,a@a.com"}, {undefined, "b@b.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"Jan <a,a@a.com>,b@b.com">>)),
-              ?assertEqual({ok, [{"Jan", "a,a@a.com"}, {"Berend Botje", "b@b.com"}]},
-                           smtp_util:parse_rfc822_addresses(<<"Jan <a,a@a.com>,\"Berend Botje\" <b@b.com>">>))
+                           F(<<"a@a.com,b@b.com">>)),
+              ?assertEqual({ok, [{undefined, "a@a.com"}, {undefined, "b@b.com"}]},
+                           F(<<"<a@a.com>,b@b.com">>)),
+              ?assertEqual({ok, [{"Jan", "a@a.com"}, {undefined, "b@b.com"}]},
+                           F(<<"Jan <a@a.com>,b@b.com">>)),
+              ?assertEqual({ok, [{"Jan", "a@a.com"}, {"Berend Botje", "b@b.com"}]},
+                           F(<<"Jan <a@a.com>,\"Berend Botje\" <b@b.com>">>))
       end}
     ].
 

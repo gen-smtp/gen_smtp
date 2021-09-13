@@ -24,6 +24,7 @@ address -> '<' email '>' : {undefined, '$2'}.
 address -> names '<' email '>' : {lists:flatten('$1'), '$3'}.
 
 email -> string : element(3, '$1').
+
 names -> name : '$1'.
 names -> name names : ['$1', " " | '$2'].
 name -> string : element(3, '$1').
