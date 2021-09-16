@@ -35,7 +35,7 @@
 -endif.
 
 -define(DEFAULT_MAXSIZE, 10485760). %10mb
--define(BUILTIN_EXTENSIONS, [{"SIZE", integer_to_list(?DEFAULT_MAXSIZE)}, {"8BITMIME", true}, {"PIPELINING", true}]).
+-define(BUILTIN_EXTENSIONS, [{"SIZE", integer_to_list(?DEFAULT_MAXSIZE)}, {"8BITMIME", true}, {"PIPELINING", true}, {"SMTPUTF8", true}]).
 -define(TIMEOUT, 180000). % 3 minutes
 
 %% External API
@@ -55,7 +55,8 @@
 		to = [] :: [binary()],
 		data = <<>> :: binary(),
 		expectedsize = 0 :: pos_integer() | 0,
-		auth = {<<>>, <<>>} :: {binary(), binary()} % {"username", "password"}
+		auth = {<<>>, <<>>} :: {binary(), binary()}, % {"username", "password"}
+		flags = [] :: [smtputf8 | '8bitmime']
 	}
 ).
 
@@ -489,15 +490,15 @@ handle_request({<<"MAIL">> = C, _Args}, #state{envelope = undefined, protocol = 
 	{ok, State1};
 handle_request({<<"MAIL">>, Args},
 			   #state{
-					module = Module, envelope = Envelope,
+					module = Module, envelope = Envelope0,
 					callbackstate = OldCallbackState,  extensions = Extensions,
 					maxsize=MaxSize} = State) ->
-	case Envelope#envelope.from of
+	case Envelope0#envelope.from of
 		undefined ->
 			case binstr:strpos(binstr:to_upper(Args), <<"FROM:">>) of
 				1 ->
 					Address = binstr:strip(binstr:substr(Args, 6), left, $\s),
-					case parse_encoded_address(Address) of
+					case parse_encoded_address(Address, has_extension(Extensions, "SMTPUTF8") =/= false) of
 						error ->
 							send(State, "501 Bad sender address syntax\r\n"),
 							{ok, State};
@@ -506,7 +507,7 @@ handle_request({<<"MAIL">>, Args},
 							case Module:handle_MAIL(ParsedAddress, OldCallbackState) of
 								{ok, CallbackState} ->
 									send(State, "250 sender Ok\r\n"),
-									{ok, State#state{envelope = Envelope#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
+									{ok, State#state{envelope = Envelope0#envelope{from = ParsedAddress}, callbackstate = CallbackState}};
 								{error, Message, CallbackState} ->
 									send(State, [Message, "\r\n"]),
 									{ok, State#state{callbackstate = CallbackState}}
@@ -517,21 +518,28 @@ handle_request({<<"MAIL">>, Args},
 							?log(debug, "options are ~p~n", [Options]),
 							 F = fun(_, {error, Message}) ->
 									 {error, Message};
-								 (<<"SIZE=", Size/binary>>, InnerState) when MaxSize =:= 'infinity' ->
+								 (<<"SIZE=", Size/binary>>, #state{envelope = Envelope} = InnerState) when MaxSize =:= 'infinity' ->
 									InnerState#state{envelope = Envelope#envelope{expectedsize = binary_to_integer(Size)}};
-								 (<<"SIZE=", Size/binary>>, InnerState) ->
+								 (<<"SIZE=", Size/binary>>, #state{envelope = Envelope} = InnerState) ->
 									case binary_to_integer(Size) > MaxSize of
 										true ->
 											{error, ["552 Estimated message length ", Size, " exceeds limit of ", integer_to_binary(MaxSize), "\r\n"]};
 										false ->
 											InnerState#state{envelope = Envelope#envelope{expectedsize = binary_to_integer(Size)}}
 									end;
-								(<<"BODY=", _BodyType/binary>>, InnerState) ->
+								(<<"BODY=", BodyType/binary>>, #state{envelope = #envelope{flags = Flags} = Envelope} = InnerState) ->
 									case has_extension(Extensions, "8BITMIME") of
-										{true, _} ->
-											InnerState;
+										{true, _} when BodyType == <<"8BITMIME">> ->
+											InnerState#state{envelope = Envelope#envelope{flags = ['8bitmime' | Flags]}};
 										false ->
 											{error, "555 Unsupported option BODY\r\n"}
+									end;
+								(<<"SMTPUTF8">>, #state{envelope = #envelope{flags = Flags} = Envelope} = InnerState) ->
+									case has_extension(Extensions, "SMTPUTF8") of
+										{true, _} ->
+											InnerState#state{envelope = Envelope#envelope{flags = ['smtputf8' | Flags]}};
+										false ->
+											{error, "555 Unsupported option SMTPUTF8\r\n"}
 									end;
 								(X, InnerState) ->
 									case Module:handle_MAIL_extension(X, OldCallbackState) of
@@ -546,7 +554,7 @@ handle_request({<<"MAIL">>, Args},
 									?log(debug, "error: ~s~n", [Message]),
 									send(State, Message),
 									{ok, State};
-								NewState ->
+								#state{envelope = Envelope} = NewState ->
 									?log(debug, "OK~n"),
 									case Module:handle_MAIL(ParsedAddress, State#state.callbackstate) of
 										{ok, CallbackState} ->
@@ -570,11 +578,11 @@ handle_request({<<"RCPT">> = C, _Args}, #state{envelope = undefined} = State) ->
 	send(State, "503 Error: need MAIL command\r\n"),
 	State1 = handle_error(out_of_order, C, State),
 	{ok, State1};
-handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State) ->
+handle_request({<<"RCPT">>, Args}, #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState, extensions = Extensions} = State) ->
 	case binstr:strpos(binstr:to_upper(Args), <<"TO:">>) of
 		1 ->
 			Address = binstr:strip(binstr:substr(Args, 4), left, $\s),
-			case parse_encoded_address(Address) of
+			case parse_encoded_address(Address, has_extension(Extensions, "SMTPUTF8") =/= false) of
 				error ->
 					send(State, "501 Bad recipient address syntax\r\n"),
 					{ok, State};
@@ -636,8 +644,8 @@ handle_request({<<"NOOP">>, _Any}, State) ->
 handle_request({<<"QUIT">>, _Any}, State) ->
 	send(State, "221 Bye\r\n"),
 	{stop, normal, State};
-handle_request({<<"VRFY">>, Address}, #state{module= Module, callbackstate = OldCallbackState} = State) ->
-	case parse_encoded_address(Address) of
+handle_request({<<"VRFY">>, Address}, #state{module= Module, callbackstate = OldCallbackState, extensions = Extensions} = State) ->
+	case parse_encoded_address(Address, has_extension(Extensions, "SMTPUTF8") =/= false) of
 		{ParsedAddress, <<>>} ->
 			case Module:handle_VRFY(ParsedAddress, OldCallbackState) of
 				{ok, Reply, CallbackState} ->
@@ -756,62 +764,73 @@ handle_error(Kind, Details, #state{module=Module, callbackstate = OldCallbackSta
 			State
 	end.
 
--spec parse_encoded_address(Address :: binary()) -> {binary(), binary()} | 'error'.
-parse_encoded_address(<<>>) ->
+%% pa = parse address
+%% ab = angular brackets
+-record(pa,
+		{quotes = false,
+		 ab = true,
+		 utf8 = false}).
+
+%% https://datatracker.ietf.org/doc/html/rfc5321#section-4.1.2
+-spec parse_encoded_address(Address :: binary(), Utf8 :: boolean()) -> {binary(), binary()} | 'error'.
+parse_encoded_address(<<>>, _) ->
 	error; % empty
-parse_encoded_address(<<"<@", Address/binary>>) ->
+parse_encoded_address(<<"<@", Address/binary>>, Utf8) ->
+	%% A-d-l (source route) - should be ignored
 	case binstr:strchr(Address, $:) of
 		0 ->
 			error; % invalid address
 		Index ->
-			parse_encoded_address(binstr:substr(Address, Index + 1), [], {false, true})
+			parse_encoded_address(binstr:substr(Address, Index + 1), [], #pa{quotes=false, ab=true, utf8 = Utf8})
 	end;
-parse_encoded_address(<<"<", Address/binary>>) ->
-	parse_encoded_address(Address, [], {false, true});
-parse_encoded_address(<<" ", Address/binary>>) ->
-	parse_encoded_address(Address);
-parse_encoded_address(Address) ->
-	parse_encoded_address(Address, [], {false, false}).
+parse_encoded_address(<<"<", Address/binary>>, Utf8) ->
+	parse_encoded_address(Address, [], #pa{quotes=false, ab=true, utf8=Utf8});
+parse_encoded_address(<<" ", Address/binary>>, Utf8) ->
+	parse_encoded_address(Address, Utf8);
+parse_encoded_address(Address, Utf8) ->
+	parse_encoded_address(Address, [], #pa{quotes=false, ab=false, utf8=Utf8}).
 
--spec parse_encoded_address(Address :: binary(), Acc :: list(), Flags :: {boolean(), boolean()}) -> {binary(), binary()} | 'error'.
-parse_encoded_address(<<>>, Acc, {_Quotes, false}) ->
-	{list_to_binary(lists:reverse(Acc)), <<>>};
-parse_encoded_address(<<>>, _Acc, {_Quotes, true}) ->
+-spec parse_encoded_address(Address :: binary(), Acc :: list(), Flags :: #pa{}) -> {binary(), binary()} | 'error'.
+parse_encoded_address(<<>>, Acc, #pa{ab = false}) ->
+	{unicode:characters_to_binary(lists:reverse(Acc)), <<>>};
+parse_encoded_address(<<>>, _Acc, #pa{ab = true}) ->
 	error; % began with angle brackets but didn't end with them
 parse_encoded_address(_, Acc, _) when length(Acc) > 320 ->
 	error; % too long
-parse_encoded_address(<<"\\", Tail/binary>>, Acc, Flags) ->
-	<<H, NewTail/binary>> = Tail,
-	parse_encoded_address(NewTail, [H | Acc], Flags);
-parse_encoded_address(<<"\"", Tail/binary>>, Acc, {false, AB}) ->
-	parse_encoded_address(Tail, Acc, {true, AB});
-parse_encoded_address(<<"\"", Tail/binary>>, Acc, {true, AB}) ->
-	parse_encoded_address(Tail, Acc, {false, AB});
-parse_encoded_address(<<">", Tail/binary>>, Acc, {false, true}) ->
-	{list_to_binary(lists:reverse(Acc)), binstr:strip(Tail, left, $\s)};
-parse_encoded_address(<<">", _Tail/binary>>, _Acc, {false, false}) ->
+parse_encoded_address(<<"\\", H, Tail/binary>>, Acc, Flags) ->
+	parse_encoded_address(Tail, [H | Acc], Flags);
+parse_encoded_address(<<"\"", Tail/binary>>, Acc, #pa{quotes = false} = F) ->
+	parse_encoded_address(Tail, Acc, F#pa{quotes = true});
+parse_encoded_address(<<"\"", Tail/binary>>, Acc, #pa{quotes = true} = F) ->
+	parse_encoded_address(Tail, Acc, F#pa{quotes = false});
+parse_encoded_address(<<">", Tail/binary>>, Acc, #pa{quotes = false, ab = true}) ->
+	{unicode:characters_to_binary(lists:reverse(Acc)), binstr:strip(Tail, left, $\s)};
+parse_encoded_address(<<">", _Tail/binary>>, _Acc, #pa{quotes = false, ab = false}) ->
 	error; % ended with angle brackets but didn't begin with them
-parse_encoded_address(<<" ", Tail/binary>>, Acc, {false, false}) ->
-	{list_to_binary(lists:reverse(Acc)), binstr:strip(Tail, left, $\s)};
-parse_encoded_address(<<" ", _Tail/binary>>, _Acc, {false, true}) ->
+parse_encoded_address(<<" ", Tail/binary>>, Acc, #pa{quotes = false, ab = false}) ->
+	{unicode:characters_to_binary(lists:reverse(Acc)), binstr:strip(Tail, left, $\s)};
+parse_encoded_address(<<" ", _Tail/binary>>, _Acc, #pa{quotes = false, ab = true}) ->
 	error; % began with angle brackets but didn't end with them
-parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $0, H =< $9 ->
-	parse_encoded_address(Tail, [H | Acc], {false, AB}); % digits
-parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $@, H =< $Z ->
-	parse_encoded_address(Tail, [H | Acc], {false, AB}); % @ symbol and uppercase letters
-parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H >= $a, H =< $z ->
-	parse_encoded_address(Tail, [H | Acc], {false, AB}); % lowercase letters
-parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H =:= $-; H =:= $.; H =:= $_ ->
-	parse_encoded_address(Tail, [H | Acc], {false, AB}); % dash, dot, underscore
+parse_encoded_address(<<H/utf8, Tail/binary>>, Acc, #pa{utf8 = true} = F) when H > 127 ->
+	%% https://datatracker.ietf.org/doc/html/rfc6531#section-3.3
+	parse_encoded_address(Tail, [H | Acc], F); % UTF-8 above 7bit (when allowed)
+parse_encoded_address(<<H, Tail/binary>>, Acc, #pa{quotes = false} = F) when H >= $0, H =< $9 ->
+	parse_encoded_address(Tail, [H | Acc], F); % digits
+parse_encoded_address(<<H, Tail/binary>>, Acc, #pa{quotes = false} = F) when H >= $@, H =< $Z ->
+	parse_encoded_address(Tail, [H | Acc], F); % @ symbol and uppercase letters
+parse_encoded_address(<<H, Tail/binary>>, Acc, #pa{quotes = false} = F) when H >= $a, H =< $z ->
+	parse_encoded_address(Tail, [H | Acc], F); % lowercase letters
+parse_encoded_address(<<H, Tail/binary>>, Acc, #pa{quotes = false} = F) when H =:= $-; H =:= $.; H =:= $_ ->
+	parse_encoded_address(Tail, [H | Acc], F); % dash, dot, underscore
 % Allowed characters in the local name: ! # $ % & ' * + - / = ?  ^ _ ` . { | } ~
-parse_encoded_address(<<H, Tail/binary>>, Acc, {false, AB}) when H =:= $+;
+parse_encoded_address(<<H, Tail/binary>>, Acc, #pa{quotes = false} = F) when H =:= $+;
  	H =:= $!; H =:= $#; H =:= $$; H =:= $%; H =:= $&; H =:= $'; H =:= $*; H =:= $=;
 	H =:= $/; H =:= $?; H =:= $^; H =:= $`; H =:= ${; H =:= $|; H =:= $}; H =:= $~ ->
-	parse_encoded_address(Tail, [H | Acc], {false, AB}); % other characters
-parse_encoded_address(_, _Acc, {false, _AB}) ->
+	parse_encoded_address(Tail, [H | Acc], F); % other characters
+parse_encoded_address(_, _Acc, #pa{quotes = false}) ->
 	error;
-parse_encoded_address(<<H, Tail/binary>>, Acc, Quotes) ->
-	parse_encoded_address(Tail, [H | Acc], Quotes).
+parse_encoded_address(<<H, Tail/binary>>, Acc, #pa{quotes = true} = F) ->
+	parse_encoded_address(Tail, [H | Acc], F).
 
 -spec has_extension(Extensions :: [{string(), string()}], Extension :: string()) -> {'true', string()} | 'false'.
 has_extension(Extensions, Ext) ->
@@ -1028,66 +1047,83 @@ parse_encoded_address_test_() ->
 	[
 		{"Valid addresses should parse",
 			fun() ->
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God@heaven.af.mil>">>)),
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\\God@heaven.af.mil>">>)),
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\"God\"@heaven.af.mil>">>)),
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<@gateway.af.mil,@uucp.local:\"\\G\\o\\d\"@heaven.af.mil>">>)),
-					?assertEqual({<<"God2@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God2@heaven.af.mil>">>)),
-					?assertEqual({<<"God+extension@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God+extension@heaven.af.mil>">>)),
-					?assertEqual({<<"God~*$@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God~*$@heaven.af.mil>">>))
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\\God@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\"God\"@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<@gateway.af.mil,@uucp.local:\"\\G\\o\\d\"@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God2@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God2@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God+extension@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God+extension@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God~*$@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<God~*$@heaven.af.mil>">>, false)),
+					?assertEqual({<<"God~!#$%^&*()_+123@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"<\"God~!#$%^&*()_+123\"@heaven.af.mil>">>, false))
 			end
 		},
 		{"Addresses that are sorta valid should parse",
 			fun() ->
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"God@heaven.af.mil">>)),
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"God@heaven.af.mil ">>)),
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<" God@heaven.af.mil ">>)),
-					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<" <God@heaven.af.mil> ">>))
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"God@heaven.af.mil">>, false)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<"God@heaven.af.mil ">>, false)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<" God@heaven.af.mil ">>, false)),
+					?assertEqual({<<"God@heaven.af.mil">>, <<>>}, parse_encoded_address(<<" <God@heaven.af.mil> ">>, false))
+			end
+		},
+		{"Addresses with UTF8 characters should parse only when allowed",
+			fun() ->
+					%% https://www.iana.org/domains/reserved
+					?assertEqual({<<"испытание@пример.испытание"/utf8>>, <<>>},
+								 parse_encoded_address(<<"<испытание@пример.испытание>"/utf8>>, true)),
+					?assertEqual({<<"測試@例子.測試"/utf8>>, <<>>},
+								 parse_encoded_address(<<"<測試@例子.測試>"/utf8>>, true)),
+					?assertEqual({<<"испытание@пример.испытание"/utf8>>, <<"SIZE=100">>},
+								 parse_encoded_address(<<"<испытание@пример.испытание> SIZE=100"/utf8>>, true)),
+					?assertEqual({<<"test@пример.испытание"/utf8>>, <<>>},
+								 parse_encoded_address(<<"<test@пример.испытание>"/utf8>>, true)),
+					?assertEqual({<<"испытание!#¤½§´`<>@пример.испытание"/utf8>>, <<>>},
+								 parse_encoded_address(<<"<\"испытание!#¤½§´`<>\"@пример.испытание>"/utf8>>, true)),
+					?assertEqual(error, parse_encoded_address(<<"<испытание@пример.испытание>"/utf8>>, false))
 			end
 		},
 		{"Addresses containing unescaped <> that aren't at start/end should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address(<<"<<">>)),
-					?assertEqual(error, parse_encoded_address(<<"<God<@heaven.af.mil>">>))
+					?assertEqual(error, parse_encoded_address(<<"<<">>, false)),
+					?assertEqual(error, parse_encoded_address(<<"<God<@heaven.af.mil>">>, false))
 			end
 		},
 		{"Address that begins with < but doesn't end with a > should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address(<<"<God@heaven.af.mil">>)),
-					?assertEqual(error, parse_encoded_address(<<"<God@heaven.af.mil ">>))
+					?assertEqual(error, parse_encoded_address(<<"<God@heaven.af.mil">>, false)),
+					?assertEqual(error, parse_encoded_address(<<"<God@heaven.af.mil ">>, false))
 			end
 		},
 		{"Address that begins without < but ends with a > should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address(<<"God@heaven.af.mil>">>))
+					?assertEqual(error, parse_encoded_address(<<"God@heaven.af.mil>">>, false))
 			end
 		},
 		{"Address longer than 320 characters should fail",
 			fun() ->
 					MegaAddress = list_to_binary(lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ "@" ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122) ++ lists:seq(97, 122)),
-					?assertEqual(error, parse_encoded_address(MegaAddress))
+					?assertEqual(error, parse_encoded_address(MegaAddress, false))
 			end
 		},
 		{"Address with an invalid route should fail",
 			fun() ->
-					?assertEqual(error, parse_encoded_address(<<"<@gateway.af.mil God@heaven.af.mil>">>))
+					?assertEqual(error, parse_encoded_address(<<"<@gateway.af.mil God@heaven.af.mil>">>, false))
 			end
 		},
 		{"Empty addresses should parse OK",
 			fun() ->
-					?assertEqual({<<>>, <<>>}, parse_encoded_address(<<"<>">>)),
-					?assertEqual({<<>>, <<>>}, parse_encoded_address(<<" <> ">>))
+					?assertEqual({<<>>, <<>>}, parse_encoded_address(<<"<>">>, false)),
+					?assertEqual({<<>>, <<>>}, parse_encoded_address(<<" <> ">>, false))
 			end
 		},
 		{"Completely empty addresses are an error",
 			fun() ->
-					?assertEqual(error, parse_encoded_address(<<"">>)),
-					?assertEqual(error, parse_encoded_address(<<" ">>))
+					?assertEqual(error, parse_encoded_address(<<"">>, false)),
+					?assertEqual(error, parse_encoded_address(<<" ">>, false))
 			end
 		},
 		{"addresses with trailing parameters should return the trailing parameters",
 			fun() ->
-					?assertEqual({<<"God@heaven.af.mil">>, <<"SIZE=100 BODY=8BITMIME">>}, parse_encoded_address(<<"<God@heaven.af.mil> SIZE=100 BODY=8BITMIME">>))
+					?assertEqual({<<"God@heaven.af.mil">>, <<"SIZE=100 BODY=8BITMIME">>}, parse_encoded_address(<<"<God@heaven.af.mil> SIZE=100 BODY=8BITMIME">>, false))
 			end
 		}
 	].
@@ -1319,6 +1355,43 @@ smtp_session_test_() ->
 						end
 					}
 			end,
+			fun({CSock, _Pid}) ->
+					{"Sending with UTF8 addresses and body",
+						fun() ->
+								smtp_socket:active_once(CSock),
+								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("220 localhost"++_Stuff,  Packet),
+								smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-localhost\r\n",  Packet2),
+								receive {tcp, CSock, Packet31} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-SIZE"++_, Packet31),
+								receive {tcp, CSock, Packet32} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-8BITMIME"++_, Packet32),
+								receive {tcp, CSock, Packet33} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250-PIPELINING"++_, Packet33),
+								receive {tcp, CSock, Packet34} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 SMTPUTF8"++_, Packet34),
+								smtp_socket:send(CSock, <<"MAIL FROM: <испытание@пример.испытание> SMTPUTF8\r\n"/utf8>>),
+								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 sender Ok"++_, Packet4),
+								smtp_socket:send(CSock, <<"RCPT TO: <測試@例子.測試>\r\n"/utf8>>),
+								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 recipient Ok"++_, Packet5),
+								smtp_socket:send(CSock, "DATA\r\n"),
+								receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("354 "++_, Packet6),
+								smtp_socket:send(CSock, <<"Subject: Я помню чудное мгновенье\r\n"/utf8>>),
+								smtp_socket:send(CSock, <<"To: <測試@例子.測試>\r\n"/utf8>>),
+								smtp_socket:send(CSock, <<"From: <испытание@пример.испытание>\r\n"/utf8>>),
+								smtp_socket:send(CSock, "\r\n"),
+								smtp_socket:send(CSock, <<"Передо мной явилась ты"/utf8>>),
+								smtp_socket:send(CSock, "\r\n.\r\n"),
+								receive {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock) end,
+								?assertMatch("250 queued as"++_, Packet7)
+						end
+					}
+			end,
 %			fun({CSock, _Pid}) ->
 %					{"Sending DATA with a bare newline",
 %						fun() ->
@@ -1541,6 +1614,9 @@ lmtp_session_test_() ->
 												smtp_socket:active_once(CSock),
 												F(F, Acc);
 											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
 											{tcp, CSock, Data} ->
@@ -2692,6 +2768,9 @@ smtp_session_maxsize_test_() ->
 											{tcp, CSock, "250 PIPELINING"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
 											{tcp, CSock, _} ->
 												smtp_socket:active_once(CSock),
 												error
@@ -2738,6 +2817,9 @@ smtp_session_maxsize_test_() ->
 												smtp_socket:active_once(CSock),
 												F(F, Acc);
 											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
 											{tcp, CSock, _} ->
@@ -2789,6 +2871,9 @@ smtp_session_maxsize_test_() ->
 											{tcp, CSock, "250 PIPELINING"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
 											{tcp, CSock, _} ->
 												smtp_socket:active_once(CSock),
 												error
@@ -2821,6 +2906,9 @@ smtp_session_maxsize_test_() ->
 												smtp_socket:active_once(CSock),
 												F(F, Acc);
 											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
 											{tcp, CSock, _} ->
@@ -2876,6 +2964,9 @@ smtp_session_nomaxsize_test_() ->
 											{tcp, CSock, "250 PIPELINING"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
 											{tcp, CSock, _Data} ->
 												smtp_socket:active_once(CSock),
 												error
@@ -2922,6 +3013,9 @@ smtp_session_nomaxsize_test_() ->
 												smtp_socket:active_once(CSock),
 												F(F, Acc);
 											{tcp, CSock, "250 PIPELINING"++_} ->
+												smtp_socket:active_once(CSock),
+												true;
+											{tcp, CSock, "250 SMTPUTF8"++_} ->
 												smtp_socket:active_once(CSock),
 												true;
 											{tcp, CSock, _} ->
