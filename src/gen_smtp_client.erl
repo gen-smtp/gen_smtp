@@ -1321,19 +1321,6 @@ session_start_test_() ->
 								smtp_socket:close(ListenSock),
 								ok
 						end
-					},
-
-					{"Erlang 23.2.7 compatibility",
-					 fun() ->
-							 Receipt = gen_smtp_client:send_blocking({<<"Info.ContactTracing@sg.ch">>, [<<"maennchen@joshmartin.ch">>], <<"test">>},
-																	 [{relay, <<"joshmartin.ch">>},
-																	  {port, 25},
-																	  {hostname, "smtp.covid19-tracing.ch"},
-																	  {retries, 10}]
-																	),
-							 ?assertMatch({error, send, _}, Receipt),
-							 ok
-					 end
 					}
 			end
 
