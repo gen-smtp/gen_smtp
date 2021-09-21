@@ -10,13 +10,17 @@ on:
       - master
 jobs:
   ci:
-    name: Run checks and tests over ${{matrix.otp_vsn}} and ${{matrix.os}}
+    name: Checks and tests on OTP-${{matrix.otp_vsn}}, ${{matrix.os}}, ${{matrix.profile}}
     runs-on: ${{matrix.os}}
 
     strategy:
       matrix:
-        otp_vsn: [20.3, 21.3, 22.3, 23.1]
+        otp_vsn: [21.3, 22.3, 23.3, 24.0]
         os: [ubuntu-latest]
+        profile: [test, ranch18, ranch20]
+        exclude:
+            - otp_vsn: 24.0     # ranch 1.7 does not work on OTP24+
+              profile: test
 
     container:
       image: erlang:${{matrix.otp_vsn}}
@@ -26,10 +30,10 @@ jobs:
       - name: xref
         run: make xref
       - name: Test
-        run: make test
+        run: make test REBAR_PROFILE=${{ matrix.profile }}
       - name: Proper
-        run: make proper
+        run: make proper REBAR_PROFILE=${{ matrix.profile }}
       - name: Cover
-        run: make cover
+        run: make cover REBAR_PROFILE=${{ matrix.profile }}
       - name: Dialyze
         run: make dialyze
