@@ -9,6 +9,8 @@ build
 .eunit/
 ebin/gen_smtp.app
 src/smtp_rfc822_parse.erl
+src/smtp_rfc5322_scan.erl
+src/smtp_rfc5322_parse.erl
 deps/
 _build
 .rebar

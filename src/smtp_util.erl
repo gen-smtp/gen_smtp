@@ -27,10 +27,15 @@
 		mxlookup/1, guess_FQDN/0, compute_cram_digest/2, get_cram_string/1,
 		trim_crlf/1, rfc5322_timestamp/0, zone/0, generate_message_id/0,
          parse_rfc822_addresses/1,
+         parse_rfc5322_addresses/1,
          combine_rfc822_addresses/1,
          generate_message_boundary/0]).
 
 -include_lib("kernel/include/inet.hrl").
+
+-type name_address() :: {Name :: string() | undefined, Address :: string()}.
+
+-deprecated([{parse_rfc822_addresses, 1}]). % Use parse_rfc5322_addresses/1 instead
 
 %% @doc returns a sorted list of mx servers for `Domain', lowest distance first
 mxlookup(Domain) ->
@@ -172,7 +177,7 @@ opt_quoted(S) when is_list(S) ->
                 $",
                 lists:map(
                     fun
-                        ($\") -> [$\\, $"];
+                        ($\") -> [$\\, $\"];
                         ($\\) -> [$\\, $\\];
                         (C) -> C
                     end,
@@ -197,9 +202,31 @@ is_special($]) -> true;
 is_special($') -> true; % special for some smtp servers
 is_special(_) -> false.
 
+%% @doc Parse list of mail addresses in RFC-5322#section-3.4 `mailbox-list' format
+-spec parse_rfc5322_addresses(string() | binary()) -> {ok, [name_address()]} | {error, any()}.
+parse_rfc5322_addresses(B) when is_binary(B) ->
+	parse_rfc5322_addresses(unicode:characters_to_list(B));
+parse_rfc5322_addresses(S) when is_list(S) ->
+	case smtp_rfc5322_scan:string(S) of
+		{ok, Tokens, _L} ->
+			F = fun({Name, {addr, Local, Domain}}) ->
+						{Name, Local ++ "@" ++ Domain}
+				end,
+			case smtp_rfc5322_parse:parse(Tokens) of
+				{ok, {mailbox_list, AddrList}} ->
+					{ok, lists:map(F, AddrList)};
+				{ok, {group, {_Groupame, AddrList}}} ->
+					{ok, lists:map(F, AddrList)};
+				{error, _} = Err ->
+					Err
+			end;
+		{error, Reason, _L} ->
+			{error, Reason}
+	end.
 
+-spec parse_rfc822_addresses(string() | binary()) -> {ok, [name_address()]} | {error, any()}.
 parse_rfc822_addresses(B) when is_binary(B) ->
-	parse_rfc822_addresses(binary_to_list(B));
+	parse_rfc822_addresses(unicode:characters_to_list(B));
 
 parse_rfc822_addresses(S) when is_list(S) ->
 	Scanned = lists:reverse([{'$end', 0}|scan_rfc822(S, [])]),
@@ -218,7 +245,8 @@ scan_rfc822([$<|Rest], Acc) ->
 	{Token, R} = scan_rfc822_scan_endpointybracket(Rest),
 	scan_rfc822(R, [{'>', 0}, {string, 0, Token}, {'<', 0}|Acc]);
 scan_rfc822(String, Acc) ->
-	case re:run(String, "(.+?)([\s<>,].*)", [{capture, all_but_first, list}]) of
+	%% Capture everything except "SP < > ,"
+	case re:run(String, "^([^\s<>,]+)(.*)", [{capture, all_but_first, list}]) of
 		{match, [Token, Rest]} ->
 			scan_rfc822(Rest, [{string, 0, Token}|Acc]);
 		nomatch ->

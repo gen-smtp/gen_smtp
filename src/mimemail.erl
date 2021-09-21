@@ -856,9 +856,14 @@ encode_folded_header(Rest, Acc) ->
 
 encode_header_value(H, Value) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc">>;
 								   H =:= <<"Reply-To">>; H =:= <<"From">> ->
-	{ok, Addresses} = smtp_util:parse_rfc822_addresses(Value),
+	{ok, Addresses} = smtp_util:parse_rfc5322_addresses(Value),
 	{Names, Emails} = lists:unzip(Addresses),
-	NewNames = lists:map(fun rfc2047_utf8_encode/1, Names),
+	NewNames = lists:map(
+				 fun(undefined) -> undefined;
+					(Name) ->
+						 %% `Name' contains codepoints, but we need bytes
+						 rfc2047_utf8_encode(unicode:characters_to_binary(Name))
+				 end, Names),
 	smtp_util:combine_rfc822_addresses(lists:zip(NewNames, Emails));
 encode_header_value(_, Value) ->
 	rfc2047_utf8_encode(Value).
@@ -994,7 +999,7 @@ fix_encoding(Encoding) ->
 
 
 %% @doc Encode a binary or list according to RFC 2047. Input is
-%% assumed to be in UTF-8 encoding.
+%% assumed to be in UTF-8 encoding bytes; not codepoints.
 rfc2047_utf8_encode(undefined) -> undefined;
 rfc2047_utf8_encode(B) when is_binary(B) ->
 	rfc2047_utf8_encode(binary_to_list(B));
