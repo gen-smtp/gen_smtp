@@ -31,7 +31,8 @@
 		{tls_options, [{versions, ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]}, % used in ssl:connect, http://erlang.org/doc/man/ssl.html
 		{auth, if_available},
 		{hostname, smtp_util:guess_FQDN()},
-		{retries, 1} % how many retries per smtp host on temporary failure
+		{retries, 1}, % how many retries per smtp host on temporary failure
+		{on_transaction_error, quit}
 	]).
 
 -define(AUTH_PREFERENCE, [
@@ -79,7 +80,8 @@
                     {retries, non_neg_integer()} |
                     {username, string()} |
                     {password, string()} |
-                    {trace_fun, fun( (Fmt :: string(), Args :: [any()]) -> any() )}].
+                    {trace_fun, fun( (Fmt :: string(), Args :: [any()]) -> any() )} |
+                    {on_transaction_error, quit | reset}].
 
 -type extensions() :: [{binary(), binary()}].
 
@@ -225,9 +227,11 @@ open(Options) ->
 			{error, bad_option, Reason}
 	end.
 
--spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> {'ok', Receipt :: binary()} | {error, failure()}.
+-spec deliver(Socket :: smtp_client_socket(), Email :: email()) -> {'ok', Receipt :: binary()} | {error, FailMsg :: failure()}.
 %% @doc Deliver an email on an open smtp client socket.
 %% For use with a socket opened with open/1. The socket can be reused as long as the previous call to deliver/2 returned `{ok, Receipt}'.
+%% If the previous call to deliver/2 returned `{error, FailMsg}' and the option `{on_transaction_error, reset}' was given in the open/1 call,
+%% the socket <em>may</em> still be reused.
 deliver(#smtp_client_socket{} = SmtpClientSocket, Email) ->
 	#smtp_client_socket{
 		socket = Socket,
@@ -275,12 +279,12 @@ send_it(Email, Options) ->
 				options = Options1
 			} = ClientSocket,
 			try
-				Receipt = try_sending_it(Email, Socket, Extensions, Options1),
-				quit(Socket),
-				Receipt
+				try_sending_it(Email, Socket, Extensions, Options1)
 			catch
 				throw:{FailureType, Message} ->
 					{error, send, {FailureType, Host, Message}}
+			after
+				quit(Socket)
 			end
 	end.
 
@@ -371,14 +375,22 @@ try_sending_it({From, To, Body}, Socket, Extensions, Options) ->
 try_MAIL_FROM(From, Socket, Extensions, Options) when is_binary(From) ->
 	try_MAIL_FROM(binary_to_list(From), Socket, Extensions, Options);
 try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions, Options) ->
+	OnTxError = proplists:get_value(on_transaction_error, Options),
 	% TODO do we need to bother with SIZE?
 	smtp_socket:send(Socket, ["MAIL FROM:", From, "\r\n"]),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"250", _Rest/binary>>} ->
 			true;
+		{ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+			rset_or_quit(Socket),
+			throw({temporary_failure, Msg});
 		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
+		{ok, <<"5", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+			trace(Options, "Mail FROM rejected: ~p~n", [Msg]),
+			ok = rset_or_quit(Socket),
+			throw({permanent_failure, Msg});
 		{ok, Msg} ->
 			trace(Options, "Mail FROM rejected: ~p~n", [Msg]),
 			quit(Socket),
@@ -394,15 +406,22 @@ try_RCPT_TO([], _Socket, _Extensions, _Options) ->
 try_RCPT_TO([To | Tail], Socket, Extensions, Options) when is_binary(To) ->
 	try_RCPT_TO([binary_to_list(To) | Tail], Socket, Extensions, Options);
 try_RCPT_TO(["<" ++ _ = To | Tail], Socket, Extensions, Options) ->
+	OnTxError = proplists:get_value(on_transaction_error, Options),
 	smtp_socket:send(Socket, ["RCPT TO:",To,"\r\n"]),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"250", _Rest/binary>>} ->
 			try_RCPT_TO(Tail, Socket, Extensions, Options);
 		{ok, <<"251", _Rest/binary>>} ->
 			try_RCPT_TO(Tail, Socket, Extensions, Options);
+		{ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+			rset_or_quit(Socket),
+			throw({temporary_failure, Msg});
 		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
+		{ok, <<"5", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+			rset_or_quit(Socket),
+			throw({permanent_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
 			throw({permanent_failure, Msg})
@@ -414,7 +433,8 @@ try_RCPT_TO([To | Tail], Socket, Extensions, Options) ->
 -spec try_DATA(Body :: binary() | function(), Socket :: smtp_socket:socket(), Extensions :: extensions(), Options :: options()) -> binary().
 try_DATA(Body, Socket, Extensions, Options) when is_function(Body) ->
 	try_DATA(Body(), Socket, Extensions, Options);
-try_DATA(Body, Socket, _Extensions, _Options) ->
+try_DATA(Body, Socket, _Extensions, Options) ->
+	OnTxError = proplists:get_value(on_transaction_error, Options),
 	smtp_socket:send(Socket, "DATA\r\n"),
 	case read_possible_multiline_reply(Socket) of
 		{ok, <<"354", _Rest/binary>>} ->
@@ -424,16 +444,26 @@ try_DATA(Body, Socket, _Extensions, _Options) ->
 			case read_possible_multiline_reply(Socket) of
 				{ok, <<"250 ", Receipt/binary>>} ->
 					Receipt;
+				{ok, <<"4", _Rest2/binary>> = Msg} when OnTxError =:= reset ->
+					throw({temporary_failure, Msg});
 				{ok, <<"4", _Rest2/binary>> = Msg} ->
 					quit(Socket),
 					throw({temporary_failure, Msg});
+				{ok, <<"5", _Rest2/binary>> = Msg} when OnTxError =:= reset ->
+					throw({permanent_failure, Msg});
 				{ok, Msg} ->
 					quit(Socket),
 					throw({permanent_failure, Msg})
 			end;
+		{ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+			rset_or_quit(Socket),
+			throw({temporary_failure, Msg});
 		{ok, <<"4", _Rest/binary>> = Msg} ->
 			quit(Socket),
 			throw({temporary_failure, Msg});
+		{ok, <<"5", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+			rset_or_quit(Socket),
+			throw({permanent_failure, Msg});
 		{ok, Msg} ->
 			quit(Socket),
 			throw({permanent_failure, Msg})
@@ -761,6 +791,15 @@ read_multiline_reply(Socket, Code, Acc) ->
 			end;
 		Error ->
 			throw({network_failure, Error})
+	end.
+
+rset_or_quit(Socket) ->
+	ok = smtp_socket:send(Socket, "RSET\r\n"),
+	case read_possible_multiline_reply(Socket) of
+		{ok, <<"250", _Rest/binary>>} ->
+			ok;
+		{ok, _Msg} ->
+			quit(Socket)
 	end.
 
 quit(Socket) ->
@@ -1124,6 +1163,175 @@ session_start_test_() ->
 								smtp_socket:send(Y, "250 ok\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								ok
+						end
+					}
+			end,
+
+			fun({ListenSock}) ->
+					{"Deliver with RSET on transaction error",
+						fun() ->
+							Self = self(),
+							Pid = spawn_link(fun() ->
+									EMail = {"test@foo.com", ["foo@bar.com"], "hello world"},
+									Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {on_transaction_error, reset}],
+									{ok, X} = open(Options),
+									LoopFn = fun Loop() ->
+										receive
+											{Self, deliver, Exp} ->
+												?assertMatch({Exp, _}, deliver(X, EMail)),
+												Loop();
+											{Self, stop} ->
+												close(X),
+												ok
+										end
+									end,
+									LoopFn(),
+									unlink(Self)
+								end),
+							{ok, Y} = smtp_socket:accept(ListenSock, 1000),
+							smtp_socket:send(Y, "220 Some Banner\r\n"),
+							?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 hostname\r\n"),
+
+							Pid ! {self(), deliver, error},
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "599 Error\r\n"),
+							?assertMatch({ok, "RSET\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+
+							Pid ! {self(), deliver, error},
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "599 Error\r\n"),
+							?assertMatch({ok, "RSET\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+
+							Pid ! {self(), deliver, error},
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "599 Error\r\n"),
+							?assertMatch({ok, "RSET\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+
+							Pid ! {self(), deliver, error},
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "354 Continue\r\n"),
+							?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "599 Error\r\n"),
+
+							Pid ! {self(), deliver, ok},
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "354 Continue\r\n"),
+							?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 Ok\r\n"),
+
+							Pid ! {self(), stop},
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:close(Y),
+							ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"Deliver with QUIT on transaction error",
+						fun() ->
+							Self = self(),
+							Pid = spawn_link(fun() ->
+									EMail = {"test@foo.com", ["foo@bar.com"], "hello world"},
+									Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {on_transaction_error, quit}],
+									LoopFn = fun Loop(LastSock) ->
+										receive
+											{Self, deliver, Exp} ->
+												{ok, X} = open(Options),
+												?assertMatch({Exp, _}, deliver(X, EMail)),
+												Loop(X);
+											{Self, stop} ->
+												catch close(LastSock),
+												ok
+										end
+									end,
+									LoopFn(undefined),
+									unlink(Self)
+								end),
+							SessionInitFn = fun() ->
+									{ok, Y} = smtp_socket:accept(ListenSock, 1000),
+									smtp_socket:send(Y, "220 Some Banner\r\n"),
+									?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+									smtp_socket:send(Y, "250 hostname\r\n"),
+									Y
+								end,
+
+							Pid ! {self(), deliver, error},
+							Y1 = SessionInitFn(),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y1, 0, 1000)),
+							smtp_socket:send(Y1, "599 Error\r\n"),
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y1, 0, 1000)),
+							smtp_socket:close(Y1),
+
+							Pid ! {self(), deliver, error},
+							Y2 = SessionInitFn(),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y2, 0, 1000)),
+							smtp_socket:send(Y2, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y2, 0, 1000)),
+							smtp_socket:send(Y2, "599 Error\r\n"),
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y2, 0, 1000)),
+							smtp_socket:close(Y2),
+
+							Pid ! {self(), deliver, error},
+							Y3 = SessionInitFn(),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y3, 0, 1000)),
+							smtp_socket:send(Y3, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y3, 0, 1000)),
+							smtp_socket:send(Y3, "250 Ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y3, 0, 1000)),
+							smtp_socket:send(Y3, "599 Error\r\n"),
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y3, 0, 1000)),
+							smtp_socket:close(Y3),
+
+							Pid ! {self(), deliver, error},
+							Y4 = SessionInitFn(),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y4, 0, 1000)),
+							smtp_socket:send(Y4, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y4, 0, 1000)),
+							smtp_socket:send(Y4, "250 Ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y4, 0, 1000)),
+							smtp_socket:send(Y4, "354 Continue\r\n"),
+							?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y4, 0, 1000)),
+							?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y4, 0, 1000)),
+							smtp_socket:send(Y4, "599 Error\r\n"),
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y4, 0, 1000)),
+							smtp_socket:close(Y4),
+
+							Pid ! {self(), deliver, ok},
+							Y5 = SessionInitFn(),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y5, 0, 1000)),
+							smtp_socket:send(Y5, "250 Ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y5, 0, 1000)),
+							smtp_socket:send(Y5, "250 Ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y5, 0, 1000)),
+							smtp_socket:send(Y5, "354 Continue\r\n"),
+							?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y5, 0, 1000)),
+							?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y5, 0, 1000)),
+							smtp_socket:send(Y5, "250 Ok\r\n"),
+
+							Pid ! {self(), stop},
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y5, 0, 1000)),
+							smtp_socket:close(Y5),
+							ok
 						end
 					}
 			end,
