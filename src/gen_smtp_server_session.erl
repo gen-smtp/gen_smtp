@@ -56,7 +56,7 @@
 		data = <<>> :: binary(),
 		expectedsize = 0 :: pos_integer() | 0,
 		auth = {<<>>, <<>>} :: {binary(), binary()}, % {"username", "password"}
-		flags = [] :: [smtputf8 | '8bitmime']
+		flags = [] :: [smtputf8 | '8bitmime' | '7bit']
 	}
 ).
 
@@ -530,8 +530,10 @@ handle_request({<<"MAIL">>, Args},
 									end;
 								(<<"BODY=", BodyType/binary>>, #state{envelope = #envelope{flags = Flags} = Envelope} = InnerState) ->
 									case has_extension(Extensions, "8BITMIME") of
-										{true, _} when BodyType == <<"8BITMIME">> ->
-											InnerState#state{envelope = Envelope#envelope{flags = ['8bitmime' | Flags]}};
+										{true, _} ->
+											Flag = maps:get(BodyType, #{<<"8BITMIME">> => '8bitmime',
+																		<<"7BIT">> => '7bit'}),
+											InnerState#state{envelope = Envelope#envelope{flags = [Flag | Flags]}};
 										false ->
 											{error, "555 Unsupported option BODY\r\n"}
 									end;
