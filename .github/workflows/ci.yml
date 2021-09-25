@@ -15,11 +15,11 @@ jobs:
 
     strategy:
       matrix:
-        otp_vsn: [21.3, 22.3, 23.3, 24.0]
+        otp_vsn: [21.3, 22.3, 23.3, 24.1]
         os: [ubuntu-latest]
         profile: [test, ranch18, ranch20]
         exclude:
-            - otp_vsn: 24.0     # ranch 1.7 does not work on OTP24+
+            - otp_vsn: 24.1     # ranch 1.7 does not work on OTP24+
               profile: test
 
     container:
