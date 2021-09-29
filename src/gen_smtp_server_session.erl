@@ -401,25 +401,20 @@ handle_request({Msg, Hostname},
 			end,
 			Extensions2 = case Tls of
 				true ->
-					Extensions1 -- [ {"STARTTLS", true} ];
+					lists:delete({"STARTTLS", true}, Extensions1);
 				false ->
 					Extensions1
 			end,
-			{_, _, Response} = lists:foldl(
-				fun
-					({E, true}, {Pos, Len, Acc}) when Pos =:= Len ->
-						{Pos, Len, [["250 ", E, "\r\n"] | Acc]};
-					({E, Value}, {Pos, Len, Acc}) when Pos =:= Len ->
-						{Pos, Len, [["250 ", E, " ", Value, "\r\n"] | Acc]};
-					({E, true}, {Pos, Len, Acc}) ->
-						{Pos+1, Len, [["250-", E, "\r\n"] | Acc]};
-					({E, Value}, {Pos, Len, Acc}) ->
-						{Pos+1, Len, [["250-", E, " ", Value , "\r\n"] | Acc]}
-				end,
-				{1, length(Extensions2), [ ["250-", hostname(Options), "\r\n"] ]},
-				Extensions2),
+			Response = (fun
+				F([{E, true}]) -> ["250 ", E, "\r\n"];
+				F([{E, V}]) -> ["250 ", E, " ", V, "\r\n"];
+				F([Line]) -> ["250 ", Line, "\r\n"];
+				F([{E, true}|More]) -> ["250-", E, "\r\n" | F(More)];
+				F([{E, V}|More]) -> ["250-", E, " ", V, "\r\n" | F(More)];
+				F([Line|More]) -> ["250-", Line, "\r\n" | F(More)]
+			end)([hostname(Options)|Extensions2]),
 			%?debugFmt("Respponse ~p~n", [lists:reverse(Response)]),
-			send(State, lists:reverse(Response)),
+			send(State, Response),
 			{ok, State#state{extensions = Extensions2, maxsize = MaxSize, envelope = #envelope{}, callbackstate = CallbackState}};
 		{error, Message, CallbackState} ->
 			send(State, [Message, "\r\n"]),
