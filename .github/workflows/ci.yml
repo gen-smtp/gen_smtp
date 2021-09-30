@@ -1,39 +1,56 @@
-# Build gen-smtp on various OTP versions
-
 name: CI
-on:
-  push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
+
+on: [push, pull_request]
+
 jobs:
+
   ci:
-    name: Checks and tests on OTP-${{matrix.otp_vsn}}, ${{matrix.os}}, ${{matrix.profile}}
-    runs-on: ${{matrix.os}}
+    name: Test on OTP ${{ matrix.otp }} / Profile ${{ matrix.profile }}
+    runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
-        otp_vsn: [21.3, 22.3, 23.3, 24.1]
         os: [ubuntu-latest]
-        profile: [test, ranch18, ranch20]
-        exclude:
-            - otp_vsn: 24.1     # ranch 1.7 does not work on OTP24+
-              profile: test
-
-    container:
-      image: erlang:${{matrix.otp_vsn}}
+        otp: ["24", "23", "22"]
+        rebar3: ["3.17.0"]
+        profile: [test, ranch_v2]
+        include:
+          - os: ubuntu-latest
+            otp: "21"
+            rebar3: "3.15.2"
+            profile: "test"
+          - os: ubuntu-latest
+            otp: "21"
+            rebar3: "3.15.2"
+            profile: "ranch_v2"
 
     steps:
       - uses: actions/checkout@v2
-      - name: xref
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: ${{ matrix.rebar3 }}
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-erlang-${{ matrix.otp }}-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-erlang-${{ matrix.otp }}-
+
+      - name: Xref
         run: make xref
+
       - name: Test
         run: make test REBAR_PROFILE=${{ matrix.profile }}
+
       - name: Proper
         run: make proper REBAR_PROFILE=${{ matrix.profile }}
+
       - name: Cover
         run: make cover REBAR_PROFILE=${{ matrix.profile }}
-      - name: Dialyze
+
+      - name: Dialyzer
         run: make dialyze

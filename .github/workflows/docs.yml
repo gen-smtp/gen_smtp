@@ -1,27 +1,40 @@
-# Build gen-smtp edoc on various OTP versions
+name: Doc
 
-name: Documentation
 on:
   push:
     branches:
-      - master
+      - $default-branch
   pull_request:
     branches:
-      - master
+      - $default-branch
+
 jobs:
-  ci:
-    name: Build edocs ${{matrix.otp_vsn}} and ${{matrix.os}}
-    runs-on: ${{matrix.os}}
+
+  docs:
+    name: Build EDoc on OTP ${{ matrix.otp }}
+    runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
-        otp_vsn: [21.3, 22.3, 23.3, 24.0]
         os: [ubuntu-latest]
-
-    container:
-      image: erlang:${{matrix.otp_vsn}}
+        otp: ["24"]
+        rebar3: ["3.17.0"]
 
     steps:
       - uses: actions/checkout@v2
-      - name: Documentation
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: ${{ matrix.rebar3 }}
+
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.cache/rebar3
+            _build
+          key: ${{ runner.os }}-erlang-${{ matrix.otp }}-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-erlang-${{ matrix.otp }}-
+
+      - name: Build EDoc
         run: make docs
