@@ -32,13 +32,21 @@ jobs:
           otp-version: ${{ matrix.otp }}
           rebar3-version: ${{ matrix.rebar3 }}
 
-      - uses: actions/cache@v2
+      - name: Cache Hex packages
+        uses: actions/cache@v2
+        with:
+          path: ~/.cache/rebar3/hex/hexpm/packages
+          key: ${{ runner.os }}-hex-${{ hashFiles('**/rebar.lock') }}
+          restore-keys: ${{ runner.os }}-hex-
+
+      - name: Cache Dialyzer PLTs
+        uses: actions/cache@v2
         with:
           path: |
-            ~/.cache/rebar3
-            _build
-          key: ${{ runner.os }}-erlang-${{ matrix.otp }}-${{ hashFiles('**/rebar.lock') }}
-          restore-keys: ${{ runner.os }}-erlang-${{ matrix.otp }}-
+            ~/.cache/rebar3/rebar3_*.plt
+            _build/dialyzer/rebar3_*.plt
+          key: ${{ runner.os }}-${{ matrix.otp }}-dialyzer-${{ hashFiles('**/rebar.config') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.otp }}-dialyzer-
 
       - name: Xref
         run: make xref
