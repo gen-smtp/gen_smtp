@@ -1,4 +1,4 @@
-name: Doc
+name: Docs
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 jobs:
 
   docs:
-    name: Build EDoc on OTP ${{ matrix.otp }}
+    name: Generate docs on OTP ${{ matrix.otp }}
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -19,6 +19,7 @@ jobs:
         os: [ubuntu-latest]
         otp: ["24"]
         rebar3: ["3.17.0"]
+        elixir: ["1.12"]
 
     steps:
       - uses: actions/checkout@v2
@@ -27,6 +28,7 @@ jobs:
         with:
           otp-version: ${{ matrix.otp }}
           rebar3-version: ${{ matrix.rebar3 }}
+          elixir-version: ${{ matrix.elixir }}
 
       - name: Cache Hex packages
         uses: actions/cache@v2
@@ -35,5 +37,15 @@ jobs:
           key: ${{ runner.os }}-hex-${{ hashFiles('**/rebar.lock') }}
           restore-keys: ${{ runner.os }}-hex-
 
-      - name: Build EDoc
-        run: make docs
+      - name: Install ExDoc
+        run: mix escript.install hex ex_doc --force
+
+      - name: Generate docs by ExDoc
+        run: sh docs.sh $GITHUB_SHA
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: doc
+          path: doc
+          retention-days: 1

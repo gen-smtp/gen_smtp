@@ -79,16 +79,7 @@
 	}
 ).
 
-%% OTP-19: ssl:ssl_option()
-%% OTP-20: ssl:ssl_option()
-%% OTP-21: ssl:tls_server_option()
-%% OTP-22: ssl:tls_server_option()
-%% OTP-23: ssl:tls_server_option()
--ifdef(OTP_RELEASE).
 -type tls_opt() :: ssl:tls_server_option().
--else.
--type tls_opt() :: ssl:ssl_option().
--endif.
 
 -type options() :: [  {callbackoptions, any()}
 					| {certfile, file:name_all()} % deprecated, see tls_options
@@ -150,7 +141,6 @@
 -optional_callbacks([handle_info/2, handle_AUTH/4, handle_error/3]).
 
 %% @doc Start a SMTP session linked to the calling process.
-%% @see start/3
 -spec start_link(Ref :: ranch:ref(), Transport :: module(),
 				 {Callback :: module(), Options :: options()}) ->
 						{'ok', pid()}.

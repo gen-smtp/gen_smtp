@@ -8,7 +8,7 @@ clean:
 	@rebar3 clean -a
 
 test:
-	ERL_AFLAGS="-s ssl" 
+	ERL_AFLAGS="-s ssl"
 	rebar3 as $(REBAR_PROFILE) eunit -c
 
 proper:
@@ -22,8 +22,5 @@ dialyze:
 
 xref:
 	rebar3 as test xref
-
-docs:
-	rebar3 edoc
 
 .PHONY: compile clean test dialyze

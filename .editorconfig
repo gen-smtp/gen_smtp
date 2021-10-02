@@ -8,10 +8,10 @@ end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-[*.{config,src}]
+[*.{config, src}]
 indent_style = space
 
-[*.{md,markdown}]
+[*.{md}]
 indent_style = space
 trim_trailing_whitespace = false
 
