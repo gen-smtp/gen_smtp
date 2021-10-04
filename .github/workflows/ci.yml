@@ -43,8 +43,8 @@ jobs:
         uses: actions/cache@v2
         with:
           path: |
-            ~/.cache/rebar3/rebar3_*.plt
-            _build/dialyzer/rebar3_*.plt
+            ~/.cache/rebar3/rebar3_*_plt
+            _build/dialyzer/rebar3_*_plt
           key: ${{ runner.os }}-${{ matrix.otp }}-dialyzer-${{ hashFiles('**/rebar.config') }}
           restore-keys: ${{ runner.os }}-${{ matrix.otp }}-dialyzer-
 
