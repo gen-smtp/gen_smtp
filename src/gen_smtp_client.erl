@@ -137,26 +137,24 @@ send(Email, Options, Callback) ->
 	NewOptions = lists:ukeymerge(1, lists:sort(Options),
 		lists:sort(?DEFAULT_OPTIONS)),
 	case check_options(NewOptions) of
-		ok when is_function(Callback) ->
-			spawn(fun() ->
-						process_flag(trap_exit, true),
-						Pid = spawn_link(fun() ->
-									send_it_nonblock(Email, NewOptions, Callback)
-							end
-						),
-						receive
-							{'EXIT', Pid, Reason} ->
-								case Reason of
-									X when X == normal; X == shutdown ->
-										ok;
-									Error ->
-										Callback({exit, Error})
-								end
-						end
-				end);
 		ok ->
-			Pid = spawn_link(fun () ->
-						send_it_nonblock(Email, NewOptions, Callback)
+			Pid = spawn_link(
+				fun () ->
+					try
+						send_it(Email, NewOptions)
+					of
+						{error, _Type, _Reason} = Error when is_function(Callback, 1) ->
+							Callback(Error);
+						{error, _Type, _Reason} = Error ->
+							exit(Error);
+						Receipt when is_function(Callback, 1) ->
+							Callback({ok, Receipt});
+						_Receipt ->
+							ok
+					catch
+						exit:Reason when is_function(Callback, 1) ->
+							Callback({exit, Reason})
+					end
 				end
 			),
 			{ok, Pid};
@@ -178,23 +176,6 @@ send_blocking(Email, Options) ->
 			send_it(Email, NewOptions);
 		{error, Reason} ->
 			{error, Reason}
-	end.
-
--spec send_it_nonblock(Email :: email(), Options :: options(), Callback :: callback() | 'undefined') ->
-                              {'ok', binary()} |
-                              smtp_session_error().
-send_it_nonblock(Email, Options, Callback) ->
-	case send_it(Email, Options) of
-		{error, Type, Message} when is_function(Callback) ->
-			Callback({error, Type, Message}),
-			{error, Type, Message};
-		{error, Type, Message} ->
-			erlang:exit({error, Type, Message});
-		Receipt when is_function(Callback) ->
-			Callback({ok, Receipt}),
-			{ok, Receipt};
-		Receipt ->
-			{ok, Receipt}
 	end.
 
 -spec open(Options :: options()) ->
@@ -1163,6 +1144,42 @@ session_start_test_() ->
 								smtp_socket:send(Y, "250 ok\r\n"),
 								?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
 								ok
+						end
+					}
+			end,
+			fun({ListenSock}) ->
+					{"Send with callback",
+						fun() ->
+							Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}],
+							Self = self(),
+							Ref = make_ref(),
+							Callback = fun (Arg) -> Self ! {callback, Ref, Arg} end,
+							{ok, _Pid1} = send({<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>}, Options, Callback),
+							{ok, X} = smtp_socket:accept(ListenSock, 1000),
+							smtp_socket:send(X, "220 Some banner\r\n"),
+							?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							smtp_socket:send(X, "250 hostname\r\n"),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							smtp_socket:send(X, "250 ok\r\n"),
+							?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							smtp_socket:send(X, "250 ok\r\n"),
+							?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							smtp_socket:send(X, "354 ok\r\n"),
+							?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							smtp_socket:send(X, "250 ok\r\n"),
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+							?assertMatch({ok, <<"ok\r\n">>}, receive {callback, Ref, CbRet1} -> CbRet1 end),
+							{ok, _Pid2} = send({<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>}, Options, Callback),
+							{ok, Y} = smtp_socket:accept(ListenSock, 1000),
+							smtp_socket:send(Y, "220 Some banner\r\n"),
+							?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "250 hostname\r\n"),
+							?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							smtp_socket:send(Y, "599 error\r\n"),
+							?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+							?assertMatch({error, send, {permanent_failure, _, <<"599 error\r\n">>}}, receive {callback, Ref, CbRet2} -> CbRet2 end),
+							ok
 						end
 					}
 			end,
