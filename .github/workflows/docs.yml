@@ -38,7 +38,9 @@ jobs:
           restore-keys: ${{ runner.os }}-hex-
 
       - name: Install ExDoc
-        run: mix escript.install hex ex_doc --force
+        # run: mix escript.install hex ex_doc --force
+        # TODO: Temporary solution. See: https://github.com/elixir-lang/ex_doc/issues/1402
+        run: mix escript.install github elixir-lang/ex_doc --force
 
       - name: Generate docs by ExDoc
         run: sh docs.sh $GITHUB_SHA
