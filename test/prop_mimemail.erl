@@ -90,8 +90,7 @@ match({TypeA, SubTypeA, HeadersA, _ParamsA, BodyA},
 	  end, HeadersA),
 	case is_binary(BodyA) of
 		true ->
-			?assertEqual(trim_trail(BodyA, "\t "),
-						 trim_trail(BodyB, "\t ")),
+			?assertEqual(BodyA, BodyB),
 			true;
 		false ->
 			Bodies = lists:zip(BodyA, BodyB),
@@ -107,7 +106,6 @@ prop_quoted_printable(doc) ->
 		"* decode(encode(data)) returns the same result as original input".
 
 prop_quoted_printable() ->
-	Trim = fun(B) -> trim_both(B, "\t ") end,
 	?FORALL(
 	   Body,
 	   proper_types:oneof([?SIZED(Size, printable_ascii(Size * 50)),
@@ -118,27 +116,10 @@ prop_quoted_printable() ->
 						   proper_types:binary()]),
 	   begin
 		   [QPEncoded] = mimemail:encode_quoted_printable(Body),
-		   ?assertEqual(Trim(Body), Trim(mimemail:decode_quoted_printable(QPEncoded))),
+		   ?assertEqual(Body, mimemail:decode_quoted_printable(QPEncoded)),
 		   ?assertNot(has_lines_over(QPEncoded, 76), #{encoded => QPEncoded, orig => Body}),
 		   true
 	   end).
-
-trim(B) ->
-	trim(B, "\t ").
-
-trim_both(B, Chars) ->
-	trim_trail(trim(B, Chars), Chars).
-
-trim_trail(B, Chars) ->
-	binstr:reverse(trim(binstr:reverse(B), Chars)).
-
-trim(<<C, Tail/binary>> = B, Chars) ->
-	case lists:member(C, Chars) of
-		true -> trim(Tail);
-		false -> B
-	end;
-trim(<<>>, _) ->
-	<<>>.
 
 prop_smtp_compatible(doc) ->
     "Makes sure mimemail never produces output that is not compatible with SMTP, "
