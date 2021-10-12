@@ -749,15 +749,15 @@ choose_transformation(Body) ->
 	Size = byte_size(Body),
 	% get only the allowed ascii characters
 	% TODO - this might not be the complete list
-	FilteredSize = length([X || <<X>> <= Body, ((X > 31 andalso X < 127) orelse X == $\r orelse X == $\n)]),
-
-	Percent = round((FilteredSize / Size) * 100),
+	FilteredSize = byte_size(<< <<X>> || <<X>> <= Body, ((X > 31 andalso X < 127) orelse X == $\r orelse X == $\n)>>),
 
 	%based on the % of printable characters, choose an encoding
 	if
-		Percent > 80 ->
+		100 * FilteredSize > 80 * Size -> % same as 80 > 100 * FilteredSize / Size, but avoiding division
+			%% >80% printable characters
 			<<"quoted-printable">>;
 		true ->
+			%% =<80% printable characters
 			<<"base64">>
 	end.
 
@@ -932,62 +932,70 @@ wrap_to_76(Head, Acc) ->
 	list_to_binary(lists:reverse([<<"\r\n">>, Head | Acc])).
 
 encode_quoted_printable(Body) ->
-	[encode_quoted_printable(Body, [], 0)].
+        [encode_quoted_printable(Body, <<>>, 0, false, <<>>, 0)].
 
-encode_quoted_printable(Body, Acc, L) when L >= 75 ->
-	LastLine = case string:str(Acc, "\n") of
-		0 ->
-			Acc;
-		Index ->
-			string:substr(Acc, 1, Index-1)
-	end,
-	%Len = length(LastLine),
-	case string:str(LastLine, " ") of
-		0 when L =:= 75 ->
-			% uh-oh, no convienient whitespace, just cram a soft newline in
-			encode_quoted_printable(Body, [$\n, $\r, $= | Acc], 0);
-		1 when L =:= 75 ->
-			% whitespace is the last character we wrote
-			encode_quoted_printable(Body, [$\n, $\r, $= | Acc], 0);
-		SIndex when (L - 75) < SIndex ->
-			% okay, we can safely stick some whitespace in
-			NewAcc = insert_soft_newline(Acc, SIndex - 1),
-			encode_quoted_printable(Body, NewAcc, SIndex);
-		_ ->
-			% worst case, we're over 75 characters on the line
-			% and there's no obvious break points, just stick one
-			% in at position 75 and call it good. However, we have
-			% to be very careful not to stick the soft newline in
-			% the middle of an existing quoted-printable escape.
+% End of body (this should only happen if the body was empty to begin with)
+encode_quoted_printable(<<>>, Acc, _LineLen, _HasWSP, WordAcc, _WordLen) ->
+        <<Acc/binary, WordAcc/binary>>;
+% CRLF
+encode_quoted_printable(<<$\r, $\n, More/binary>>, Acc, _LineLen, _HasWSP, WordAcc, _WordLen) ->
+        encode_quoted_printable(More, <<Acc/binary, WordAcc/binary, $\r, $\n>>, 0, false, <<>>, 0);
+% WSP in last position
+encode_quoted_printable(<<C>>, Acc, LineLen, _HasWSP, WordAcc, WordLen) when C =:= $\s; C =:= $\t ->
+        Enc = encode_quoted_printable_char(C, true),
+        case LineLen + WordLen + 3 > 76 of
+                true ->
+                        % line would become too long -> soft-break before WSP
+                        <<Acc/binary, WordAcc/binary, $=, $\r, $\n, Enc/binary>>;
+                false ->
+                        % character fits on current line
+                        <<Acc/binary, WordAcc/binary, Enc/binary>>
+        end;
+% WSP before CRLF
+encode_quoted_printable(<<C, $\r, $\n, More/binary>>, Acc, LineLen, _HasWSP, WordAcc, WordLen) when C =:= $\s; C =:= $\t ->
+        Enc = encode_quoted_printable_char(C, true),
+        case LineLen + WordLen + 3 > 76 of
+                true ->
+                        % line would become too long -> soft-break before WSP
+                        encode_quoted_printable(More, <<Acc/binary, WordAcc/binary, $=, $\r, $\n, Enc/binary, $\r, $\n>>, 0, false, <<>>, 0);
+                false ->
+                        % character fits on current line
+                        encode_quoted_printable(More, <<Acc/binary, WordAcc/binary, Enc/binary, $\r, $\n>>, 0, false, <<>>, 0)
+        end;
+% Character elsewhere
+encode_quoted_printable(<<C, More/binary>>, Acc, LineLen, HasWSP, WordAcc, WordLen) ->
+        Enc = encode_quoted_printable_char(C, false),
+        EncLen = byte_size(Enc),
+        case LineLen + WordLen + EncLen > 75 of % mind the 75 here, we need the 76th place for the soft linebreak
+		true when C =:= $\s; C =:= $\t ->
+			% line would become too long, current char is WSP -> soft-break here (remember we have a WSP)
+			encode_quoted_printable(More, <<Acc/binary, WordAcc/binary, $=, $\r, $\n, Enc/binary>>, EncLen, true, <<>>, 0);
+		true when HasWSP, WordLen + EncLen =< 75 ->
+			% line would become too long, we have an earlier WSP and word plus encoded character will fit on a new line -> soft-break at earlier WSP
+			encode_quoted_printable(More, <<Acc/binary, $=, $\r, $\n, WordAcc/binary, Enc/binary>>, WordLen + EncLen, false, <<>>, 0);
+		true ->
+			% line would become too long, we have no earlier WSP or word plus encoded character will not fit on a new line -> soft break here
+			encode_quoted_printable(More, <<Acc/binary, WordAcc/binary, $=, $\r, $\n, Enc/binary>>, EncLen, false, <<>>, 0);
+                false when C =:= $\s; C =:= $\t ->
+                        % WSP character fits on line -> move word and WSP to Acc (remember we have a WSP)
+                        encode_quoted_printable(More, <<Acc/binary, WordAcc/binary, Enc/binary>>, LineLen+WordLen+EncLen, true, <<>>, 0);
+                false ->
+                        % non-WSP character fits on line -> add character to word
+                        encode_quoted_printable(More, Acc, LineLen, HasWSP, <<WordAcc/binary, Enc/binary>>, WordLen+EncLen)
+        end.
 
-			% TODO - fix this to be less stupid
-			I = 3, % assume we're at most 3 over our cutoff
-			NewAcc = insert_soft_newline(Acc, I),
-			encode_quoted_printable(Body, NewAcc, I)
-	end;
-encode_quoted_printable(<<>>, Acc, _L) ->
-	list_to_binary(lists:reverse(Acc));
-encode_quoted_printable(<<$=, T/binary>> , Acc, L) ->
-	encode_quoted_printable(T, [$D, $3, $= | Acc], L+3);
-encode_quoted_printable(<<$\r, $\n, T/binary>> , Acc, _L) ->
-	encode_quoted_printable(T, [$\n, $\r | Acc], 0);
-encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $!, H =< $< ->
-	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $>, H =< $~ ->
-	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, _L) when H == $\s; H == $\t ->
-	[A, B] = lists:flatten(io_lib:format("~2.16.0B", [H])),
-	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
-encode_quoted_printable(<<H, T/binary>>, Acc, L) when H == $\s; H == $\t ->
-	encode_quoted_printable(T, [H | Acc], L+1);
-encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
-	[A, B] = lists:flatten(io_lib:format("~2.16.0B", [H])),
-	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
-
-insert_soft_newline([H | T], AfterPos) when AfterPos > 0 ->
-	[H | insert_soft_newline(T, AfterPos - 1)];
-insert_soft_newline(Str, 0) ->
-	[$\n, $\r, $= | Str].
+encode_quoted_printable_char(C, true) ->
+        <<$=, (hex(C div 16#10)), (hex(C rem 16#10))>>;
+encode_quoted_printable_char($\s, false) ->
+	<<$\s>>;
+encode_quoted_printable_char($\t, false) ->
+	<<$\t>>;
+encode_quoted_printable_char($=, _Force) ->
+        <<$=, $3, $D>>;
+encode_quoted_printable_char(C, _Force) when C =< 16#20; C >= 16#7F ->
+	encode_quoted_printable_char(C, true);
+encode_quoted_printable_char(C, false) ->
+        <<C>>.
 
 get_default_encoding() ->
 	<<"utf-8//IGNORE">>.
@@ -1863,61 +1871,93 @@ encode_quoted_printable_test_() ->
 	[
 		{"bleh",
 			fun() ->
-					?assertEqual(<<"!">>, encode_quoted_printable(<<"!">>, [], 0)),
-					?assertEqual(<<"!!">>, encode_quoted_printable(<<"!!">>, [], 0)),
-					?assertEqual(<<"=3D:=3D">>, encode_quoted_printable(<<"=:=">>, [], 0)),
-					?assertEqual(<<"Thequickbrownfoxjumpedoverthelazydog.">>,
-						encode_quoted_printable(<<"Thequickbrownfoxjumpedoverthelazydog.">>, [], 0))
+					?assertEqual([<<"!">>], encode_quoted_printable(<<"!">>)),
+					?assertEqual([<<"!!">>], encode_quoted_printable(<<"!!">>)),
+					?assertEqual([<<"=3D:=3D">>], encode_quoted_printable(<<"=:=">>)),
+					?assertEqual([<<"Thequickbrownfoxjumpedoverthelazydog.">>],
+						encode_quoted_printable(<<"Thequickbrownfoxjumpedoverthelazydog.">>))
 			end
 		},
 		{"input with spaces",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.">>,
-						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.">>, "", 0))
+					?assertEqual([<<"The quick brown fox jumped over the lazy dog.">>],
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.">>))
 			end
 		},
 		{"input with tabs",
 			fun() ->
-					?assertEqual(<<"The\tquick brown fox jumped over\tthe lazy dog.">>,
-						encode_quoted_printable(<<"The\tquick brown fox jumped over\tthe lazy dog.">>, "", 0))
+					?assertEqual([<<"The\tquick brown fox jumped over\tthe lazy dog.">>],
+						encode_quoted_printable(<<"The\tquick brown fox jumped over\tthe lazy dog.">>))
 			end
 		},
 		{"input with trailing spaces",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog.      =20\r\n">>,
-						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       \r\n">>, "", 0))
+					?assertEqual([<<"The quick brown fox jumped over the lazy dog.      =20\r\n">>],
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       \r\n">>)),
+					?assertEqual([<<"The quick brown fox jumped over the lazy dog.      =20">>],
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       ">>))
+			end
+		},
+		{"input with trailing tabs",
+			fun() ->
+					?assertEqual([<<"The quick brown fox jumped over the lazy dog.	=09\r\n">>],
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.		\r\n">>)),
+					?assertEqual([<<"The quick brown fox jumped over the lazy dog.	=09">>],
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.		">>))
 			end
 		},
 		{"input with non-ascii characters",
 			fun() ->
-					?assertEqual(<<"There's some n=F8n-=E1scii st=FCff in here\r\n">>,
-						encode_quoted_printable(<<"There's some n", 248, "n-", 225,"scii st", 252, "ff in here\r\n">>, "", 0))
+					?assertEqual([<<"There's some n=F8n-=E1scii st=FCff in here\r\n">>],
+						encode_quoted_printable(<<"There's some n", 248, "n-", 225,"scii st", 252, "ff in here\r\n">>))
 			end
 		},
 		{"input with invisible non-ascii characters",
 			fun() ->
-					?assertEqual(<<"There's some stuff=C2=A0in=C2=A0here\r\n">>,
-						encode_quoted_printable(<<"There's some stuff in here\r\n"/utf8>>, "", 0))
+					?assertEqual([<<"There's some stuff=C2=A0in=C2=A0here\r\n">>],
+						encode_quoted_printable(<<"There's some stuff in here\r\n"/utf8>>))
 			end
 		},
 		{"add soft newlines",
 			fun() ->
-					?assertEqual(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.">>,
-						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped over the lazy dog.">>, "", 0)),
-					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_ov=\r\ner_the_lazy_dog.">>,
-						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_over_the_lazy_dog.">>, "", 0)),
-					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=\r\n=3Dver_the_lazy_dog.">>,
-						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=ver_the_lazy_dog.">>, "", 0)),
-					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=\r\n=3Dover_the_lazy_dog.">>,
-						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.">>, "", 0)),
-					?assertEqual(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.">>,
-						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.">>, "", 0))
+					?assertEqual([<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped =\r\nover the lazy dog.">>],
+						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog. The quick brown fox jumped over the lazy dog.">>)),
+					?assertEqual([<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_ov=\r\ner_the_lazy_dog.">>],
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_over_the_lazy_dog.">>)),
+					?assertEqual([<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=\r\n=3Dver_the_lazy_dog.">>],
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o=ver_the_lazy_dog.">>)),
+					?assertEqual([<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=\r\n=3Dover_the_lazy_dog.">>],
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_=over_the_lazy_dog.">>)),
+					?assertEqual([<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o =\r\nver_the_lazy_dog.">>],
+						encode_quoted_printable(<<"The_quick_brown_fox_jumped_over_the_lazy_dog._The_quick_brown_fox_jumped_o ver_the_lazy_dog.">>))
 			end
 		},
-		{"newline craziness",
+		{"soft newline edge cases",
 			fun() ->
-					?assertEqual(<<"foo ba=\r\nr\r\nThe quick brown fox jumped over the lazy dog.      =20\r\n">>,
-						encode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       \r\n">>, "\n\rrab oof", 78))
+					?assertEqual([<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345=\r\n"
+							"=20">>],
+						encode_quoted_printable(<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345 ">>)),
+					?assertEqual([<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345=\r\n"
+							"=20\r\n">>],
+						encode_quoted_printable(<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345 \r\n">>)),
+					?assertEqual([<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345=\r\n"
+							"=09">>],
+						encode_quoted_printable(<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345	">>)),
+					?assertEqual([<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345=\r\n"
+							"=09\r\n">>],
+						encode_quoted_printable(<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345	\r\n">>)),
+					?assertEqual([<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 =\r\n"
+							"12345=3D">>],
+						encode_quoted_printable(<<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12345=">>)),
+					?assertEqual([<<" 23456789012345678901234567890123456789012345678901234567890123456789012345=\r\n"
+							"=20">>],
+						encode_quoted_printable(<<" 23456789012345678901234567890123456789012345678901234567890123456789012345 ">>)),
+					?assertEqual([<<" =\r\n"
+							"234567890123456789012345678901234567890123456789012345678901234567890123456">>],
+						encode_quoted_printable(<<" 234567890123456789012345678901234567890123456789012345678901234567890123456">>)),
+					?assertEqual([<<" 23456789012345678901234567890123456789012345678901234567890123456789012345=\r\n"
+							"=3D">>],
+						encode_quoted_printable(<<" 23456789012345678901234567890123456789012345678901234567890123456789012345=">>))
 			end
 		}
 	].
