@@ -680,7 +680,7 @@ handle_request({<<"STARTTLS">>, <<>>}, #state{socket = Socket, module = Module, 
 			{ok, [{active, false}]} = inet:getopts(Socket, [active]),
 			case ranch_ssl:handshake(Socket, [{packet, line}, {mode, list}, {ssl_imp, new} | TlsOpts2], 5000) of %XXX: see smtp_socket:?SSL_LISTEN_OPTIONS
 				{ok, NewSocket} ->
-					?log(debug, "SSL negotiation sucessful~n"),
+					?log(debug, "SSL negotiation successful~n"),
 					ranch_ssl:setopts(NewSocket, [{packet, line}, binary]),
 					{ok, State#state{socket = NewSocket, transport = ranch_ssl, envelope=undefined,
 							authdata=undefined, waitingauth=false, readmessage=false,

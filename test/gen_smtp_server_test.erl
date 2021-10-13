@@ -5,7 +5,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 invalid_lmtp_port_test_() ->
-	{"gen_smtp_server should prevent starting LMTP on port 25 (RFC2023, secion 5)",
+	{"gen_smtp_server should prevent starting LMTP on port 25 (RFC2023, section 5)",
 	 fun() ->
 		Options = [{port, 25}, {sessionoptions, [{protocol, lmtp}]}],
 		[?_assertMatch({error, invalid_lmtp_port},
