@@ -209,7 +209,7 @@ Session options are:
   when `STARTTLS` command is sent by the client. Only needed if `STARTTLS` extension
   is enabled
 * `{protocol, smtp | lmtp}` - when `lmtp` is passed, the control flow of the
-  [Local Mail Tranfer Protocol](https://tools.ietf.org/html/rfc2033) is applied.
+  [Local Mail Transfer Protocol](https://tools.ietf.org/html/rfc2033) is applied.
   LMTP is derived from SMTP with just a few variations and is used by standard
   [Mail Transfer Agents (MTA)](https://en.wikipedia.org/wiki/Message_transfer_agent), like Postfix, Exim and OpenSMTPD to
   send incoming email to local mail-handling applications that usually don't have a delivery queue.

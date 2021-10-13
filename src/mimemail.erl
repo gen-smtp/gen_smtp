@@ -273,7 +273,7 @@ decode_header_tokens_permissive([{Enc, Data} | Tokens], Charset, [{Enc, PrevData
 	decode_header_tokens_permissive(Tokens, Charset, [S | Stack]);
 decode_header_tokens_permissive([NextToken | _] = Tokens, Charset, [{_, _} | Stack])
   when is_binary(NextToken) orelse is_tuple(NextToken) ->
-	%% practicaly very rare case "=?utf-8?Q?BROKEN?=\r\n\t=?windows-1251?Q?maybe-broken?="
+	%% practically very rare case "=?utf-8?Q?BROKEN?=\r\n\t=?windows-1251?Q?maybe-broken?="
 	%% or "=?utf-8?Q?BROKEN?= raw-ascii-string"
 	%% drop broken value from stack
 	decode_header_tokens_permissive(Tokens, Charset, Stack);
@@ -439,7 +439,7 @@ split_body_by_boundary(Body, Boundary, MimeVsn, Options) ->
 			erlang:error(missing_last_boundary);
 		[Start, End] ->
 			NewBody = binstr:substr(Body, Start + byte_size(Boundary), End - Start),
-			% from now on, we can be sure that each boundary is preceeded by a CRLF
+			% from now on, we can be sure that each boundary is preceded by a CRLF
 			Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), [], Options),
 			[decode_component(Headers, Body2, MimeVsn, Options) || {Headers, Body2} <- [V || {_, Body3} = V <- Parts, byte_size(Body3) =/= 0]]
 		end.
@@ -766,7 +766,7 @@ choose_transformation(Body) ->
 
 %% https://tools.ietf.org/html/rfc2045#section-2.7:
 %% * ASCII codes from 1 to 127
-%% * \r and \n are ony allowed as `\r\n' pair, but not standalone (bare)
+%% * \r and \n are only allowed as `\r\n' pair, but not standalone (bare)
 %% * No lines over 998 chars
 %%
 %% Unfortunately, any string that ends with `\n` matches the regexp, so, we need some pre-checks
@@ -1041,7 +1041,7 @@ rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andal
 rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 0 andalso C =< 192 ->
     rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), encode_byte(C));
 %% First byte of UTF-8 sequence
-%% ensure that encoded 2-4 byte UTF-8 characters keept in one line
+%% ensure that encoded 2-4 byte UTF-8 characters kept in one line
 rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 192 andalso C =< 247 ->
     UTFBytes = utf_char_bytes(C),
     {Rest, ExtraUTFBytes} = encode_extra_utf_bytes(UTFBytes-1, T),
@@ -1081,7 +1081,7 @@ encode_extra_utf_bytes(Bytes, [C|T], AccOut) when C >= 128 andalso C =< 191 ->
 %% {relaxed, simple} supported for now.
 %% be located in "foo.bar._domainkey.example.com" (see RFC-6376 #3.6.2.1).
 %% `t' - signature timestamp: 'now' or UTC {Date, Time}
-%% `x' - signatue expiration time: UTC {Date, Time}
+%% `x' - signature expiration time: UTC {Date, Time}
 %% `a` - signing algorithm (default: `rsa-sha256`):
 %% `private_key' - private key, to sign emails. May be of 2 types: encrypted and
 %% plain in PEM format:
@@ -1996,7 +1996,7 @@ rfc2047_decode_test_() ->
 					?assertEqual(<<"André Pirard <PIRARD@vm1.ulg.ac.be>"/utf8>>, decode_header(<<"=?ISO-8859-1?Q?Andr=E9?= Pirard <PIRARD@vm1.ulg.ac.be>">>, "utf-8"))
 			end
 		},
-		{"encoded words seperated by whitespace should have whitespace removed",
+		{"encoded words separated by whitespace should have whitespace removed",
 			fun() ->
 					?assertEqual(<<"If you can read this you understand the example.">>, decode_header(<<"=?ISO-8859-1?B?SWYgeW91IGNhbiByZWFkIHRoaXMgeW8=?= =?ISO-8859-2?B?dSB1bmRlcnN0YW5kIHRoZSBleGFtcGxlLg==?=">>, "utf-8")),
 					?assertEqual(<<"ab">>, decode_header(<<"=?ISO-8859-1?Q?a?= =?ISO-8859-1?Q?b?=">>, "utf-8")),
@@ -2212,7 +2212,7 @@ encoding_test_() ->
 					?assertEqual(<<"<abcd@example.com>">>, proplists:get_value(<<"References">>, element(3, Result)))
 			end
 		},
-		{"Reference header should be appended to in presence of In-Reply-To, if appropiate",
+		{"Reference header should be appended to in presence of In-Reply-To, if appropriate",
 			fun() ->
 					Email = {<<"text">>, <<"plain">>, [
 							{<<"From">>, <<"me@example.com">>},
