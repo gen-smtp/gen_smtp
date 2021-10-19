@@ -115,8 +115,6 @@ rfc822_addresses_roundtrip_test() ->
 
 rfc2047_utf8_encode_test() ->
     UnicodeString = unicode:characters_to_binary("€ € € € € 1234 € € € € 123 € € € € € 1234€"),
-    Encoded = "=?UTF-8?Q?=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123?=\r\n"
-            ++ " =?UTF-8?Q?4=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123=20?=\r\n"
-            ++ " =?UTF-8?Q?=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20=E2=82=AC=20123?=\r\n"
-            ++ " =?UTF-8?Q?4=E2=82=AC?=",
+    Encoded = << "=?UTF-8?B?4oKsIOKCrCDigqwg4oKsIOKCrCAxMjM0IOKCrCDigqwg4oKsIOKCrCAxMjMg?=\r\n"
+		" =?UTF-8?B?4oKsIOKCrCDigqwg4oKsIOKCrCAxMjM04oKs?=">>,
     ?assertEqual(Encoded, mimemail:rfc2047_utf8_encode(UnicodeString)).
