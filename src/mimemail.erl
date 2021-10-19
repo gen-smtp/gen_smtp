@@ -227,9 +227,9 @@ tokenize_header(Value, Acc) ->
 				case Type of
 					<<"q">> ->
 						%% RFC 2047 #5. (3)
-						decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]));
+						decode_quoted_printable(binary:replace(Data, <<"_">>, <<"=20">>, [global]));
 					<<"b">> ->
-						decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
+						decode_base64(binary:replace(Data, <<"_">>, <<" ">>, [global]))
 				end,
 
 
@@ -749,14 +749,16 @@ choose_transformation(<<Chunk:200/binary, _, _/binary>>) ->
 	%% Optimization - only analyze 1st 200 bytes
 	choose_transformation(Chunk);
 choose_transformation(Body) ->
-	Size = byte_size(Body),
-	% get only the allowed ascii characters
-	% TODO - this might not be the complete list
-	FilteredSize = byte_size(<< <<X>> || <<X>> <= Body, ((X > 31 andalso X < 127) orelse X == $\r orelse X == $\n)>>),
+	{Readable, Encoded} = partition_count_bytes(
+		fun (C) ->
+			C >= 16#20 andalso C =< 16#7E orelse C =:= $\r orelse C =:= $\n
+		end,
+		Body
+	),
 
 	%based on the % of printable characters, choose an encoding
 	if
-		100 * FilteredSize > 80 * Size -> % same as 80 > 100 * FilteredSize / Size, but avoiding division
+		Readable >= 4 * Encoded -> % same as 100 * Readable / (Readable + Encoded) >= 80, but avoiding division
 			%% >80% printable characters
 			<<"quoted-printable">>;
 		true ->
@@ -1010,68 +1012,131 @@ fix_encoding(Encoding) ->
 	Encoding.
 
 
+% Characters allowed to appear unencoded (RFC 2047 Sections 4.2 and 5):
+%   * lowercase ASCII letters
+%   * uppercase ASCII letters
+%   * decimal digits
+%   * "!"
+%   * "*"
+%   * "+"
+%   * "-"
+%   * "/"
+% SPACE is not really an allowed letter, but since it encodes to "_"
+% and thereby a single byte, we list it as allowed here
+-define(is_rfc2047_q_allowed(C),       (C=:=$\s orelse (C>=$a andalso C=<$z) orelse (C>=$A andalso C=<$Z)
+				orelse (C>=$0 andalso C=<$9) orelse C=:=$! orelse C=:=$* orelse C=:=$+
+				orelse C=:=$- orelse C=:=$/)).
+
 %% @doc Encode a binary or list according to RFC 2047. Input is
 %% assumed to be in UTF-8 encoding bytes; not codepoints.
-rfc2047_utf8_encode(undefined) -> undefined;
-rfc2047_utf8_encode(B) when is_binary(B) ->
-	rfc2047_utf8_encode(binary_to_list(B));
-rfc2047_utf8_encode([]) ->
-	[];
-rfc2047_utf8_encode(Text) ->
-    %% Don't escape when all characters are ASCII printable
-    case is_ascii_printable(Text) of
-        'true' -> Text;
-        'false' -> rfc2047_utf8_encode(Text, lists:reverse("=?UTF-8?Q?"), 10, [])
-    end.
+rfc2047_utf8_encode(Value) when is_binary(Value) ->
+	case is_ascii_printable(Value) of
+		true ->
+			% don't encode if all characters are printable ASCII
+			Value;
+		false ->
+			{Readable, Encoded}=partition_count_bytes(fun(C) -> ?is_rfc2047_q_allowed(C) end, Value),
+			Enc = if
+				Readable >= Encoded ->
+					% most characters would be readable in Q-Encoding,
+					% so we use it
+					q;
+				true ->
+					% most characters would have to be encoded in Q-Encoding,
+					% so we use B-Encoding instead
+					b
+			end,
+			rfc2047_utf8_encode(Enc, Value, <<>>)
+	end;
+rfc2047_utf8_encode(Value) ->
+	rfc2047_utf8_encode(list_to_binary(Value)).
 
-rfc2047_utf8_encode(T, Acc, WordLen, Char) when WordLen + length(Char) > 73 ->
-    CloseLine = lists:reverse("?=\r\n "),
-    NewLine = Char ++ lists:reverse("=?UTF-8?Q?"),
-    %% Make sure that the individual encoded words are not longer than 76 chars (including charset etc)
-    rfc2047_utf8_encode(T, NewLine ++ CloseLine ++ Acc, length(NewLine), []);
+rfc2047_utf8_encode(_Enc, <<>>, Acc) ->
+	Acc;
+rfc2047_utf8_encode(b, More, Acc) ->
+	% B-Encoding
+	% An encoded word must not be longer than 75 bytes,
+	% including the leading "=?", charset name, "?B?" and
+	% the trailing "?=". Since the charset name is fixed to
+	% "UTF-8", 63 remain for encoded text. Using Base64,
+	% a maximum of 45 raw bytes can be encoded in 63 bytes.
+	rfc2047_utf8_encode(b, More, Acc, <<>>, 45);
+rfc2047_utf8_encode(q, More, Acc) ->
+	% Q-Encoding
+	% An encoded word must not be longer than 75 bytes,
+	% including the leading "=?", charset name, "?B?" and
+	% the trailing "?=". Since the charset name is fixed to
+	% "UTF-8", 63 remain for encoded text. Using Quoted-Printable,
+	% between 21 and 63 raw bytes can be encoded in 63 bytes.
+	rfc2047_utf8_encode(q, More, Acc, <<>>, 63).
 
-rfc2047_utf8_encode([], Acc, _WordLen, Char) ->
-    lists:reverse("=?" ++ Char ++ Acc);
+rfc2047_utf8_encode(Enc, <<>>, Acc, WordAcc, _Left) ->
+	rfc2047_append_word(Acc, WordAcc, Enc);
+rfc2047_utf8_encode(Enc, All = <<C/utf8, More/binary>>, Acc, WordAcc, Left) ->
+	% convert codepoint back to UTF-8 encoded bytes
+	Bytes = <<C/utf8>>,
+	Size = byte_size(Bytes),
+	Reqd = case Enc of
+		q when not ?is_rfc2047_q_allowed(C) ->
+			3*Size;
+		q ->
+			Size;
+		b ->
+			Size
+	end,
+	case Left >= Reqd of
+		true ->
+			rfc2047_utf8_encode(Enc, More, Acc, <<WordAcc/binary, Bytes/binary>>, Left-Reqd);
+		false ->
+			rfc2047_utf8_encode(Enc, All, rfc2047_append_word(Acc, WordAcc, Enc))
+	end.
 
-%% Printable ASCII characters dont encode except space, ?, _, = and .
-rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 32 andalso C < 127 andalso C /= 32
-    andalso C /= $? andalso C /= $_ andalso C /= $= andalso C /= $. ->
-    rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), [C]);
-%% Encode all other ASCII
-rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 0 andalso C =< 192 ->
-    rfc2047_utf8_encode(T, Char ++ Acc, WordLen+length(Char), encode_byte(C));
-%% First byte of UTF-8 sequence
-%% ensure that encoded 2-4 byte UTF-8 characters kept in one line
-rfc2047_utf8_encode([C|T], Acc, WordLen, Char) when C > 192 andalso C =< 247 ->
-    UTFBytes = utf_char_bytes(C),
-    {Rest, ExtraUTFBytes} = encode_extra_utf_bytes(UTFBytes-1, T),
-    rfc2047_utf8_encode(Rest, Char ++ Acc, WordLen+length(Char), ExtraUTFBytes ++ encode_byte(C)).
+rfc2047_append_word(Acc, <<>>, _Enc) ->
+	% empty word
+	Acc;
+rfc2047_append_word(<<>>, Word, Enc) ->
+	% first word in Acc
+	rfc2047_encode_word(Word, Enc);
+rfc2047_append_word(Acc, Word, Enc) ->
+	% subsequent word in Acc
+	<<Acc/binary, $\r, $\n, $\s, (rfc2047_encode_word(Word, Enc))/binary>>.
 
-is_ascii_printable([]) -> 'true';
-is_ascii_printable([H|T]) when H >= 32 andalso H =< 126 ->
+rfc2047_encode_word(Word, q) ->
+	<<"=?UTF-8?Q?", (rfc2047_q_encode(Word))/binary, "?=">>;
+rfc2047_encode_word(Word, b) ->
+	<<"=?UTF-8?B?", (base64:encode(Word))/binary, "?=">>.
+
+rfc2047_q_encode(<<>>) ->
+	<<>>;
+rfc2047_q_encode(<<$\s, More/binary>>) ->
+	% SPACE -> _
+	<<$_, (rfc2047_q_encode(More))/binary>>;
+rfc2047_q_encode(<<C, More/binary>>) when ?is_rfc2047_q_allowed(C) ->
+	% character which needs no encoding
+	<<C, (rfc2047_q_encode(More))/binary>>;
+rfc2047_q_encode(<<N1:4, N2:4, More/binary>>) ->
+	% characters which need encoding -> =XY
+	<<$=, (hex(N1)), (hex(N2)), (rfc2047_q_encode(More))/binary>>.
+
+is_ascii_printable(<<>>) -> 'true';
+is_ascii_printable(<<H, T/binary>>) when H >= 32 andalso H =< 126 ->
     is_ascii_printable(T);
 is_ascii_printable(_) -> 'false'.
 
-encode_byte(C) -> [ hex(C rem 16), hex(C div 16), $= ].
 hex(N) when N >= 10 -> N + $A - 10;
 hex(N) -> N + $0.
 
-%% https://en.wikipedia.org/wiki/UTF-8#Description
-%% 240 - 247
-utf_char_bytes(C) when C >= 2#11110000 andalso C =< 2#11110111 -> 4;
-%% 224 - 239
-utf_char_bytes(C) when C >= 2#11100000 andalso C =< 2#11101111 -> 3;
-%% 192 - 223
-utf_char_bytes(C) when C >= 2#11000000 andalso C =< 2#11011111 -> 2;
-%% 0 - 127 (ASCII)
-utf_char_bytes(C) when C >= 2#00000000 andalso C =< 2#01111111 -> 1.
+partition_count_bytes(Fun, Bin) ->
+	partition_count_bytes(Fun, Bin, {0, 0}).
 
-encode_extra_utf_bytes(0, AccIn) -> {AccIn, []};
-encode_extra_utf_bytes(Bytes, AccIn) -> encode_extra_utf_bytes(Bytes, AccIn, []).
-
-encode_extra_utf_bytes(0, AccIn, AccOut) -> {AccIn, AccOut};
-encode_extra_utf_bytes(Bytes, [C|T], AccOut) when C >= 128 andalso C =< 191 ->
-    encode_extra_utf_bytes(Bytes-1, T, encode_byte(C) ++ AccOut).
+partition_count_bytes(_Fun, <<>>, PartitionCounts) ->
+	PartitionCounts;
+partition_count_bytes(Fun, <<C, More/binary>>, {Trues, Falses}) ->
+	NewPartitionCounts = case Fun(C) of
+		true -> {Trues+1, Falses};
+		false -> {Trues, Falses+1}
+	end,
+	partition_count_bytes(Fun, More, NewPartitionCounts).
 
 %% @doc DKIM sign an email
 %% DKIM sign functions
@@ -2033,7 +2098,49 @@ rfc2047_decode_test_() ->
 		{"decode something I encoded myself",
 			fun() ->
 				A = <<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>"/utf8>>,
-				?assertEqual(A, decode_header(list_to_binary(rfc2047_utf8_encode(A)), "utf-8"))
+				?assertEqual(A, decode_header(rfc2047_utf8_encode(A), "utf-8"))
+			end
+		}
+	].
+
+rfc2047_utf8_encode_test_() ->
+	[
+		{"Q-Encoding",
+			fun() ->
+				?assertEqual(<<"=?UTF-8?Q?abcdefghijklmnopqrstuvwxyz?=">>, rfc2047_utf8_encode(q, <<"abcdefghijklmnopqrstuvwxyz">>, <<>>)),
+				?assertEqual(<<"=?UTF-8?Q?ABCDEFGHIJKLMNOPQRSTUVWXYZ?=">>, rfc2047_utf8_encode(q, <<"ABCDEFGHIJKLMNOPQRSTUVWXYZ">>, <<>>)),
+				?assertEqual(<<"=?UTF-8?Q?0123456789?=">>, rfc2047_utf8_encode(q, <<"0123456789">>, <<>>)),
+				?assertEqual(<<"=?UTF-8?Q?!*+-/?=">>, rfc2047_utf8_encode(q, <<"!*+-/">>, <<>>)),
+				?assertEqual(<< "=?UTF-8?Q?This_text_encodes_to_more_than_63_bytes=2E_Therefore=2C_it_shou?=\r\n"
+					       " =?UTF-8?Q?ld_be_encoded_in_multiple_encoded_words=2E?=">>,
+					     rfc2047_utf8_encode(q, <<"This text encodes to more than 63 bytes. Therefore, it should be encoded in multiple encoded words.">>, <<>>)),
+				?assertEqual(<< "=?UTF-8?Q?We_place_an_UTF8_4byte_character_over_the_breaking_point_here_?=\r\n"
+					       " =?UTF-8?Q?=F0=9F=80=84?=">>,
+					     rfc2047_utf8_encode(q, <<"We place an UTF8 4byte character over the breaking point here ", 16#F0, 16#9F, 16#80, 16#84>>, <<>>))
+			end
+		},
+		{"B-Encoding",
+			fun() ->
+				?assertEqual(<<"=?UTF-8?B?U29tZSBzaG9ydCB0ZXh0Lg==?=">>,
+					     rfc2047_utf8_encode(b, <<"Some short text.">>, <<>>)),
+				?assertEqual(<< "=?UTF-8?B?VGhpcyB0ZXh0IGVuY29kZXMgdG8gbW9yZSB0aGFuIDYzIGJ5dGVzLiBUaGVy?=\r\n"
+					       " =?UTF-8?B?ZWZvcmUsIGl0IHNob3VsZCBiZSBlbmNvZGVkIGluIG11bHRpcGxlIGVuY29k?=\r\n"
+					       " =?UTF-8?B?ZWQgd29yZHMu?=">>,
+					     rfc2047_utf8_encode(b, <<"This text encodes to more than 63 bytes. Therefore, it should be encoded in multiple encoded words.">>, <<>>)),
+				?assertEqual(<< "=?UTF-8?B?AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKiss?=\r\n"
+					       " =?UTF-8?B?LS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZ?=\r\n"
+					       " =?UTF-8?B?WltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8=?=">>,
+					     rfc2047_utf8_encode(b, << <<X>> || X <- lists:seq(0, 16#7F) >>, <<>>)),
+				?assertEqual(<< "=?UTF-8?B?UGxhY2UgYW4gVVRGOCA0Ynl0ZSBjaGFyYWN0ZXIgYXQgdGhlIGJyZWFr?=\r\n"
+					       " =?UTF-8?B?8J+AhA==?=">>,
+					     rfc2047_utf8_encode(b, <<"Place an UTF8 4byte character at the break", 16#F0, 16#9F, 16#80, 16#84>>, <<>>))
+			end
+		},
+		{"Pick encoding",
+			fun() ->
+				?assertEqual(<<"asdf">>, rfc2047_utf8_encode(<<"asdf">>)),
+				?assertEqual(<<"=?UTF-8?Q?x=09?=">>, rfc2047_utf8_encode(<<"x\t">>)),
+				?assertEqual(<<"=?UTF-8?B?CXgJ?=">>, rfc2047_utf8_encode(<<"\tx\t">>))
 			end
 		}
 	].
@@ -2074,7 +2181,7 @@ encoding_test_() ->
                               [{<<"charset">>,<<"US-ASCII">>}],
                           disposition => <<"inline">>},
 						<<"This is a plain message">>},
-					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik=20H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik_H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik_H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
 			end
 		},
