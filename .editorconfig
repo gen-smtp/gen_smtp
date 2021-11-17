@@ -11,7 +11,7 @@ trim_trailing_whitespace = true
 [*.{config, src}]
 indent_style = space
 
-[*.{md}]
+[*.md]
 indent_style = space
 trim_trailing_whitespace = false
 
