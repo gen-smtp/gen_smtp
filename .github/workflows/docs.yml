@@ -22,7 +22,7 @@ jobs:
         elixir: ["1.12"] # https://github.com/elixir-lang/elixir/releases
 
     env:
-      ex_doc_version: "0.25.5" # https://hex.pm/packages/ex_doc
+      ex_doc_version: "0.26.0" # https://hex.pm/packages/ex_doc
 
     steps:
       - uses: actions/checkout@v2
