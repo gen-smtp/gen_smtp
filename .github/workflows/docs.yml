@@ -19,10 +19,6 @@ jobs:
         os: [ubuntu-latest]
         otp: ["24"] # https://www.erlang.org/downloads
         rebar3: ["3.17.0"] # https://www.rebar3.org
-        elixir: ["1.12"] # https://github.com/elixir-lang/elixir/releases
-
-    env:
-      ex_doc_version: "0.26.0" # https://hex.pm/packages/ex_doc
 
     steps:
       - uses: actions/checkout@v2
@@ -31,7 +27,6 @@ jobs:
         with:
           otp-version: ${{ matrix.otp }}
           rebar3-version: ${{ matrix.rebar3 }}
-          elixir-version: ${{ matrix.elixir }}
 
       - name: Cache Hex packages
         uses: actions/cache@v2
@@ -40,11 +35,8 @@ jobs:
           key: ${{ runner.os }}-hex-${{ hashFiles('**/rebar.lock') }}
           restore-keys: ${{ runner.os }}-hex-
 
-      - name: Install ExDoc
-        run: mix escript.install hex ex_doc ${{ env.ex_doc_version }} --force
-
       - name: Generate docs by ExDoc
-        run: sh docs.sh
+        run: rebar3 ex_doc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v2
