@@ -85,7 +85,8 @@
 -type mime_subtype() :: binary().               % `<<"plain">>'
 -type headers() :: [{binary(), binary()}].      % `[{<<"Content-Type">>, <<"text/plain">>}]'
 -type parameters() ::
-        #{transfer_encoding => binary(),
+        #{%% <<"7bit">> | <<"base64">> | <<"quoted-printable">> etc
+		  transfer_encoding => binary(),
           %% [{<<"charset">>, <<"utf-8">>} | {<<"boundary">>, binary()} | {<<"name">>, binary()} etc...]
           content_type_params => [{binary(), binary()}],
           %% <<"inline">> | <<"attachment">> etc...
@@ -143,9 +144,19 @@ decode(OrigHeaders, Body, Options) ->
 					decode_component(Headers, Body, MimeVersion, Options);
 				{<<"multipart">>, _SubType, _Parameters} ->
 					erlang:error(non_mime_multipart);
-				{Type, SubType, Parameters} ->
+				{Type, SubType, CTParameters} ->
 					NewBody = decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
-						Body, proplists:get_value(<<"charset">>, Parameters), Encoding),
+						Body, proplists:get_value(<<"charset">>, CTParameters), Encoding),
+					{Disposition, DispositionParams} =
+						case parse_content_disposition(get_header_value(<<"Content-Disposition">>, Headers)) of
+							undefined ->
+								{<<"inline">>, []};
+							Disp ->
+								Disp
+						end,
+					Parameters = #{content_type_params => CTParameters,
+								   disposition => Disposition,
+								   disposition_params => DispositionParams},
 					{Type, SubType, Headers, Parameters, NewBody};
 				undefined ->
 					Parameters = #{content_type_params =>  [{<<"charset">>, <<"us-ascii">>}],
