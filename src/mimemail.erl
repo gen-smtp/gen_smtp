@@ -337,15 +337,16 @@ decode_component(_Headers, _Body, Other, _Options) ->
 %% @doc Do a case-insensitive header lookup to return that header's value, or the specified default.
 get_header_value(Needle, Headers, Default) ->
 	?log(debug, "Headers: ~p~n", [Headers]),
+	NeedleLower = binstr:to_lower(Needle),
 	F =
 	fun({Header, _Value}) ->
-			binstr:to_lower(Header) =:= binstr:to_lower(Needle)
+			binstr:to_lower(Header) =:= NeedleLower
 	end,
-	case lists:filter(F, Headers) of
+	case lists:search(F, Headers) of
 		% TODO if there's duplicate headers, should we use the first or the last?
-		[{_Header, Value}|_T] ->
+		{value, {_Header, Value}} ->
 			Value;
-		_ ->
+		false ->
 			Default
 	end.
 
