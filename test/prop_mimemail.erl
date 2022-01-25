@@ -11,6 +11,7 @@
 	prop_multipart_encode_no_crash/1,
 	prop_plaintext_encode_decode_match/1,
 	prop_multipart_encode_decode_match/1,
+	prop_encode_decode_no_mime_version_match/1,
 	prop_quoted_printable/1,
 	prop_smtp_compatible/1
 ]).
@@ -74,10 +75,55 @@ prop_multipart_encode_decode_match() ->
 	   end
     ).
 
-match({TypeA, SubTypeA, HeadersA, _ParamsA, BodyA},
-	  {TypeB, SubTypeB, HeadersB, _ParamsB, BodyB}) ->
+prop_encode_decode_no_mime_version_match(doc) ->
+	"Make sure decoder is able to recover from situation when 'mime-version' header is missing".
+
+prop_encode_decode_no_mime_version_match() ->
+    ?FORALL(
+       Mail,
+       proper_types:oneof([gen_plaintext_mail(), gen_multipart_mail()]),
+	   begin
+		   Encoded = mimemail:encode(Mail),
+		   Recoded = mimemail:decode(strip_mime_version(Encoded),
+									 [{allow_missing_version, true},
+									  {encoding, <<"utf-8">>}]),
+		   ?WHENFAIL(
+			  io:format("Orig:~n~p~nEncoded:~n~p~nRecoded:~n~p~n",
+						[Mail, Encoded, Recoded]),
+			  match(Mail, Recoded))
+	   end
+    ).
+
+
+match({TypeA, SubTypeA, HeadersA, ParamsA, BodyA},
+	  {TypeB, SubTypeB, HeadersB, ParamsB, BodyB}) ->
 	?assertEqual(TypeA, TypeB),
 	?assertEqual(SubTypeA, SubTypeB),
+	?assert(is_map(ParamsA)),
+	?assert(is_map(ParamsB)),
+	maps:fold(fun(transfer_encoding, _, _) ->
+					  [];						%never added during decoding
+				 (disposition, _, _) when not is_binary(BodyA);
+										  BodyA =:= <<>> ->
+					  [];
+				 (disposition = K, V, _) when is_binary(BodyA) ->
+					  %% disposition only applied for non-empty bodies
+					  case re:replace(BodyA, "\s+", "", [global, {return, binary}]) of
+						  <<>> -> [];
+						  _ ->
+							  ?assertEqual(V, maps:get(K, ParamsB))
+					  end;
+				 (K, KVA, _) when K =:= content_type_params;
+								 K =:= disposition_params ->
+					  %% assert all Content-Type/Disposition from original mime do present in
+					  %% recoded mime; keys should be lowercased
+					  KVB = maps:get(K, ParamsB),
+					  lists:foreach(fun({PKA, PVA}) ->
+											?assert(lists:member({binstr:to_lower(PKA), PVA}, KVB))
+									end, KVA);
+				 (K, V, _) ->
+					  ?assertEqual(V, maps:get(K, ParamsB))
+			  end, [], ParamsA),
 	%% XXX: we have to strip values of the body and headers, because it seems some types of
 	%% encoding do remove some of whitespaces from payload. Not sure if it's ok...
 	lists:foreach(
@@ -168,6 +214,10 @@ has_lines_over(Mime, Limit) ->
 					  byte_size(Line) > Limit
 			  end, binary:split(Mime, <<"\r\n">>, [global])).
 
+strip_mime_version(MimeBin) ->
+	binary:replace(MimeBin, <<"MIME-Version: 1.0\r\n">>, <<>>).
+	%% re:replace(MimeBin, "mime-version: 1\\.0\\s*", "", [caseless, {return, binary}]).
+
 %%
 %% Generators
 %%
@@ -177,7 +227,7 @@ gen_multipart_mail() ->
 	{<<"multipart">>,
 	 proper_types:oneof([<<"mixed">>, <<"alternative">>]),
 	 gen_top_headers(),
-	 gen_props(),
+	 gen_props(outer),
 	 %% Resizing to not create too many sub-bodies, because it's slow
 	 ?SIZED(Size,
 			proper_types:resize(
@@ -193,14 +243,14 @@ gen_multipart_mail() ->
 gen_plaintext_mail() ->
     {<<"text">>, <<"plain">>,
      gen_top_headers(),
-     gen_props(),
+     gen_props(outer),
      proper_types:oneof([gen_body(), gen_nonempty_body()])}.
 
 %% Plaintext mimemail(), that is safe to use inside multipart mails
 gen_embedded_plaintext_mail() ->
 	{<<"text">>, <<"plain">>,
      gen_headers(),
-     gen_props(),
+     gen_props(embedded),
      gen_nonempty_body()}.
 
 %% Pseudo-HTML mimemail(), that is safe to use inside multipart mails
@@ -253,13 +303,17 @@ gen_any_header() ->
 		printable_ascii()])}.
 
 %% #{atom() => any()}
-gen_props() ->
+gen_props(Location) ->
+	Disposition = case Location of
+					  outer -> [];
+					  embedded -> [{disposition, proper_types:oneof([<<"inline">>, <<"attachment">>])}]
+				  end,
     ?LET(KV,
 		 proper_types:list(
 		   proper_types:oneof(
+			 Disposition ++
 			 [
 			  {content_type_params, [{<<"charset">>, <<"utf-8">>}]},
-			  {disposition, proper_types:oneof([<<"inline">>, <<"attachment">>])},
 			  {transfer_encoding, proper_types:oneof([<<"base64">>, <<"quoted-printable">>])}
 			 ]
 			)

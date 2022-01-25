@@ -85,7 +85,8 @@
 -type mime_subtype() :: binary().               % `<<"plain">>'
 -type headers() :: [{binary(), binary()}].      % `[{<<"Content-Type">>, <<"text/plain">>}]'
 -type parameters() ::
-        #{transfer_encoding => binary(),
+        #{%% <<"7bit">> | <<"base64">> | <<"quoted-printable">> etc
+		  transfer_encoding => binary(),
           %% [{<<"charset">>, <<"utf-8">>} | {<<"boundary">>, binary()} | {<<"name">>, binary()} etc...]
           content_type_params => [{binary(), binary()}],
           %% <<"inline">> | <<"attachment">> etc...
@@ -143,9 +144,19 @@ decode(OrigHeaders, Body, Options) ->
 					decode_component(Headers, Body, MimeVersion, Options);
 				{<<"multipart">>, _SubType, _Parameters} ->
 					erlang:error(non_mime_multipart);
-				{Type, SubType, Parameters} ->
+				{Type, SubType, CTParameters} ->
 					NewBody = decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
-						Body, proplists:get_value(<<"charset">>, Parameters), Encoding),
+						Body, proplists:get_value(<<"charset">>, CTParameters), Encoding),
+					{Disposition, DispositionParams} =
+						case parse_content_disposition(get_header_value(<<"Content-Disposition">>, Headers)) of
+							undefined ->
+								{<<"inline">>, []};
+							Disp ->
+								Disp
+						end,
+					Parameters = #{content_type_params => CTParameters,
+								   disposition => Disposition,
+								   disposition_params => DispositionParams},
 					{Type, SubType, Headers, Parameters, NewBody};
 				undefined ->
 					Parameters = #{content_type_params =>  [{<<"charset">>, <<"us-ascii">>}],
@@ -337,15 +348,16 @@ decode_component(_Headers, _Body, Other, _Options) ->
 %% @doc Do a case-insensitive header lookup to return that header's value, or the specified default.
 get_header_value(Needle, Headers, Default) ->
 	?log(debug, "Headers: ~p~n", [Headers]),
+	NeedleLower = binstr:to_lower(Needle),
 	F =
 	fun({Header, _Value}) ->
-			binstr:to_lower(Header) =:= binstr:to_lower(Needle)
+			binstr:to_lower(Header) =:= NeedleLower
 	end,
-	case lists:filter(F, Headers) of
+	case lists:search(F, Headers) of
 		% TODO if there's duplicate headers, should we use the first or the last?
-		[{_Header, Value}|_T] ->
+		{value, {_Header, Value}} ->
 			Value;
-		_ ->
+		false ->
 			Default
 	end.
 
