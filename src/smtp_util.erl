@@ -24,120 +24,163 @@
 
 -module(smtp_util).
 -export([
-		mxlookup/1, guess_FQDN/0, compute_cram_digest/2, get_cram_string/1,
-		trim_crlf/1, rfc5322_timestamp/0, zone/0, generate_message_id/0,
-         parse_rfc822_addresses/1,
-         parse_rfc5322_addresses/1,
-         combine_rfc822_addresses/1,
-         generate_message_boundary/0]).
+    mxlookup/1,
+    guess_FQDN/0,
+    compute_cram_digest/2,
+    get_cram_string/1,
+    trim_crlf/1,
+    rfc5322_timestamp/0,
+    zone/0,
+    generate_message_id/0,
+    parse_rfc822_addresses/1,
+    parse_rfc5322_addresses/1,
+    combine_rfc822_addresses/1,
+    generate_message_boundary/0
+]).
 
 -include_lib("kernel/include/inet.hrl").
 
 -type name_address() :: {Name :: string() | undefined, Address :: string()}.
 
--deprecated([{parse_rfc822_addresses, 1}]). % Use parse_rfc5322_addresses/1 instead
+% Use parse_rfc5322_addresses/1 instead
+-deprecated([{parse_rfc822_addresses, 1}]).
 
 %% @doc returns a sorted list of mx servers for `Domain', lowest distance first
 mxlookup(Domain) ->
-	case whereis(inet_db) of
-		P when is_pid(P) ->
-			ok;
-		_ ->
-			inet_db:start()
-	end,
-	case lists:keyfind(nameserver, 1, inet_db:get_rc()) of
-		false ->
-			% we got no nameservers configured, suck in resolv.conf
-			inet_config:do_load_resolv(os:type(), longnames);
-		_ ->
-			ok
-	end,
-	case inet_res:lookup(Domain, in, mx) of
-		[] ->
-			lists:map(fun(X) -> {10, inet_parse:ntoa(X)} end, inet_res:lookup(Domain, in, a));
-		Result ->
-			lists:sort(Result)
-	end.
+    case whereis(inet_db) of
+        P when is_pid(P) ->
+            ok;
+        _ ->
+            inet_db:start()
+    end,
+    case lists:keyfind(nameserver, 1, inet_db:get_rc()) of
+        false ->
+            % we got no nameservers configured, suck in resolv.conf
+            inet_config:do_load_resolv(os:type(), longnames);
+        _ ->
+            ok
+    end,
+    case inet_res:lookup(Domain, in, mx) of
+        [] ->
+            lists:map(fun(X) -> {10, inet_parse:ntoa(X)} end, inet_res:lookup(Domain, in, a));
+        Result ->
+            lists:sort(Result)
+    end.
 
 %% @doc guess the current host's fully qualified domain name, on error return "localhost"
 -spec guess_FQDN() -> string().
 guess_FQDN() ->
-	{ok, Hostname} = inet:gethostname(),
+    {ok, Hostname} = inet:gethostname(),
     guess_FQDN_1(Hostname, inet:gethostbyname(Hostname)).
 
-guess_FQDN_1(_Hostname, {ok, #hostent{ h_name = FQDN }}) ->
-	FQDN;
+guess_FQDN_1(_Hostname, {ok, #hostent{h_name = FQDN}}) ->
+    FQDN;
 guess_FQDN_1(Hostname, {error, nxdomain = Error}) ->
-    error_logger:info_msg("~p could not get FQDN for ~p (error ~p), using \"localhost\" instead.",
-                          [?MODULE, Error, Hostname]),
+    error_logger:info_msg(
+        "~p could not get FQDN for ~p (error ~p), using \"localhost\" instead.",
+        [?MODULE, Error, Hostname]
+    ),
     "localhost".
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
 -spec compute_cram_digest(Key :: binary(), Data :: binary()) -> binary().
 compute_cram_digest(Key, Data) ->
-	Bin = hmac_md5(Key, Data),
-	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
+    Bin = hmac_md5(Key, Data),
+    list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 -ifdef(OTP_RELEASE).
-  -if(?OTP_RELEASE >= 23).
-    -define(CRYPTO_MAC, true).
-  -endif.
+-if(?OTP_RELEASE >= 23).
+-define(CRYPTO_MAC, true).
+-endif.
 -endif.
 
 -ifdef(CRYPTO_MAC).
 hmac_md5(Key, Data) ->
-	crypto:mac(hmac, md5, Key, Data).
+    crypto:mac(hmac, md5, Key, Data).
 -else.
 hmac_md5(Key, Data) ->
-	crypto:hmac(md5, Key, Data).
+    crypto:hmac(md5, Key, Data).
 -endif.
 
 %% @doc Generate a seed string for CRAM.
 -spec get_cram_string(Hostname :: string()) -> string().
 get_cram_string(Hostname) ->
-	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [rand:uniform(4294967295), rand:uniform(4294967295), Hostname])))).
+    binary_to_list(
+        base64:encode(
+            lists:flatten(
+                io_lib:format("<~B.~B@~s>", [
+                    rand:uniform(4294967295), rand:uniform(4294967295), Hostname
+                ])
+            )
+        )
+    ).
 
 %% @doc Trim \r\n from `String'
 -spec trim_crlf(String :: string()) -> string().
 trim_crlf(String) ->
-	string:strip(string:strip(String, right, $\n), right, $\r).
+    string:strip(string:strip(String, right, $\n), right, $\r).
 
 -define(DAYS, ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]).
--define(MONTHS, ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]).
+-define(MONTHS, [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+]).
 %% @doc Generate a RFC 5322 timestamp based on the current time
 rfc5322_timestamp() ->
-	{{Year, Month, Day}, {Hour, Minute, Second}} = calendar:local_time(),
-	NDay = calendar:day_of_the_week(Year, Month, Day),
-	DoW = lists:nth(NDay, ?DAYS),
-	MoY = lists:nth(Month, ?MONTHS),
-	io_lib:format("~s, ~b ~s ~b ~2..0b:~2..0b:~2..0b ~s", [DoW, Day, MoY, Year, Hour, Minute, Second, zone()]).
+    {{Year, Month, Day}, {Hour, Minute, Second}} = calendar:local_time(),
+    NDay = calendar:day_of_the_week(Year, Month, Day),
+    DoW = lists:nth(NDay, ?DAYS),
+    MoY = lists:nth(Month, ?MONTHS),
+    io_lib:format("~s, ~b ~s ~b ~2..0b:~2..0b:~2..0b ~s", [
+        DoW, Day, MoY, Year, Hour, Minute, Second, zone()
+    ]).
 
 %% @doc Calculate the current timezone and format it like -0400. Borrowed from YAWS.
 zone() ->
-	Time = erlang:universaltime(),
-	LocalTime = calendar:universal_time_to_local_time(Time),
-	DiffSecs = calendar:datetime_to_gregorian_seconds(LocalTime) -
-	calendar:datetime_to_gregorian_seconds(Time),
-	zone((DiffSecs/3600)*100).
+    Time = erlang:universaltime(),
+    LocalTime = calendar:universal_time_to_local_time(Time),
+    DiffSecs =
+        calendar:datetime_to_gregorian_seconds(LocalTime) -
+            calendar:datetime_to_gregorian_seconds(Time),
+    zone((DiffSecs / 3600) * 100).
 
 %% Ugly reformatting code to get times like +0000 and -1300
 
 zone(Val) when Val < 0 ->
-	io_lib:format("-~4..0w", [trunc(abs(Val))]);
+    io_lib:format("-~4..0w", [trunc(abs(Val))]);
 zone(Val) when Val >= 0 ->
-	io_lib:format("+~4..0w", [trunc(abs(Val))]).
+    io_lib:format("+~4..0w", [trunc(abs(Val))]).
 
 %% @doc Generate a unique message ID
 generate_message_id() ->
-	FQDN = guess_FQDN(),
-    Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))],
-	io_lib:format("<~s@~s>", [Md5, FQDN]).
+    FQDN = guess_FQDN(),
+    Md5 = [
+        io_lib:format("~2.16.0b", [X])
+     || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))
+    ],
+    io_lib:format("<~s@~s>", [Md5, FQDN]).
 
 %% @doc Generate a unique MIME message boundary
 generate_message_boundary() ->
-	FQDN = guess_FQDN(),
-    ["_=", [io_lib:format("~2.36.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))], "=_"].
+    FQDN = guess_FQDN(),
+    [
+        "_=",
+        [
+            io_lib:format("~2.36.0b", [X])
+         || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))
+        ],
+        "=_"
+    ].
 
 unique_id() ->
     {erlang:system_time(), erlang:unique_integer()}.
@@ -145,33 +188,35 @@ unique_id() ->
 -define(is_whitespace(Ch), (Ch =< 32)).
 
 combine_rfc822_addresses([]) ->
-	<<>>;
+    <<>>;
 combine_rfc822_addresses(Addresses) ->
-	iolist_to_binary(combine_rfc822_addresses(Addresses, [])).
+    iolist_to_binary(combine_rfc822_addresses(Addresses, [])).
 
 combine_rfc822_addresses([], [32, $, | Acc]) ->
-	lists:reverse(Acc);
-combine_rfc822_addresses([{undefined, Email}|Rest], Acc) ->
-	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
-combine_rfc822_addresses([{"", Email}|Rest], Acc) ->
-	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
-combine_rfc822_addresses([{<<>>, Email}|Rest], Acc) ->
-	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
-combine_rfc822_addresses([{Name, Email}|Rest], Acc) ->
-	Quoted = [ opt_quoted(Name)," <", Email, ">" ],
-	combine_rfc822_addresses(Rest, [32, $,, Quoted|Acc]).
+    lists:reverse(Acc);
+combine_rfc822_addresses([{undefined, Email} | Rest], Acc) ->
+    combine_rfc822_addresses(Rest, [32, $,, Email | Acc]);
+combine_rfc822_addresses([{"", Email} | Rest], Acc) ->
+    combine_rfc822_addresses(Rest, [32, $,, Email | Acc]);
+combine_rfc822_addresses([{<<>>, Email} | Rest], Acc) ->
+    combine_rfc822_addresses(Rest, [32, $,, Email | Acc]);
+combine_rfc822_addresses([{Name, Email} | Rest], Acc) ->
+    Quoted = [opt_quoted(Name), " <", Email, ">"],
+    combine_rfc822_addresses(Rest, [32, $,, Quoted | Acc]).
 
 opt_quoted(B) when is_binary(B) ->
-	opt_quoted(binary_to_list(B));
+    opt_quoted(binary_to_list(B));
 opt_quoted(S) when is_list(S) ->
     NoControls = lists:map(
         fun
             (C) when C < 32 -> 32;
             (C) -> C
         end,
-        S),
+        S
+    ),
     case lists:any(fun is_special/1, NoControls) of
-        false -> NoControls;
+        false ->
+            NoControls;
         true ->
             lists:flatten([
                 $",
@@ -181,8 +226,10 @@ opt_quoted(S) when is_list(S) ->
                         ($\\) -> [$\\, $\\];
                         (C) -> C
                     end,
-                    NoControls),
-                $"])
+                    NoControls
+                ),
+                $"
+            ])
     end.
 
 % See https://www.w3.org/Protocols/rfc822/3_Lexical.html#z2
@@ -199,75 +246,75 @@ is_special($\") -> true;
 is_special($.) -> true;
 is_special($[) -> true;
 is_special($]) -> true;
-is_special($') -> true; % special for some smtp servers
+% special for some smtp servers
+is_special($') -> true;
 is_special(_) -> false.
 
 %% @doc Parse list of mail addresses in RFC-5322#section-3.4 `mailbox-list' format
 -spec parse_rfc5322_addresses(string() | binary()) -> {ok, [name_address()]} | {error, any()}.
 parse_rfc5322_addresses(B) when is_binary(B) ->
-	parse_rfc5322_addresses(unicode:characters_to_list(B));
+    parse_rfc5322_addresses(unicode:characters_to_list(B));
 parse_rfc5322_addresses(S) when is_list(S) ->
-	case smtp_rfc5322_scan:string(S) of
-		{ok, Tokens, _L} ->
-			F = fun({Name, {addr, Local, Domain}}) ->
-						{Name, Local ++ "@" ++ Domain}
-				end,
-			case smtp_rfc5322_parse:parse(Tokens) of
-				{ok, {mailbox_list, AddrList}} ->
-					{ok, lists:map(F, AddrList)};
-				{ok, {group, {_Groupame, AddrList}}} ->
-					{ok, lists:map(F, AddrList)};
-				{error, _} = Err ->
-					Err
-			end;
-		{error, Reason, _L} ->
-			{error, Reason}
-	end.
+    case smtp_rfc5322_scan:string(S) of
+        {ok, Tokens, _L} ->
+            F = fun({Name, {addr, Local, Domain}}) ->
+                {Name, Local ++ "@" ++ Domain}
+            end,
+            case smtp_rfc5322_parse:parse(Tokens) of
+                {ok, {mailbox_list, AddrList}} ->
+                    {ok, lists:map(F, AddrList)};
+                {ok, {group, {_Groupame, AddrList}}} ->
+                    {ok, lists:map(F, AddrList)};
+                {error, _} = Err ->
+                    Err
+            end;
+        {error, Reason, _L} ->
+            {error, Reason}
+    end.
 
 -spec parse_rfc822_addresses(string() | binary()) -> {ok, [name_address()]} | {error, any()}.
 parse_rfc822_addresses(B) when is_binary(B) ->
-	parse_rfc822_addresses(unicode:characters_to_list(B));
-
+    parse_rfc822_addresses(unicode:characters_to_list(B));
 parse_rfc822_addresses(S) when is_list(S) ->
-	Scanned = lists:reverse([{'$end', 0}|scan_rfc822(S, [])]),
-	smtp_rfc822_parse:parse(Scanned).
+    Scanned = lists:reverse([{'$end', 0} | scan_rfc822(S, [])]),
+    smtp_rfc822_parse:parse(Scanned).
 
 scan_rfc822([], Acc) ->
-	Acc;
-scan_rfc822([Ch|R], Acc) when ?is_whitespace(Ch) ->
-	scan_rfc822(R, Acc);
-scan_rfc822([$"|R], Acc) ->
-	{Token, Rest} = scan_rfc822_scan_endquote(R, [], false),
-	scan_rfc822(Rest, [{string, 0, Token}|Acc]);
-scan_rfc822([$,|Rest], Acc) ->
-	scan_rfc822(Rest, [{',', 0}|Acc]);
-scan_rfc822([$<|Rest], Acc) ->
-	{Token, R} = scan_rfc822_scan_endpointybracket(Rest),
-	scan_rfc822(R, [{'>', 0}, {string, 0, Token}, {'<', 0}|Acc]);
+    Acc;
+scan_rfc822([Ch | R], Acc) when ?is_whitespace(Ch) ->
+    scan_rfc822(R, Acc);
+scan_rfc822([$" | R], Acc) ->
+    {Token, Rest} = scan_rfc822_scan_endquote(R, [], false),
+    scan_rfc822(Rest, [{string, 0, Token} | Acc]);
+scan_rfc822([$, | Rest], Acc) ->
+    scan_rfc822(Rest, [{',', 0} | Acc]);
+scan_rfc822([$< | Rest], Acc) ->
+    {Token, R} = scan_rfc822_scan_endpointybracket(Rest),
+    scan_rfc822(R, [{'>', 0}, {string, 0, Token}, {'<', 0} | Acc]);
 scan_rfc822(String, Acc) ->
-	%% Capture everything except "SP < > ,"
-	case re:run(String, "^([^\s<>,]+)(.*)", [{capture, all_but_first, list}]) of
-		{match, [Token, Rest]} ->
-			scan_rfc822(Rest, [{string, 0, Token}|Acc]);
-		nomatch ->
-			[{string, 0, String}|Acc]
-	end.
+    %% Capture everything except "SP < > ,"
+    case re:run(String, "^([^\s<>,]+)(.*)", [{capture, all_but_first, list}]) of
+        {match, [Token, Rest]} ->
+            scan_rfc822(Rest, [{string, 0, Token} | Acc]);
+        nomatch ->
+            [{string, 0, String} | Acc]
+    end.
 
 scan_rfc822_scan_endpointybracket(String) ->
-	case re:run(String, "(.*?)>(.*)", [{capture, all_but_first, list}]) of
-		{match, [Token, Rest]} ->
-			{Token, Rest};
-		nomatch ->
-			{String, []}
-	end.
+    case re:run(String, "(.*?)>(.*)", [{capture, all_but_first, list}]) of
+        {match, [Token, Rest]} ->
+            {Token, Rest};
+        nomatch ->
+            {String, []}
+    end.
 
-scan_rfc822_scan_endquote([$\\|R], Acc, InEscape) ->
-	%% in escape
-	scan_rfc822_scan_endquote(R, Acc, not(InEscape));
-scan_rfc822_scan_endquote([$"|R], Acc, true) ->
-	scan_rfc822_scan_endquote(R, [$"|Acc], false);
-scan_rfc822_scan_endquote([$"|Rest], Acc, false) ->
-	%% Done!
-	{lists:reverse(Acc), Rest};
-scan_rfc822_scan_endquote([Ch|Rest], Acc, _) ->
-	scan_rfc822_scan_endquote(Rest, [Ch|Acc], false).
+scan_rfc822_scan_endquote([$\\ | R], Acc, InEscape) ->
+    %% in escape
+    scan_rfc822_scan_endquote(R, Acc, not (InEscape));
+scan_rfc822_scan_endquote([$" | R], Acc, true) ->
+    scan_rfc822_scan_endquote(R, [$" | Acc], false);
+scan_rfc822_scan_endquote([$" | Rest], Acc, false) ->
+    %% Done!
+    {lists:reverse(Acc), Rest};
+scan_rfc822_scan_endquote([Ch | Rest], Acc, _) ->
+    scan_rfc822_scan_endquote(Rest, [Ch | Acc], false).
