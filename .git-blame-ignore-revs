@@ -1,0 +1,12 @@
+# git blame ignore list.
+#
+# This file contains a list of git hashes to be ignored by git blame. These
+# revisions are considered "unimportant" in that they are unlikely to be what
+# you are interested in when blaming.
+#
+#     git blame --ignore-revs-file .git-blame-ignore-revs
+# or
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Code formatter applied: `rebar3 fmt`
+3967bcbd349b2bf0c390f68c68bd1d79eb5ad1fc
