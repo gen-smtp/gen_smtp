@@ -824,9 +824,10 @@ encode_parameters(Parameters) ->
 	[encode_parameter(Parameter) || Parameter <- Parameters].
 
 encode_parameter({X, Y}) ->
-	case escape_tspecial(Y, false, <<>>) of
+	YEnc = rfc2047_utf8_encode(Y, byte_size(X) + 3, <<"\t">>),
+	case escape_tspecial(YEnc, false, <<>>) of
 		{true, Special} -> [X, $=, $", Special, $"];
-		false -> [X, $=, Y]
+		false -> [X, $=, YEnc]
 	end.
 
 % See also: http://www.ietf.org/rfc/rfc2045.txt section 5.1
@@ -883,6 +884,8 @@ encode_header_value(H, Value) when H =:= <<"To">>; H =:= <<"Cc">>; H =:= <<"Bcc"
 						 rfc2047_utf8_encode(unicode:characters_to_binary(Name))
 				 end, Names),
 	smtp_util:combine_rfc822_addresses(lists:zip(NewNames, Emails));
+encode_header_value(H, Value) when H =:= <<"Content-Type">>; H =:= <<"Content-Disposition">> ->
+	Value; % Parameters are already encoded.
 encode_header_value(_, Value) ->
 	rfc2047_utf8_encode(Value).
 
@@ -1041,7 +1044,10 @@ fix_encoding(Encoding) ->
 
 %% @doc Encode a binary or list according to RFC 2047. Input is
 %% assumed to be in UTF-8 encoding bytes; not codepoints.
-rfc2047_utf8_encode(Value) when is_binary(Value) ->
+rfc2047_utf8_encode(Value) ->
+	rfc2047_utf8_encode(Value, 0, <<" ">>).
+
+rfc2047_utf8_encode(Value, PrefixLen, LineIndent) when is_binary(Value) ->
 	case is_ascii_printable(Value) of
 		true ->
 			% don't encode if all characters are printable ASCII
@@ -1058,33 +1064,33 @@ rfc2047_utf8_encode(Value) when is_binary(Value) ->
 					% so we use B-Encoding instead
 					b
 			end,
-			rfc2047_utf8_encode(Enc, Value, <<>>)
+			rfc2047_utf8_encode(Enc, Value, <<>>, PrefixLen, LineIndent)
 	end;
-rfc2047_utf8_encode(Value) ->
-	rfc2047_utf8_encode(list_to_binary(Value)).
+rfc2047_utf8_encode(Value, PrefixLen, LineIndent) ->
+	rfc2047_utf8_encode(list_to_binary(Value), PrefixLen, LineIndent).
 
-rfc2047_utf8_encode(_Enc, <<>>, Acc) ->
+rfc2047_utf8_encode(_Enc, <<>>, Acc, _PrefixLen, _LineIndent) ->
 	Acc;
-rfc2047_utf8_encode(b, More, Acc) ->
+rfc2047_utf8_encode(b, More, Acc, PrefixLen, LineIndent) ->
 	% B-Encoding
 	% An encoded word must not be longer than 75 bytes,
 	% including the leading "=?", charset name, "?B?" and
 	% the trailing "?=". Since the charset name is fixed to
 	% "UTF-8", 63 remain for encoded text. Using Base64,
 	% a maximum of 45 raw bytes can be encoded in 63 bytes.
-	rfc2047_utf8_encode(b, More, Acc, <<>>, 45);
-rfc2047_utf8_encode(q, More, Acc) ->
+	rfc2047_utf8_encode(b, More, Acc, <<>>, byte_size(LineIndent), LineIndent, 46-PrefixLen);
+rfc2047_utf8_encode(q, More, Acc, PrefixLen, LineIndent) ->
 	% Q-Encoding
 	% An encoded word must not be longer than 75 bytes,
-	% including the leading "=?", charset name, "?B?" and
+	% including the leading "=?", charset name, "=?UTF-8?Q?" and
 	% the trailing "?=". Since the charset name is fixed to
 	% "UTF-8", 63 remain for encoded text. Using Quoted-Printable,
 	% between 21 and 63 raw bytes can be encoded in 63 bytes.
-	rfc2047_utf8_encode(q, More, Acc, <<>>, 63).
+	rfc2047_utf8_encode(q, More, Acc, <<>>, byte_size(LineIndent), LineIndent, 63-PrefixLen).
 
-rfc2047_utf8_encode(Enc, <<>>, Acc, WordAcc, _Left) ->
-	rfc2047_append_word(Acc, WordAcc, Enc);
-rfc2047_utf8_encode(Enc, All = <<C/utf8, More/binary>>, Acc, WordAcc, Left) ->
+rfc2047_utf8_encode(Enc, <<>>, Acc, WordAcc, _PrefixLen, LineIndent, _Left) ->
+	rfc2047_append_word(Acc, WordAcc, Enc, LineIndent);
+rfc2047_utf8_encode(Enc, All = <<C/utf8, More/binary>>, Acc, WordAcc, PrefixLen, LineIndent, Left) ->
 	% convert codepoint back to UTF-8 encoded bytes
 	Bytes = <<C/utf8>>,
 	Size = byte_size(Bytes),
@@ -1098,20 +1104,20 @@ rfc2047_utf8_encode(Enc, All = <<C/utf8, More/binary>>, Acc, WordAcc, Left) ->
 	end,
 	case Left >= Reqd of
 		true ->
-			rfc2047_utf8_encode(Enc, More, Acc, <<WordAcc/binary, Bytes/binary>>, Left-Reqd);
+			rfc2047_utf8_encode(Enc, More, Acc, <<WordAcc/binary, Bytes/binary>>, PrefixLen, LineIndent, Left-Reqd);
 		false ->
-			rfc2047_utf8_encode(Enc, All, rfc2047_append_word(Acc, WordAcc, Enc))
+			rfc2047_utf8_encode(Enc, All, rfc2047_append_word(Acc, WordAcc, Enc, LineIndent), PrefixLen, LineIndent)
 	end.
 
-rfc2047_append_word(Acc, <<>>, _Enc) ->
+rfc2047_append_word(Acc, <<>>, _Enc, _LineIndent) ->
 	% empty word
 	Acc;
-rfc2047_append_word(<<>>, Word, Enc) ->
+rfc2047_append_word(<<>>, Word, Enc, _LineIndent) ->
 	% first word in Acc
 	rfc2047_encode_word(Word, Enc);
-rfc2047_append_word(Acc, Word, Enc) ->
+rfc2047_append_word(Acc, Word, Enc, LineIndent) ->
 	% subsequent word in Acc
-	<<Acc/binary, $\r, $\n, $\s, (rfc2047_encode_word(Word, Enc))/binary>>.
+	<<Acc/binary, $\r, $\n, LineIndent/binary, (rfc2047_encode_word(Word, Enc))/binary>>.
 
 rfc2047_encode_word(Word, q) ->
 	<<"=?UTF-8?Q?", (rfc2047_q_encode(Word))/binary, "?=">>;
@@ -2119,33 +2125,39 @@ rfc2047_utf8_encode_test_() ->
 	[
 		{"Q-Encoding",
 			fun() ->
-				?assertEqual(<<"=?UTF-8?Q?abcdefghijklmnopqrstuvwxyz?=">>, rfc2047_utf8_encode(q, <<"abcdefghijklmnopqrstuvwxyz">>, <<>>)),
-				?assertEqual(<<"=?UTF-8?Q?ABCDEFGHIJKLMNOPQRSTUVWXYZ?=">>, rfc2047_utf8_encode(q, <<"ABCDEFGHIJKLMNOPQRSTUVWXYZ">>, <<>>)),
-				?assertEqual(<<"=?UTF-8?Q?0123456789?=">>, rfc2047_utf8_encode(q, <<"0123456789">>, <<>>)),
-				?assertEqual(<<"=?UTF-8?Q?!*+-/?=">>, rfc2047_utf8_encode(q, <<"!*+-/">>, <<>>)),
-				?assertEqual(<< "=?UTF-8?Q?This_text_encodes_to_more_than_63_bytes=2E_Therefore=2C_it_shou?=\r\n"
-					       " =?UTF-8?Q?ld_be_encoded_in_multiple_encoded_words=2E?=">>,
-					     rfc2047_utf8_encode(q, <<"This text encodes to more than 63 bytes. Therefore, it should be encoded in multiple encoded words.">>, <<>>)),
-				?assertEqual(<< "=?UTF-8?Q?We_place_an_UTF8_4byte_character_over_the_breaking_point_here_?=\r\n"
+				?assertEqual(<<"=?UTF-8?Q?abcdefghijklmnopqrstuvwxyz?=">>, rfc2047_utf8_encode(q, <<"abcdefghijklmnopqrstuvwxyz">>, <<>>, 0, <<" ">>)),
+				?assertEqual(<<"=?UTF-8?Q?ABCDEFGHIJKLMNOPQRSTUVWXYZ?=">>, rfc2047_utf8_encode(q, <<"ABCDEFGHIJKLMNOPQRSTUVWXYZ">>, <<>>, 0, <<" ">>)),
+				?assertEqual(<<"=?UTF-8?Q?0123456789?=">>, rfc2047_utf8_encode(q, <<"0123456789">>, <<>>, 0, <<" ">>)),
+				?assertEqual(<<"=?UTF-8?Q?!*+-/?=">>, rfc2047_utf8_encode(q, <<"!*+-/">>, <<>>, 0, <<" ">>)),
+				?assertEqual( <<"=?UTF-8?Q?This_text_encodes_to_more_than_63_bytes=2E_Therefore=2C_it_shou?=\r\n"
+						   " =?UTF-8?Q?ld_be_encoded_in_multiple_encoded_words=2E?=">>,
+					     rfc2047_utf8_encode(q, <<"This text encodes to more than 63 bytes. Therefore, it should be encoded in multiple encoded words.">>, <<>>, 0, <<" ">>)),
+				?assertEqual(<<"=?UTF-8?Q?This_text_encodes_to_more_than_63_bytes_with_offset_f?=\r\n"
+						       "\t=?UTF-8?Q?or_a_parameter=2E_Therefore=2C_it_should_be_encoded_in_multipl?=\r\n"
+							   "\t=?UTF-8?Q?e_encoded_words=2E?=">>,
+					     rfc2047_utf8_encode(q, <<
+						 		"This text encodes to more than 63 bytes with offset for a parameter. "
+							    "Therefore, it should be encoded in multiple encoded words.">>, <<>>, 10, <<"\t">>)),
+			 ?assertEqual(<< "=?UTF-8?Q?We_place_an_UTF8_4byte_character_over_the_breaking_point_here_?=\r\n"
 					       " =?UTF-8?Q?=F0=9F=80=84?=">>,
-					     rfc2047_utf8_encode(q, <<"We place an UTF8 4byte character over the breaking point here ", 16#F0, 16#9F, 16#80, 16#84>>, <<>>))
+					     rfc2047_utf8_encode(q, <<"We place an UTF8 4byte character over the breaking point here ", 16#F0, 16#9F, 16#80, 16#84>>, <<>>, 0, <<" ">>))
 			end
 		},
 		{"B-Encoding",
 			fun() ->
 				?assertEqual(<<"=?UTF-8?B?U29tZSBzaG9ydCB0ZXh0Lg==?=">>,
-					     rfc2047_utf8_encode(b, <<"Some short text.">>, <<>>)),
+					     rfc2047_utf8_encode(b, <<"Some short text.">>, <<>>, 0, <<" ">>)),
 				?assertEqual(<< "=?UTF-8?B?VGhpcyB0ZXh0IGVuY29kZXMgdG8gbW9yZSB0aGFuIDYzIGJ5dGVzLiBUaGVy?=\r\n"
 					       " =?UTF-8?B?ZWZvcmUsIGl0IHNob3VsZCBiZSBlbmNvZGVkIGluIG11bHRpcGxlIGVuY29k?=\r\n"
 					       " =?UTF-8?B?ZWQgd29yZHMu?=">>,
-					     rfc2047_utf8_encode(b, <<"This text encodes to more than 63 bytes. Therefore, it should be encoded in multiple encoded words.">>, <<>>)),
+					     rfc2047_utf8_encode(b, <<"This text encodes to more than 63 bytes. Therefore, it should be encoded in multiple encoded words.">>, <<>>, 1, <<" ">>)),
 				?assertEqual(<< "=?UTF-8?B?AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKiss?=\r\n"
 					       " =?UTF-8?B?LS4vMDEyMzQ1Njc4OTo7PD0+P0BBQkNERUZHSElKS0xNTk9QUVJTVFVWV1hZ?=\r\n"
 					       " =?UTF-8?B?WltcXV5fYGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn8=?=">>,
-					     rfc2047_utf8_encode(b, << <<X>> || X <- lists:seq(0, 16#7F) >>, <<>>)),
+					     rfc2047_utf8_encode(b, << <<X>> || X <- lists:seq(0, 16#7F) >>, <<>>, 1, <<" ">>)),
 				?assertEqual(<< "=?UTF-8?B?UGxhY2UgYW4gVVRGOCA0Ynl0ZSBjaGFyYWN0ZXIgYXQgdGhlIGJyZWFr?=\r\n"
 					       " =?UTF-8?B?8J+AhA==?=">>,
-					     rfc2047_utf8_encode(b, <<"Place an UTF8 4byte character at the break", 16#F0, 16#9F, 16#80, 16#84>>, <<>>))
+					     rfc2047_utf8_encode(b, <<"Place an UTF8 4byte character at the break", 16#F0, 16#9F, 16#80, 16#84>>, <<>>, 1, <<" ">>))
 			end
 		},
 		{"Pick encoding",
@@ -2195,6 +2207,65 @@ encoding_test_() ->
 						<<"This is a plain message">>},
 					Result = <<"Subject: =?UTF-8?Q?Fr=C3=A6derik_H=C3=B8lljen?=\r\nFrom: =?UTF-8?Q?Fr=C3=A6derik_H=C3=B8lljen?= <me@example.com>\r\nTo: you@example.com\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
 					?assertEqual(Result, encode(Email))
+			end
+		},
+		{"Email with UTF-8 in attachment filename.",
+			fun() ->
+				FileName = <<
+					"Čia labai ilgas el. laiško priedo pavadinimas su "/utf8,
+					"lietuviškomis ar kokiomis kitomis ne ascii raidėmis.pdf"/utf8
+				>>,
+				Email = {<<"multipart">>, <<"mixed">>,
+					[
+						{<<"From">>,       <<"k.petrauskas@erisata.lt">>},
+						{<<"Subject">>,    <<"Čiobiškis"/utf8>>},
+						{<<"Date">>,       <<"Thu, 17 Dec 2020 20:12:33 +0200">>},
+						{<<"Message-ID">>, <<"<47a08b7ff7d305087877361ca8eea1db@karolis.erisata.lt>">>}
+					],
+					#{
+						content_type_params => [
+							{<<"boundary">>, <<"_=boundary-123=_">>}
+						]
+					},
+					[
+						{<<"application">>, <<"pdf">>, [],
+							#{
+								content_type_params => [
+									{<<"name">>,        FileName},
+									{<<"disposition">>, <<"attachment">>}
+								],
+								disposition         => <<"attachment">>,
+								disposition_params  => [{<<"filename">>, FileName}]
+							},
+							<<"data">>
+						}
+					]
+				},
+				Result = <<
+					"From: k.petrauskas@erisata.lt\r\n"
+					"Subject: =?UTF-8?Q?=C4=8Ciobi=C5=A1kis?=\r\n"
+					"Date: Thu, 17 Dec 2020 20:12:33 +0200\r\n"
+					"Message-ID: <47a08b7ff7d305087877361ca8eea1db@karolis.erisata.lt>\r\n"
+					"Content-Type: multipart/mixed;\r\n"
+					"\tboundary=\"_=boundary-123=_\"\r\n"
+					"MIME-Version: 1.0\r\n"
+					"\r\n"
+					"\r\n"
+					"--_=boundary-123=_\r\n"
+					"Content-Type: application/pdf;\r\n"
+					"\tname=\"=?UTF-8?Q?=C4=8Cia_labai_ilgas_el=2E_lai=C5=A1ko_priedo_pavadinima?=\r\n"
+					"\t=?UTF-8?Q?s_su_lietuvi=C5=A1komis_ar_kokiomis_kitomis_ne_ascii_raid?=\r\n"
+					"\t=?UTF-8?Q?=C4=97mis=2Epdf?=\";\r\n"
+					"\tdisposition=attachment\r\n"
+					"Content-Disposition: attachment;\r\n"
+					"\tfilename=\"=?UTF-8?Q?=C4=8Cia_labai_ilgas_el=2E_lai=C5=A1ko_priedo_pavadi?=\r\n"
+					"\t=?UTF-8?Q?nimas_su_lietuvi=C5=A1komis_ar_kokiomis_kitomis_ne_ascii_raid?=\r\n"
+					"\t=?UTF-8?Q?=C4=97mis=2Epdf?=\"\r\n"
+					"\r\n"
+					"data\r\n"
+					"--_=boundary-123=_--\r\n"
+				>>,
+				?assertEqual(Result, encode(Email))
 			end
 		},
 		{"Email with special chars in From",
