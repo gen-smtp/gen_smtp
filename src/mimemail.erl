@@ -505,12 +505,12 @@ parse_content_disposition(String) ->
 
 split_body_by_boundary(Body, Boundary, MimeVsn, Options) ->
     % find the indices of the first and last boundary
-    case [binstr:strpos(Body, Boundary), binstr:strpos(Body, list_to_binary([Boundary, "--"]))] of
-        [0, _] ->
+    case {binstr:strpos(Body, Boundary), binstr:strpos(Body, list_to_binary([Boundary, "--"]))} of
+        {0, _} ->
             erlang:error(missing_boundary);
-        [_, 0] ->
+        {_, 0} ->
             erlang:error(missing_last_boundary);
-        [Start, End] ->
+        {Start, End} ->
             NewBody = binstr:substr(Body, Start + byte_size(Boundary), End - Start),
             % from now on, we can be sure that each boundary is preceded by a CRLF
             Parts = split_body_by_boundary_(NewBody, list_to_binary(["\r\n", Boundary]), [], Options),
@@ -639,73 +639,38 @@ decode_base64(Body) ->
     base64:mime_decode(Body).
 
 decode_quoted_printable(Body) ->
-    case binstr:strpos(Body, "\r\n") of
-        0 ->
-            decode_quoted_printable(Body, <<>>, []);
-        Index ->
-            decode_quoted_printable(binstr:substr(Body, 1, Index + 1), binstr:substr(Body, Index + 2), [])
-    end.
+    decode_quoted_printable(Body, false, <<>>, <<>>).
 
-decode_quoted_printable(<<>>, <<>>, Acc) ->
-    list_to_binary(lists:reverse(Acc));
-decode_quoted_printable(Line, Rest, Acc) ->
-    case binstr:strpos(Rest, "\r\n") of
-        0 ->
-            decode_quoted_printable(Rest, <<>>, [decode_quoted_printable_line(Line, []) | Acc]);
-        Index ->
-            ?log(debug, "next line ~p~nnext rest ~p~n", [
-                binstr:substr(Rest, 1, Index + 1), binstr:substr(Rest, Index + 2)
-            ]),
-            decode_quoted_printable(
-                binstr:substr(Rest, 1, Index + 1),
-                binstr:substr(Rest, Index + 2),
-                [decode_quoted_printable_line(Line, []) | Acc]
-            )
-    end.
-
-decode_quoted_printable_line(<<>>, Acc) ->
-    lists:reverse(Acc);
-decode_quoted_printable_line(<<$\r, $\n>>, Acc) ->
-    lists:reverse(["\r\n" | Acc]);
-decode_quoted_printable_line(<<$=, C, T/binary>>, Acc) when C =:= $\s; C =:= $\t ->
-    case binstr:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
-        true ->
-            lists:reverse(Acc);
-        false ->
-            throw(badchar)
-    end;
-decode_quoted_printable_line(<<$=, $\r, $\n>>, Acc) ->
-    lists:reverse(Acc);
-decode_quoted_printable_line(<<$=, A:2/binary, T/binary>>, Acc) ->
-    %<<X:1/binary, Y:1/binary>> = A,
-    case
-        binstr:all(
-            fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $A andalso C =< $F) orelse (C >= $a andalso C =< $f) end, A
-        )
-    of
-        true ->
-            {ok, [C | []], []} = io_lib:fread("~16u", binary_to_list(A)),
-            decode_quoted_printable_line(T, [C | Acc]);
-        false ->
-            throw(badchar)
-    end;
-decode_quoted_printable_line(<<$=>>, Acc) ->
-    % soft newline
-    lists:reverse(Acc);
-decode_quoted_printable_line(<<H, T/binary>>, Acc) when H >= $!, H =< $< ->
-    decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line(<<H, T/binary>>, Acc) when H >= $>, H =< $~ ->
-    decode_quoted_printable_line(T, [H | Acc]);
-decode_quoted_printable_line(<<H, T/binary>>, Acc) when H =:= $\s; H =:= $\t ->
-    % if the rest of the line is whitespace, truncate it
-    case binstr:all(fun(X) -> X =:= $\s orelse X =:= $\t end, T) of
-        true ->
-            lists:reverse(Acc);
-        false ->
-            decode_quoted_printable_line(T, [H | Acc])
-    end;
-decode_quoted_printable_line(<<H, T/binary>>, Acc) ->
-    decode_quoted_printable_line(T, [H | Acc]).
+%% End of Body
+decode_quoted_printable(<<>>, _HasSoftEOL, _WSPs, Acc) ->
+    Acc;
+%% CRLF after Soft Linebreak
+decode_quoted_printable(<<$\r, $\n, More/binary>>, true, _WSPs, Acc) ->
+    decode_quoted_printable(More, false, <<>>, Acc);
+%% Space or Tab after Soft Linebreak
+decode_quoted_printable(<<C, More/binary>>, true, _WSPs, Acc) when C =:= $\s; C =:= $\t ->
+    decode_quoted_printable(More, true, <<>>, Acc);
+%% Other character after Soft Linebreak
+decode_quoted_printable(_Body, true, _WSPs, _Acc) ->
+    throw(badchar);
+%% CRLF
+decode_quoted_printable(<<$\r, $\n, More/binary>>, false, _WSPs, Acc) ->
+    decode_quoted_printable(More, false, <<>>, <<Acc/binary, $\r, $\n>>);
+%% Space or Tab
+decode_quoted_printable(<<C, More/binary>>, false, WSPs, Acc) when C =:= $\s; C =:= $\t ->
+    decode_quoted_printable(More, false, <<WSPs/binary, C>>, Acc);
+%% Encoded char
+decode_quoted_printable(<<$=, C1, C2, More/binary>>, false, WSPs, Acc) when
+    C1 >= $0 andalso C1 =< $9 orelse C1 >= $A andalso C1 =< $F orelse C1 >= $a andalso C1 =< $f,
+    C2 >= $0 andalso C2 =< $9 orelse C2 >= $A andalso C2 =< $F orelse C2 >= $a andalso C2 =< $f
+->
+    decode_quoted_printable(More, false, <<>>, <<Acc/binary, WSPs/binary, (unhex(C1)):4, (unhex(C2)):4>>);
+%% Soft Linebreak
+decode_quoted_printable(<<$=, More/binary>>, false, WSPs, Acc) ->
+    decode_quoted_printable(More, true, <<>>, <<Acc/binary, WSPs/binary>>);
+%% Plain character
+decode_quoted_printable(<<C, More/binary>>, false, WSPs, Acc) ->
+    decode_quoted_printable(More, false, <<>>, <<Acc/binary, WSPs/binary, C>>).
 
 check_headers(Headers) ->
     Checked = [<<"MIME-Version">>, <<"Date">>, <<"From">>, <<"Message-ID">>, <<"References">>, <<"Subject">>],
@@ -1324,6 +1289,10 @@ is_ascii_printable(_) ->
 
 hex(N) when N >= 10 -> N + $A - 10;
 hex(N) -> N + $0.
+
+unhex(C) when C >= $a -> C - $a + 10;
+unhex(C) when C >= $A -> C - $A + 10;
+unhex(C) -> C - $0.
 
 partition_count_bytes(Fun, Bin) ->
     partition_count_bytes(Fun, Bin, {0, 0}).
@@ -2042,71 +2011,71 @@ parse_example_mails_test_() ->
 decode_quoted_printable_test_() ->
     [
         {"bleh", fun() ->
-            ?assertEqual("!", decode_quoted_printable_line(<<"=21">>, "")),
-            ?assertEqual("!!", decode_quoted_printable_line(<<"=21=21">>, "")),
-            ?assertEqual("=:=", decode_quoted_printable_line(<<"=3D:=3D">>, "")),
+            ?assertEqual(<<"!">>, decode_quoted_printable(<<"=21">>)),
+            ?assertEqual(<<"!!">>, decode_quoted_printable(<<"=21=21">>)),
+            ?assertEqual(<<"=:=">>, decode_quoted_printable(<<"=3D:=3D">>)),
             ?assertEqual(
-                "Thequickbrownfoxjumpedoverthelazydog.",
-                decode_quoted_printable_line(<<"Thequickbrownfoxjumpedoverthelazydog.">>, "")
+                <<"Thequickbrownfoxjumpedoverthelazydog.">>,
+                decode_quoted_printable(<<"Thequickbrownfoxjumpedoverthelazydog.">>)
             )
         end},
         {"lowercase bleh", fun() ->
-            ?assertEqual("=:=", decode_quoted_printable_line(<<"=3d:=3d">>, ""))
+            ?assertEqual(<<"=:=">>, decode_quoted_printable(<<"=3d:=3d">>))
         end},
         {"input with spaces", fun() ->
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.">>, "")
+                <<"The quick brown fox jumped over the lazy dog.">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.">>)
             )
         end},
         {"input with tabs", fun() ->
             ?assertEqual(
-                "The\tquick brown fox jumped over\tthe lazy dog.",
-                decode_quoted_printable_line(<<"The\tquick brown fox jumped over\tthe lazy dog.">>, "")
+                <<"The\tquick brown fox jumped over\tthe lazy dog.">>,
+                decode_quoted_printable(<<"The\tquick brown fox jumped over\tthe lazy dog.">>)
             )
         end},
         {"input with trailing spaces", fun() ->
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       ">>, "")
+                <<"The quick brown fox jumped over the lazy dog.">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       ">>)
             )
         end},
         {"input with non-strippable trailing whitespace", fun() ->
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.        ",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =20">>, "")
+                <<"The quick brown fox jumped over the lazy dog.        ">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       =20">>)
             ),
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.       \t",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =09">>, "")
+                <<"The quick brown fox jumped over the lazy dog.       \t">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       =09">>)
             ),
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.\t \t \t \t ",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20">>, "")
+                <<"The quick brown fox jumped over the lazy dog.\t \t \t \t ">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20">>)
             ),
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.\t \t \t \t ",
-                decode_quoted_printable_line(
-                    <<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20\t                  \t">>, ""
+                <<"The quick brown fox jumped over the lazy dog.\t \t \t \t ">>,
+                decode_quoted_printable(
+                    <<"The quick brown fox jumped over the lazy dog.\t \t \t =09=20\t                  \t">>
                 )
             )
         end},
         {"input with trailing tabs", fun() ->
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.\t\t\t\t\t">>, "")
+                <<"The quick brown fox jumped over the lazy dog.">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.\t\t\t\t\t">>)
             )
         end},
         {"soft new line", fun() ->
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.       ",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =">>, "")
+                <<"The quick brown fox jumped over the lazy dog.       ">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       =">>)
             )
         end},
         {"soft new line with trailing whitespace", fun() ->
             ?assertEqual(
-                "The quick brown fox jumped over the lazy dog.       ",
-                decode_quoted_printable_line(<<"The quick brown fox jumped over the lazy dog.       =  	">>, "")
+                <<"The quick brown fox jumped over the lazy dog.       ">>,
+                decode_quoted_printable(<<"The quick brown fox jumped over the lazy dog.       =  	">>)
             )
         end},
         {"multiline stuff", fun() ->
@@ -2124,7 +2093,7 @@ decode_quoted_printable_test_() ->
             ?assertEqual(<<"hello\r\n\r\nworld">>, decode_quoted_printable(<<"hello\r\n\r\nworld">>))
         end},
         {"invalid input", fun() ->
-            ?assertThrow(badchar, decode_quoted_printable_line(<<"=21=G1">>, "")),
+            ?assertThrow(badchar, decode_quoted_printable(<<"=21=G1">>)),
             ?assertThrow(badchar, decode_quoted_printable(<<"=21=D1 = g ">>))
         end},
         %% TODO zotonic's iconv throws eilseq here.
@@ -2429,8 +2398,10 @@ rfc2047_decode_test_() ->
             ?assertEqual(
                 <<"ab">>,
                 decode_header(
-                    <<"=?ISO-8859-1?Q?a?=\n"
-                    "		=?ISO-8859-1?Q?b?=">>,
+                    <<
+                        "=?ISO-8859-1?Q?a?=\n"
+                        "		=?ISO-8859-1?Q?b?="
+                    >>,
                     "utf-8"
                 )
             )
