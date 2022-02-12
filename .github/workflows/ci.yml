@@ -12,7 +12,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         otp: ["24", "23", "22"]
-        rebar3: ["3.17.0"]
+        rebar3: ["3.18.0"]
         profile: [test, ranch_v2]
         include:
           - os: ubuntu-latest
@@ -50,6 +50,9 @@ jobs:
 
       - name: Xref
         run: make xref
+
+      - name: Format
+        run: rebar3 fmt --check
 
       - name: Test
         run: make test REBAR_PROFILE=${{ matrix.profile }}

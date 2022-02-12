@@ -23,6 +23,9 @@ dialyze:
 xref:
 	rebar3 as test xref
 
+format:
+	rebar3 fmt
+
 docs:
 	rebar3 edoc
 
