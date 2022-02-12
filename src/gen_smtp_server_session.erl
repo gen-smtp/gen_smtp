@@ -89,16 +89,7 @@
     options = [] :: [tuple()]
 }).
 
-%% OTP-19: ssl:ssl_option()
-%% OTP-20: ssl:ssl_option()
-%% OTP-21: ssl:tls_server_option()
-%% OTP-22: ssl:tls_server_option()
-%% OTP-23: ssl:tls_server_option()
--ifdef(OTP_RELEASE).
 -type tls_opt() :: ssl:tls_server_option().
--else.
--type tls_opt() :: ssl:ssl_option().
--endif.
 
 -type options() :: [
     {callbackoptions, any()}
