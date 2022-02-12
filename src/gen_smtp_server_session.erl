@@ -170,7 +170,6 @@
 -optional_callbacks([handle_info/2, handle_AUTH/4, handle_error/3]).
 
 %% @doc Start a SMTP session linked to the calling process.
-%% @see start/3
 -spec start_link(
     Ref :: ranch:ref(),
     Transport :: module(),
