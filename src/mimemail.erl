@@ -72,7 +72,9 @@
     dkim_options/0
 ]).
 
--include_lib("hut/include/hut.hrl").
+-include_lib("kernel/include/logger.hrl").
+
+-define(LOGGER_META, #{domain => [gen_smtp]}).
 
 -define(DEFAULT_MIME_VERSION, <<"1.0">>).
 
@@ -147,7 +149,7 @@ decode(All, Options) when is_binary(All), is_list(Options) ->
     decode(Headers, Body, Options).
 
 decode(OrigHeaders, Body, Options) ->
-    ?log(debug, "headers: ~p~n", [OrigHeaders]),
+    ?LOG_DEBUG("headers: ~p", [OrigHeaders], ?LOGGER_META),
     Encoding = proplists:get_value(encoding, Options, none),
     %FixedHeaders = fix_headers(Headers),
     Headers = decode_headers(OrigHeaders, [], Encoding),
@@ -217,7 +219,7 @@ encode({Type, Subtype, Headers, ContentTypeParams, Parts}, Options) ->
         EncodedBody
     ]);
 encode(_, _) ->
-    ?log(debug, "Not a mime-decoded DATA~n"),
+    ?LOG_DEBUG("Not a mime-decoded DATA", ?LOGGER_META),
     erlang:error(non_mime).
 
 decode_headers(Headers, _, none) ->
@@ -353,7 +355,9 @@ decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
                 undefined ->
                     erlang:error(no_boundary);
                 Boundary ->
-                    ?log(debug, "this is a multipart email of type:  ~s and boundary ~s~n", [SubType, Boundary]),
+                    ?LOG_DEBUG(
+                        "this is a multipart email of type:  ~s and boundary ~s", [SubType, Boundary], ?LOGGER_META
+                    ),
                     Parameters2 = #{
                         content_type_params => Parameters,
                         disposition => Disposition,
@@ -371,7 +375,7 @@ decode_component(Headers, Body, MimeVsn = <<"1.0", _/binary>>, Options) ->
             },
             {<<"message">>, <<"rfc822">>, Headers, Parameters2, decode(NewHeaders, NewBody, Options)};
         {Type, SubType, Parameters} ->
-            ?log(debug, "body is ~s/~s~n", [Type, SubType]),
+            ?LOG_DEBUG("body is ~s/~s", [Type, SubType], ?LOGGER_META),
             Parameters2 = #{
                 content_type_params => Parameters,
                 disposition => Disposition,
@@ -402,7 +406,7 @@ decode_component(_Headers, _Body, Other, _Options) ->
 -spec get_header_value(Needle :: binary(), Headers :: [{binary(), binary()}], Default :: any()) -> binary() | any().
 %% @doc Do a case-insensitive header lookup to return that header's value, or the specified default.
 get_header_value(Needle, Headers, Default) ->
-    ?log(debug, "Headers: ~p~n", [Headers]),
+    ?LOG_DEBUG("Headers: ~p", [Headers], ?LOGGER_META),
     NeedleLower = binstr:to_lower(Needle),
     F =
         fun({Header, _Value}) ->
@@ -558,7 +562,7 @@ parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
     % folded headers
     [{FieldName, OldFieldValue} | OtherHeaders] = Headers,
     FieldValue = list_to_binary([OldFieldValue, T]),
-    ?log(debug, "~p = ~p~n", [FieldName, FieldValue]),
+    ?LOG_DEBUG("~p = ~p", [FieldName, FieldValue], ?LOGGER_META),
     case binstr:strpos(Body, "\r\n") of
         0 ->
             {lists:reverse([{FieldName, FieldValue} | OtherHeaders]), Body};
@@ -570,7 +574,7 @@ parse_headers(Body, <<H, T/binary>>, Headers) when H =:= $\s; H =:= $\t ->
             ])
     end;
 parse_headers(Body, Line, Headers) ->
-    ?log(debug, "line: ~p", [Line]),
+    ?LOG_DEBUG("line: ~p", [Line], ?LOGGER_META),
     case binstr:strchr(Line, $:) of
         0 ->
             {lists:reverse(Headers), list_to_binary([Line, "\r\n", Body])};
@@ -1052,7 +1056,7 @@ encode_component_part({Type, SubType, Headers, PartParams, Body}) ->
             PartData
         );
 encode_component_part(Part) ->
-    ?log(debug, "encode_component_part couldn't match Part to: ~p~n", [Part]),
+    ?LOG_DEBUG("encode_component_part couldn't match Part to: ~p", [Part], ?LOGGER_META),
     [].
 
 encode_body(undefined, Body) ->
