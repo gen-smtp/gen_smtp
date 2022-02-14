@@ -1,4 +1,4 @@
-name: Doc
+name: Docs
 
 on:
   push:
@@ -11,14 +11,14 @@ on:
 jobs:
 
   docs:
-    name: Build EDoc on OTP ${{ matrix.otp }}
+    name: Generate docs on OTP ${{ matrix.otp }}
     runs-on: ${{ matrix.os }}
 
     strategy:
       matrix:
         os: [ubuntu-latest]
-        otp: ["24"]
-        rebar3: ["3.17.0"]
+        otp: ["24"] # https://www.erlang.org/downloads
+        rebar3: ["3.18.0"] # https://www.rebar3.org
 
     steps:
       - uses: actions/checkout@v2
@@ -35,5 +35,5 @@ jobs:
           key: ${{ runner.os }}-hex-${{ hashFiles('**/rebar.lock') }}
           restore-keys: ${{ runner.os }}-hex-
 
-      - name: Build EDoc
-        run: make docs
+      - name: Generate docs by ExDoc
+        run: rebar3 ex_doc
