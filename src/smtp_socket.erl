@@ -137,31 +137,10 @@ accept(Socket, Timeout) when is_port(Socket) ->
 accept(Socket, Timeout) ->
     case ssl:transport_accept(Socket, Timeout) of
         {ok, NewSocket} ->
-            ssl_handshake(NewSocket);
+            ssl:handshake(NewSocket);
         {error, _} = Error ->
             Error
     end.
-
--ifdef(OTP_RELEASE).
-ssl_handshake(Socket) ->
-    ssl:handshake(Socket).
-
-ssl_handshake(Socket, Options, Timeout) ->
-    ssl:handshake(Socket, Options, Timeout).
-
--else.
-ssl_handshake(Socket) ->
-    case ssl:ssl_accept(Socket) of
-        ok -> {ok, Socket};
-        {error, _} = Error -> Error
-    end.
-
-ssl_handshake(Socket, Options, Timeout) ->
-    case ssl:ssl_accept(Socket, Options, Timeout) of
-        {ok, _} = OK -> OK;
-        {error, _} = Error -> Error
-    end.
--endif.
 
 -spec send(Socket :: socket(), Data :: binary() | string() | iolist()) -> 'ok' | {'error', any()}.
 send(Socket, Data) when is_port(Socket) ->
@@ -276,7 +255,7 @@ to_ssl_server(Socket, Options) ->
     Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity'
 ) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
-    ssl_handshake(Socket, ssl_listen_options(Options), Timeout);
+    ssl:handshake(Socket, ssl_listen_options(Options), Timeout);
 to_ssl_server(_Socket, _Options, _Timeout) ->
     {error, already_ssl}.
 

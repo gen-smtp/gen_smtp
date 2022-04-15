@@ -88,10 +88,8 @@ compute_cram_digest(Key, Data) ->
     Bin = hmac_md5(Key, Data),
     list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
--ifdef(OTP_RELEASE).
 -if(?OTP_RELEASE >= 23).
 -define(CRYPTO_MAC, true).
--endif.
 -endif.
 
 -ifdef(CRYPTO_MAC).
