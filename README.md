@@ -205,7 +205,7 @@ Session options are:
 * `{allow_bare_newlines, false | ignore | fix | strip}` - see above
 * `{hostname, inet:hostname()}` - which hostname server should send in response
   to `HELO` / `EHLO` commands. Default: `inet:gethostname()`.
-* `{tls_options, [ssl:server_option()]}` - options to pass to `ssl:handshake/3` (OTP-21+) / `ssl:ssl_accept/3`
+* `{tls_options, [ssl:server_option()]}` - options to pass to `ssl:handshake/3`
   when `STARTTLS` command is sent by the client. Only needed if `STARTTLS` extension
   is enabled
 * `{protocol, smtp | lmtp}` - when `lmtp` is passed, the control flow of the
