@@ -36,7 +36,9 @@
     {hostname, smtp_util:guess_FQDN()},
     % how many retries per smtp host on temporary failure
     {retries, 1},
-    {on_transaction_error, quit}
+    {on_transaction_error, quit},
+    % smtp, lmtp
+    {protocol, smtp}
 ]).
 
 -define(AUTH_PREFERENCE, [
@@ -91,6 +93,7 @@
     | {password, string()}
     | {trace_fun, fun((Fmt :: string(), Args :: [any()]) -> any())}
     | {on_transaction_error, quit | reset}
+    | {protocol, smtp | lmtp}
 ].
 
 -type extensions() :: [{binary(), binary()}].
@@ -688,8 +691,13 @@ is_auth_password_prompt(_) -> false.
 
 -spec try_EHLO(Socket :: smtp_socket:socket(), Options :: options()) -> {ok, extensions()}.
 try_EHLO(Socket, Options) ->
+    Hallo =
+        case proplists:get_value(protocol, Options, smtp) of
+            lmtp -> "LHLO ";
+            _ -> "EHLO "
+        end,
     ok = smtp_socket:send(Socket, [
-        "EHLO ", proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"
+        Hallo, proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), "\r\n"
     ]),
     case read_possible_multiline_reply(Socket) of
         {ok, <<"500", _Rest/binary>>} ->
