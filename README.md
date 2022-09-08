@@ -86,6 +86,7 @@ The `send` method variants `send/2, send/3, send_blocking/2` take an `Options` a
   * **tls_options** used in `ssl:connect`, More info at http://erlang.org/doc/man/ssl.html . Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L46 . Any options not present in this list will be ignored.
   * **hostname** the hostname to be used by the smtp relay. Defaults to: `smtp_util:guess_FQDN()`. The hostname on your computer might not be correct, so set this to a valid value.
   * **retries** how many retries per smtp host on temporary failure. Defaults to 1, which means it will retry once if there is a failure.
+  * **protocol** valid values are `smtp`, `lmtp`. Default is `smtp`
 
 
 ### DKIM signing of outgoing emails

@@ -155,6 +155,7 @@ send(Email, Options) ->
 
 %% @doc Send an email nonblocking and invoke a callback with the result of the send.
 %% The callback will receive either `{ok, Receipt}' where Receipt is the SMTP server's receipt
+%% If it's using LMTP protocol, the callback will receive a list with the delivery response for each address `{ok, [{"foo@bar.com", "250 ok"}, {"bar@foo.com", "452 <bar@foo.com> is temporarily over quota"}]}`.
 %% identifier,  `{error, Type, Message}' or `{exit, ExitReason}', as the single argument.
 -spec send(Email :: email(), Options :: options(), Callback :: callback() | 'undefined') ->
     {'ok', pid()} | {'error', validate_options_error()}.
@@ -190,9 +191,11 @@ send(Email, Options, Callback) ->
 
 -spec send_blocking(Email :: email(), Options :: options()) ->
     binary()
+    | [{binary(), binary()}, ...]
     | smtp_session_error()
     | {error, validate_options_error()}.
 %% @doc Send an email and block waiting for the reply. Returns either a binary that contains
+%% If it's using LMTP protocol, it will return a list with the delivery response for each address `[{"foo@bar.com", "250 ok"}, {"bar@foo.com", "452 <bar@foo.com> is temporarily over quota"}]`.
 %% the SMTP server's receipt or `{error, Type, Message}' or `{error, Reason}'.
 send_blocking(Email, Options) ->
     NewOptions = lists:ukeymerge(
@@ -244,9 +247,10 @@ open(Options) ->
     end.
 
 -spec deliver(Socket :: smtp_client_socket(), Email :: email()) ->
-    {'ok', Receipt :: binary()} | {error, FailMsg :: failure()}.
+    {'ok', Receipt :: binary() | [{binary(), binary()}, ...]} | {error, FailMsg :: failure()}.
 %% @doc Deliver an email on an open smtp client socket.
 %% For use with a socket opened with open/1. The socket can be reused as long as the previous call to deliver/2 returned `{ok, Receipt}'.
+%% If it's using LMTP protocol, it will return a list with the delivery response for each address `{ok, [{"foo@bar.com", "250 ok"}, {"bar@foo.com", "452 <bar@foo.com> is temporarily over quota"}]}`.
 %% If the previous call to deliver/2 returned `{error, FailMsg}' and the option `{on_transaction_error, reset}' was given in the open/1 call,
 %% the socket <em>may</em> still be reused.
 deliver(#smtp_client_socket{} = SmtpClientSocket, Email) ->
@@ -398,11 +402,14 @@ open_smtp_session(Host, Options) ->
     Socket :: smtp_socket:socket(),
     Extensions :: extensions(),
     Options :: options()
-) -> binary().
+) -> binary() | [{binary(), binary()}, ...].
 try_sending_it({From, To, Body}, Socket, Extensions, Options) ->
     try_MAIL_FROM(From, Socket, Extensions, Options),
     try_RCPT_TO(To, Socket, Extensions, Options),
-    try_DATA(Body, Socket, Extensions, Options).
+    case proplists:get_value(protocol, Options) of
+        smtp -> try_DATA(Body, Socket, Extensions, Options);
+        lmtp -> try_lmtp_DATA(Body, To, Socket, Extensions, Options)
+    end.
 
 -spec try_MAIL_FROM(
     From :: email_address(),
@@ -505,6 +512,46 @@ try_DATA(Body, Socket, _Extensions, Options) ->
                     quit(Socket),
                     throw({permanent_failure, Msg})
             end;
+        {ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+            rset_or_quit(Socket),
+            throw({temporary_failure, Msg});
+        {ok, <<"4", _Rest/binary>> = Msg} ->
+            quit(Socket),
+            throw({temporary_failure, Msg});
+        {ok, <<"5", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+            rset_or_quit(Socket),
+            throw({permanent_failure, Msg});
+        {ok, Msg} ->
+            quit(Socket),
+            throw({permanent_failure, Msg})
+    end.
+
+-spec try_lmtp_DATA(
+    Body :: binary() | function(),
+    To :: [binary(), ...],
+    Socket :: smtp_socket:socket(),
+    Extensions :: extensions(),
+    Options :: options()
+) -> binary() | [{email_address(), binary() | string()}, ...].
+try_lmtp_DATA(Body, To, Socket, Extensions, Options) when is_function(Body) ->
+    try_lmtp_DATA(Body(), To, Socket, Extensions, Options);
+try_lmtp_DATA(Body, To, Socket, _Extensions, Options) ->
+    OnTxError = proplists:get_value(on_transaction_error, Options),
+    smtp_socket:send(Socket, "DATA\r\n"),
+    case read_possible_multiline_reply(Socket) of
+        {ok, <<"354", _Rest/binary>>} ->
+            %% Escape period at start of line (rfc5321 4.5.2)
+            EscapedBody = re:replace(Body, <<"^\\\.">>, <<"..">>, [
+                global, multiline, {return, binary}
+            ]),
+            smtp_socket:send(Socket, [EscapedBody, "\r\n.\r\n"]),
+            lists:map(
+                fun(Recipient) ->
+                    {ok, Receipt} = read_possible_multiline_reply(Socket),
+                    {Recipient, Receipt}
+                end,
+                To
+            );
         {ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
             rset_or_quit(Socket),
             throw({temporary_failure, Msg});
@@ -1120,6 +1167,106 @@ session_start_test_() ->
                     smtp_socket:send(X, "354 ok\r\n"),
                     ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
                     ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle single responses from DATA on LMTP connections", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {protocol, lmtp}],
+                    {ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(X, "220 \r\n"),
+                    ?assertMatch({ok, "LHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 Some banner\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)
+                    ),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle multiple successful responses from DATA on LMTP connections", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {protocol, lmtp}],
+                    {ok, _Pid} = send({"test@foo.com", ["foo@bar.com", "bar@foo.com"], "hello world"}, Options),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(X, "220 \r\n"),
+                    ?assertMatch({ok, "LHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 Some banner\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)
+                    ),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<bar@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle mixed responses from DATA on LMTP connections #1", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {protocol, lmtp}],
+                    {ok, _Pid} = send({"test@foo.com", ["foo@bar.com", "bar@foo.com"], "hello world"}, Options),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(X, "220 \r\n"),
+                    ?assertMatch({ok, "LHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 Some banner\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)
+                    ),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<bar@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n452 <bar@foo.com> is temporarily over quota\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle mixed responses from DATA on LMTP connections #2", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {protocol, lmtp}],
+                    {ok, _Pid} = send({"test@foo.com", ["foo@bar.com", "bar@foo.com"], "hello world"}, Options),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(X, "220 \r\n"),
+                    ?assertMatch({ok, "LHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 Some banner\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)
+                    ),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<bar@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "452 <bar@foo.com> is temporarily over quota\r\n"),
                     smtp_socket:send(X, "250 ok\r\n"),
                     ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
                     ok
