@@ -1103,6 +1103,29 @@ session_start_test_() ->
                 end}
             end,
             fun({ListenSock}) ->
+                {"use LHLO for LMTP connections", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}, {protocol, lmtp}],
+                    {ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(X, "220 \r\n"),
+                    ?assertMatch({ok, "LHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 Some banner\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)
+                    ),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
                 {"a valid complete transaction without TLS advertised should succeed", fun() ->
                     Options = [{relay, "localhost"}, {port, 9876}, {hostname, "testing"}],
                     {ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
