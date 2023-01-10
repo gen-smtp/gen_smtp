@@ -21,7 +21,7 @@ Also included is a MIME encoder/decoder, sorta according to RFC204{5,6,7}.
 
 IPv6 is also supported (at least serverside).
 
-SMTP server uses ranch as socket acceptor. It can use Ranch 1.7+, as well as 2.x.
+SMTP server uses ranch as socket acceptor. It can use Ranch 1.8+, as well as 2.x.
 
 I (Vagabond) have had a simple gen_smtp based SMTP server receiving and parsing
 copies of all my email for several months and its been able to handle over 100
@@ -44,7 +44,7 @@ thousand emails without leaking any RAM or crashing the erlang virtual machine.
 + [JOSHMARTIN GmbH](https://joshmartin.ch/) uses gen_smtp to send emails in [Hygeia](https://covid19-tracing.ch/) to send emails for contact tracing of SARS-CoV-2.
 + many libraries [depend on gen_smtp](https://hex.pm/packages/gen_smtp) according to hex.pm
 
-If you'd like to share your usage of gen_smtp, please submit a PR to this readme.
+If you'd like to share your usage of gen_smtp, please submit a PR to this `README.md`.
 
 # Usage
 
@@ -58,7 +58,7 @@ gen_smtp_client:send({"whatever@test.com", ["andrew@hijacked.us"],
   [{relay, "smtp.gmail.com"}, {username, "me@gmail.com"}, {password, "mypassword"}]).
 ```
 
-The From and To addresses will be wrapped in &lt;&gt;s if they aren't already,
+The From and To addresses will be wrapped in `<>` if they aren't already,
 TLS will be auto-negotiated if available (unless you pass `{tls, never}`) and
 authentication will by attempted by default since a username/password were
 specified (`{auth, never}` overrides this).
@@ -83,7 +83,7 @@ The `send` method variants `send/2, send/3, send_blocking/2` take an `Options` a
   * **auth** whether the smtp server needs authentication. Valid values are `if_available`, `always`, and `never`. Defaults to `if_available`. If your smtp relay requires authentication set it to `always`
   * **ssl** whether to connect on 465 in ssl mode. Defaults to `false`
   * **tls** valid values are `always`, `never`, `if_available`. Most modern smtp relays use tls, so set this to `always`. Defaults to `if_available`
-  * **tls_options** used in `ssl:connect`, More info at http://erlang.org/doc/man/ssl.html . Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L46 . Any options not present in this list will be ignored.
+  * **tls_options** used in `ssl:connect`, More info at [Erlang documentation - ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: [smtp_socket.erl#L50 - SSL_CONNECT_OPTIONS](https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L50) . Any options not present in this list will be ignored.
   * **hostname** the hostname to be used by the smtp relay. Defaults to: `smtp_util:guess_FQDN()`. The hostname on your computer might not be correct, so set this to a valid value.
   * **retries** how many retries per smtp host on temporary failure. Defaults to 1, which means it will retry once if there is a failure.
   * **protocol** valid values are `smtp`, `lmtp`. Default is `smtp`
@@ -102,7 +102,9 @@ openssl rsa -in private-key.pem -out public-key.pem -pubout
 
 # Ed25519 - Erlang/OTP 24.1+ only!
 openssl genpkey -algorithm ed25519 -out private-key.pem
-openssl pkey -in private-key.pem -out public-key.pem -pubout
+openssl pkey -in private-key.pem -pubout -out public-key.pem
+# DKIM DNS record p value for Ed25519 must only contain Base64 encoded public key, without ASN.1
+openssl asn1parse -in public-key.pem -offset 12 -noout -out /dev/stdout | openssl base64
 ```
 
 To send DKIM-signed email:
@@ -112,7 +114,7 @@ To send DKIM-signed email:
 DKIMOptions = [
     {s, <<"foo.bar">>},
     {d, <<"example.com">>},
-	{private_key, {pem_plain, PrivKey}}]}
+    {private_key, {pem_plain, PrivKey}}]}
     %{private_key, {pem_encrypted, EncryptedPrivKey, "password"}}
 ],
 SignedMailBody = \
