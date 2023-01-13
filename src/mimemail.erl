@@ -916,28 +916,190 @@ has_lines_over_998(Bin, {FoundAt, 2}, _, Pattern) ->
         Bin, binary:match(Bin, Pattern, [{scope, {NewOffset, Len}}]), NewOffset, Pattern
     ).
 
+-spec encode_parameters([{Name :: binary(), Value :: binary()}]) -> [Parameter :: binary()].
 encode_parameters([[]]) ->
     [];
 encode_parameters(Parameters) ->
-    [encode_parameter(Parameter) || Parameter <- Parameters].
+    lists:foldr(
+        fun({Name, Value}, Acc) ->
+            {Method, EncLen} = decide_param_encoding_method(Value),
+            EncParams = encode_parameter(Method, Name, Value, EncLen),
+            EncParams ++ Acc
+        end,
+        [],
+        Parameters
+    ).
 
-encode_parameter({X, Y}) ->
-    YEnc = rfc2047_utf8_encode(Y, byte_size(X) + 3, <<"\t">>),
-    case escape_tspecial(YEnc, false, <<>>) of
-        {true, Special} -> [X, $=, $", Special, $"];
-        false -> [X, $=, YEnc]
+%% Encode a parameter value according to the determined representation
+%% (see decide_param_encoding_method/1).
+%%
+%% If necessary, ie when lines would become longer than 76 characters
+%% (leaving room for the leading continuation WSP and the ending semicolon),
+%% the values are folded following the schema described in RFC2231 section 3.
+-spec encode_parameter(
+    Method :: (plain | quote | encode | encode_utf8), Name :: binary(), Value :: binary(), EncLen :: non_neg_integer()
+) -> [ChunkParameter :: binary()].
+encode_parameter(Method, Name, Value, EncLen) ->
+    encode_parameter(Method, Name, 0, Value, EncLen, []).
+
+encode_parameter(_Method, _Name, _Index, <<>>, _EncLen, Acc) ->
+    lists:reverse(Acc);
+encode_parameter(encode_utf8, Name, 0, Value, EncLen, _Acc) when byte_size(Name) + 9 + EncLen =< 76 ->
+    {Encoded, <<>>} = encode_param_value(encode, Value, 67 - byte_size(Name)),
+    [<<Name/binary, "*=UTF-8''", Encoded/binary>>];
+encode_parameter(encode_utf8, Name, 0, Value, EncLen, Acc) ->
+    {Encoded, More} = encode_param_value(encode, Value, 65 - byte_size(Name)),
+    encode_parameter(encode, Name, 1, More, EncLen, [<<Name/binary, "*0*=UTF-8''", Encoded/binary>> | Acc]);
+encode_parameter(encode, Name, 0, Value, EncLen, _Acc) when byte_size(Name) + 4 + EncLen =< 76 ->
+    {Encoded, <<>>} = encode_param_value(encode, Value, 72 - byte_size(Name)),
+    [<<Name/binary, "*=''", Encoded/binary>>];
+encode_parameter(encode, Name, 0, Value, EncLen, Acc) ->
+    Prefix = <<Name/binary, $*, $0, $*>>,
+    {Encoded, More} = encode_param_value(encode, Value, 73 - byte_size(Prefix)),
+    encode_parameter(encode, Name, 1, More, EncLen, [<<Prefix/binary, "=''", Encoded/binary>> | Acc]);
+encode_parameter(encode, Name, Index, Value, EncLen, Acc) ->
+    Prefix = <<Name/binary, $*, (integer_to_binary(Index))/binary, $*>>,
+    {Encoded, More} = encode_param_value(encode, Value, 75 - byte_size(Prefix)),
+    encode_parameter(encode, Name, Index + 1, More, EncLen, [<<Prefix/binary, "=", Encoded/binary>> | Acc]);
+encode_parameter(quote, Name, 0, Value, EncLen, _Acc) when byte_size(Name) + 2 + EncLen + 1 =< 76 ->
+    {Quoted, <<>>} = encode_param_value(quote, Value, 73 - byte_size(Name)),
+    [<<Name/binary, $=, $", Quoted/binary, $">>];
+encode_parameter(quote, Name, Index, Value, EncLen, Acc) ->
+    Prefix = <<Name/binary, $*, (integer_to_binary(Index))/binary>>,
+    {Quoted, More} = encode_param_value(quote, Value, 73 - byte_size(Prefix)),
+    encode_parameter(quote, Name, Index + 1, More, EncLen, [<<Prefix/binary, $=, $", Quoted/binary, $">> | Acc]);
+encode_parameter(plain, Name, 0, Value, EncLen, _Acc) when byte_size(Name) + 1 + EncLen =< 76 ->
+    {Plain, <<>>} = encode_param_value(plain, Value, 75 - byte_size(Name)),
+    [<<Name/binary, $=, Plain/binary>>];
+encode_parameter(plain, Name, Index, Value, EncLen, Acc) ->
+    Prefix = <<Name/binary, $*, (integer_to_binary(Index))/binary>>,
+    {Plain, More} = encode_param_value(plain, Value, 75 - byte_size(Prefix)),
+    encode_parameter(plain, Name, Index + 1, More, EncLen, [<<Prefix/binary, $=, Plain/binary>> | Acc]).
+
+%% Encode a parameter value according to the method
+%% given as the first argument.
+-spec encode_param_value(Method :: (plain | quote | encode), Value :: binary(), Len :: integer()) ->
+    {Chunk :: binary(), Rest :: binary()}.
+encode_param_value(plain, Value, Len) ->
+    %% No encoding necessary, return (part of) the
+    %% value as-is.
+    Len1 = max(Len, 1),
+    case Value of
+        <<Part:Len1/bytes, More/binary>> ->
+            {Part, More};
+        _ ->
+            {Value, <<>>}
+    end;
+encode_param_value(quote, Value, Len) ->
+    %% See encode_param_value_quote/3
+    encode_param_value_quote(Value, Len, <<>>);
+encode_param_value(encode, Value, Len) ->
+    %% See encode_param_value_encode/3
+    encode_param_value_encode(Value, Len, <<>>).
+
+%% Encode (part of) a parameter value by quoting.
+%% " and \ are escaped by preceding it with a \,
+%% everything else remains as-is.
+encode_param_value_quote(<<>>, _Len, Acc) ->
+    {Acc, <<>>};
+encode_param_value_quote(All = <<C, More/binary>>, Len, Acc) ->
+    case C =:= $" orelse C =:= $\\ of
+        true when Len >= 2; Acc =:= <<>> ->
+            encode_param_value_quote(More, Len - 2, <<Acc/binary, $\\, C>>);
+        false when Len >= 1; Acc =:= <<>> ->
+            encode_param_value_quote(More, Len - 1, <<Acc/binary, C>>);
+        _ ->
+            {Acc, All}
     end.
 
-% See also: http://www.ietf.org/rfc/rfc2045.txt section 5.1
-escape_tspecial(<<>>, false, _Acc) ->
-    false;
-escape_tspecial(<<>>, IsSpecial, Acc) ->
-    {IsSpecial, Acc};
-escape_tspecial(<<C, Rest/binary>>, _IsSpecial, Acc) when C =:= $" ->
-    escape_tspecial(Rest, true, <<Acc/binary, $\\, $">>);
-escape_tspecial(<<C, Rest/binary>>, _IsSpecial, Acc) when C =:= $\\ ->
-    escape_tspecial(Rest, true, <<Acc/binary, $\\, $\\>>);
-escape_tspecial(<<C, Rest/binary>>, _IsSpecial, Acc) when
+%% Encode (part of) a parameter value according to RFC2231.
+%% Tspecials, CTLs, spaces, *, ', % and the bytes of
+%% multi-byte UTF-8 characters are encoded as a % followed
+%% by the hex representation of the byte values.
+%% Everything else remains as-is.
+encode_param_value_encode(<<>>, _Len, Acc) ->
+    {Acc, <<>>};
+encode_param_value_encode(All = <<C, More/binary>>, Len, Acc) when
+    C =< 16#1F;
+    C =:= 16#7F;
+    C =:= $(;
+    C =:= $);
+    C =:= $<;
+    C =:= $>;
+    C =:= $@;
+    C =:= $,;
+    C =:= $;;
+    C =:= $:;
+    C =:= $/;
+    C =:= $[;
+    C =:= $];
+    C =:= $?;
+    C =:= $=;
+    C =:= $\s;
+    C =:= $*;
+    C =:= $';
+    C =:= $%
+->
+    case Len >= 3 orelse Acc =:= <<>> of
+        true ->
+            <<N1:4, N2:4>> = <<C>>,
+            encode_param_value_encode(More, Len - 3, <<Acc/binary, $%, (hex(N1)), (hex(N2))>>);
+        false ->
+            {Acc, All}
+    end;
+encode_param_value_encode(All = <<C, More/binary>>, Len, Acc) ->
+    case C >= 16#80 of
+        true when Len >= 3; Acc =:= <<>> ->
+            <<N1:4, N2:4>> = <<C>>,
+            encode_param_value_encode(More, Len - 3, <<Acc/binary, $%, (hex(N1)), (hex(N2))>>);
+        false when Len >= 1; Acc =:= <<>> ->
+            encode_param_value_encode(More, Len - 1, <<Acc/binary, C>>);
+        _ ->
+            {Acc, All}
+    end.
+
+%% Analyze a parameter value and decide how it must be represented based
+%% on the characters contained. At the same time, calculate the number of
+%% bytes the value will take up when encoded for the determined representation.
+%%
+%% plain - value contains no tspecials, CTLs or UTF-8 characters -> representation as-is
+%% quote - value contains tspecials (but no CTLs or UTF-8 characters) -> must be quoted
+%% encode - value contains CTLs -> must be encoded according to RFC2231
+%% encode_utf8 - value contains UTF-8 characters -> must be encoded according to RFC2231
+-spec decide_param_encoding_method(Value :: binary()) ->
+    {Method :: (plain | quote | encode | encode_utf8), EncodedLength :: non_neg_integer()}.
+decide_param_encoding_method(Value) ->
+    decide_param_encoding_method(Value, plain, 0, 0, 0).
+
+decide_param_encoding_method(<<>>, Method, LP, LQ, LE) ->
+    L =
+        case Method of
+            plain ->
+                %% LP contains the length for method plain
+                LP;
+            quote ->
+                %% LQ contains the length for method quote
+                LQ;
+            encode ->
+                %% LE contains the length for method encode
+                LE;
+            encode_utf8 ->
+                %% LE contains the length for method encode_utf8
+                LE
+        end,
+    {Method, L};
+decide_param_encoding_method(<<C/utf8, Rest/binary>>, Method, LP, LQ, LE) when byte_size(<<C/utf8>>) > 1 ->
+    %% multibyte UTF-8 requires encoding and charset; requires 3 bytes
+    decide_param_encoding_method(
+        Rest, change_param_encoding_method(Method, encode_utf8), LP, LQ, LE + 3 * byte_size(<<C/utf8>>)
+    );
+decide_param_encoding_method(<<C, Rest/binary>>, Method, LP, LQ, LE) when C =< 16#1F; C >= 16#7F ->
+    %% CTLs and upper ASCII requires encoding; requires 3 bytes
+    decide_param_encoding_method(Rest, change_param_encoding_method(Method, encode), LP, LQ, LE + 3);
+decide_param_encoding_method(<<C, Rest/binary>>, Method, LP, LQ, LE) when C =:= $"; C =:= $\\ ->
+    %% " and \ requires quoting; requires 2 bytes when quoting is used, 3 when encoding is used
+    decide_param_encoding_method(Rest, change_param_encoding_method(Method, quote), LP, LQ + 2, LE + 3);
+decide_param_encoding_method(<<C, Rest/binary>>, Method, LP, LQ, LE) when
     C =:= $(;
     C =:= $);
     C =:= $<;
@@ -953,9 +1115,32 @@ escape_tspecial(<<C, Rest/binary>>, _IsSpecial, Acc) when
     C =:= $=;
     C =:= $\s
 ->
-    escape_tspecial(Rest, true, <<Acc/binary, C>>);
-escape_tspecial(<<C, Rest/binary>>, IsSpecial, Acc) ->
-    escape_tspecial(Rest, IsSpecial, <<Acc/binary, C>>).
+    %% tspecials require quoting
+    decide_param_encoding_method(Rest, change_param_encoding_method(Method, quote), LP, LQ + 1, LE + 3);
+decide_param_encoding_method(<<C, Rest/binary>>, Method, LP, LQ, LE) when C =:= $*; C =:= $'; C =:= $% ->
+    %% *, ' and % require 3 bytes when encoding is used, otherwise 1
+    decide_param_encoding_method(Rest, Method, LP + 1, LQ + 1, LE + 3);
+decide_param_encoding_method(<<_, Rest/binary>>, Method, LP, LQ, LE) ->
+    %% plain characters require 1 byte
+    decide_param_encoding_method(Rest, Method, LP + 1, LQ + 1, LE + 1).
+
+-spec change_param_encoding_method(CurMethod, NewMethod) -> Method when
+    CurMethod :: Method, NewMethod :: Method, Method :: (plain | quote | encode | encode_utf8).
+change_param_encoding_method(Method, Method) ->
+    %% no change
+    Method;
+change_param_encoding_method(CurMethod, NewMethod) ->
+    %% between the current and the new encoding method, pick the highest-ranking
+    change_param_encoding_method([encode_utf8, encode, quote], CurMethod, NewMethod).
+
+change_param_encoding_method([CurMethod | _More], CurMethod, _NewMethod) ->
+    CurMethod;
+change_param_encoding_method([NewMethod | _More], _CurMethod, NewMethod) ->
+    NewMethod;
+change_param_encoding_method([_ | More], CurMethod, NewMethod) ->
+    change_param_encoding_method(More, CurMethod, NewMethod);
+change_param_encoding_method([], _CurMethod, NewMethod) ->
+    NewMethod.
 
 encode_headers([]) ->
     [];
@@ -2354,18 +2539,90 @@ encode_parameter_test_() ->
     [
         {"Token", fun() ->
             ?assertEqual(
-                [[<<"a">>, $=, <<"abcdefghijklmnopqrstuvwxyz$%&*#!">>]],
+                [<<"a=abcdefghijklmnopqrstuvwxyz$%&*#!">>],
                 encode_parameters([{<<"a">>, <<"abcdefghijklmnopqrstuvwxyz$%&*#!">>}])
+            ),
+            ?assertEqual(
+                [<<"a=12345678901234567890123456789012345678901234567890123456789012345678901234">>],
+                encode_parameters([
+                    {<<"a">>, <<"12345678901234567890123456789012345678901234567890123456789012345678901234">>}
+                ])
+            ),
+            ?assertEqual(
+                [
+                    <<"a*0=123456789012345678901234567890123456789012345678901234567890123456789012">>,
+                    <<"a*1=345">>
+                ],
+                encode_parameters([
+                    {<<"a">>, <<"123456789012345678901234567890123456789012345678901234567890123456789012345">>}
+                ])
             )
         end},
         {"TSpecial", fun() ->
             Special = " ()<>@,;:/[]?=",
             [
-                ?assertEqual([[<<"a">>, $=, $", <<C>>, $"]], encode_parameters([{<<"a">>, <<C>>}]))
+                ?assertEqual([<<"a=", $", C, $">>], encode_parameters([{<<"a">>, <<C>>}]))
              || C <- Special
             ],
-            ?assertEqual([[<<"a">>, $=, $", <<$\\, $">>, $"]], encode_parameters([{<<"a">>, <<$">>}])),
-            ?assertEqual([[<<"a">>, $=, $", <<$\\, $\\>>, $"]], encode_parameters([{<<"a">>, <<$\\>>}]))
+            ?assertEqual([<<"a=", $", $\\, $", $">>], encode_parameters([{<<"a">>, <<$">>}])),
+            ?assertEqual([<<"a=", $", $\\, $\\, $">>], encode_parameters([{<<"a">>, <<$\\>>}])),
+            ?assertEqual(
+                [<<"a=\"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12\"">>],
+                encode_parameters([
+                    {<<"a">>, <<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 12">>}
+                ])
+            ),
+            ?assertEqual(
+                [
+                    <<"a*0=\"123456789 123456789 123456789 123456789 123456789 123456789 123456789 \"">>,
+                    <<"a*1=\"123\"">>
+                ],
+                encode_parameters([
+                    {<<"a">>, <<"123456789 123456789 123456789 123456789 123456789 123456789 123456789 123">>}
+                ])
+            )
+        end},
+        {"RFC2231 encoded", fun() ->
+            ?assertEqual(
+                [<<"a*=''1234567%001234567%001234567%001234567%001234567%001234567%001234567%001">>],
+                encode_parameters([
+                    {<<"a">>,
+                        <<"1234567", 0, "1234567", 0, "1234567", 0, "1234567", 0, "1234567", 0, "1234567", 0, "1234567",
+                            0, "1">>}
+                ])
+            ),
+            ?assertEqual(
+                [
+                    <<"a*0*=''1234567%001234567%001234567%001234567%001234567%001234567%001234567">>,
+                    <<"a*1*=%0012">>
+                ],
+                encode_parameters([
+                    {<<"a">>,
+                        <<"1234567", 0, "1234567", 0, "1234567", 0, "1234567", 0, "1234567", 0, "1234567", 0, "1234567",
+                            0, "12">>}
+                ])
+            )
+        end},
+        {"RFC2231 encoded with UTF-8", fun() ->
+            ?assertEqual(
+                [<<"a*=UTF-8''1234%C2%A01234%C2%A01234%C2%A01234%C2%A01234%C2%A01234%C2%A01234">>],
+                encode_parameters([
+                    {<<"a">>,
+                        <<"1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0,
+                            "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0, "1234">>}
+                ])
+            ),
+            ?assertEqual(
+                [
+                    <<"a*0*=UTF-8''1234%C2%A01234%C2%A01234%C2%A01234%C2%A01234%C2%A01234%C2%A01234">>,
+                    <<"a*1*=%C2%A0">>
+                ],
+                encode_parameters([
+                    {<<"a">>,
+                        <<"1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0,
+                            "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0, "1234", 16#c2, 16#a0>>}
+                ])
+            )
         end}
     ].
 
@@ -2437,9 +2694,19 @@ rfc2047_decode_test_() ->
         end},
         {"multiple unicode email addresses", fun() ->
             ?assertEqual(
-                <<"Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>, Jacek Złydach <jacek.zlydach@erlang-solutions.com>, chak de planet óóóó <jz@erlang-solutions.com>"/utf8>>,
+                <<
+                    "Jacek Złydach <jacek.zlydach@erlang-solutions.com>, "
+                    "chak de planet óóóó <jz@erlang-solutions.com>, "
+                    "Jacek Złydach <jacek.zlydach@erlang-solutions.com>, "
+                    "chak de planet óóóó <jz@erlang-solutions.com>"/utf8
+                >>,
                 decode_header(
-                    <<"=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>, =?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, =?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>">>,
+                    <<
+                        "=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, "
+                        "=?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>, "
+                        "=?UTF-8?B?SmFjZWsgWsWCeWRhY2g=?= <jacek.zlydach@erlang-solutions.com>, "
+                        "=?UTF-8?B?Y2hhayBkZSBwbGFuZXQgw7PDs8Ozw7M=?= <jz@erlang-solutions.com>"
+                    >>,
                     "utf-8"
                 )
             )
@@ -2641,14 +2908,14 @@ encoding_test_() ->
                 "\r\n"
                 "--_=boundary-123=_\r\n"
                 "Content-Type: application/pdf;\r\n"
-                "\tname=\"=?UTF-8?Q?=C4=8Cia_labai_ilgas_el=2E_lai=C5=A1ko_priedo_pavadinima?=\r\n"
-                "\t=?UTF-8?Q?s_su_lietuvi=C5=A1komis_ar_kokiomis_kitomis_ne_ascii_raid?=\r\n"
-                "\t=?UTF-8?Q?=C4=97mis=2Epdf?=\";\r\n"
+                "\tname*0*=UTF-8''%C4%8Cia%20labai%20ilgas%20el.%20lai%C5%A1ko%20priedo%20pavad;\r\n"
+                "\tname*1*=inimas%20su%20lietuvi%C5%A1komis%20ar%20kokiomis%20kitomis%20ne%20as;\r\n"
+                "\tname*2*=cii%20raid%C4%97mis.pdf;\r\n"
                 "\tdisposition=attachment\r\n"
                 "Content-Disposition: attachment;\r\n"
-                "\tfilename=\"=?UTF-8?Q?=C4=8Cia_labai_ilgas_el=2E_lai=C5=A1ko_priedo_pavadi?=\r\n"
-                "\t=?UTF-8?Q?nimas_su_lietuvi=C5=A1komis_ar_kokiomis_kitomis_ne_ascii_raid?=\r\n"
-                "\t=?UTF-8?Q?=C4=97mis=2Epdf?=\"\r\n"
+                "\tfilename*0*=UTF-8''%C4%8Cia%20labai%20ilgas%20el.%20lai%C5%A1ko%20priedo%20p;\r\n"
+                "\tfilename*1*=avadinimas%20su%20lietuvi%C5%A1komis%20ar%20kokiomis%20kitomis;\r\n"
+                "\tfilename*2*=%20ne%20ascii%20raid%C4%97mis.pdf\r\n"
                 "\r\n"
                 "data\r\n"
                 "--_=boundary-123=_--\r\n"
@@ -2666,7 +2933,14 @@ encoding_test_() ->
                     ],
                     #{}, <<"This is a plain message">>},
             Result =
-                <<"From: \"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>\r\nMessage-ID: <abcd@example.com>\r\nMIME-Version: 1.0\r\nDate: Sun, 01 Nov 2009 14:44:47 +0200\r\n\r\nThis is a plain message">>,
+                <<
+                    "From: \"Admin & ' ( \\\"hallo\\\" ) ; , [ ] WS\" <a@example.com>\r\n"
+                    "Message-ID: <abcd@example.com>\r\n"
+                    "MIME-Version: 1.0\r\n"
+                    "Date: Sun, 01 Nov 2009 14:44:47 +0200\r\n"
+                    "\r\n"
+                    "This is a plain message"
+                >>,
             ?assertEqual(Result, encode(Email))
         end},
         {"multipart/alternative email", fun() ->
