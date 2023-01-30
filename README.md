@@ -227,7 +227,7 @@ gen_smtp_client:send(
     [{relay, "localhost"}, {port, 2525}]).
 ```
 
-If you want to listen on IPv6, you can use the `{family, inet6}` and `{address, "::"}` options to enable listening on IPv6.
+If you want to listen on IPv6, you can use the `{family, inet6}` and `{address, {0, 0, 0, 0, 0, 0, 0, 0}}` options to enable listening on IPv6.
 
 Please notice that when using the LMTP protocol, the `handle_EHLO` callback will be used
 to handle the `LHLO` command as defined in [RFC2033](https://tools.ietf.org/html/rfc2033),
