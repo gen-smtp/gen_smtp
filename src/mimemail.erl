@@ -34,7 +34,7 @@
 %% header value.
 %%
 %% `Parameters' is a list of 3 key/value tuples. The 3 keys are `<<"content-type-params">>',
-%% `<<"dispisition">>' and `<<"disposition-params">>'.
+%% `<<"disposition">>' and `<<"disposition-params">>'.
 %% `content-type-params' is a key/value list of parameters on the content-type header, this
 %% usually consists of things like charset and the format parameters. `disposition' indicates
 %% how the data wants to be displayed, this is usually 'inline'. `disposition-params' is a list of
