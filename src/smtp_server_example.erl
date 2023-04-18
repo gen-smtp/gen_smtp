@@ -293,7 +293,7 @@ handle_info(_Info, State) ->
 %% Return {ok, State} to let gen_smtp decide how to act or {stop, Reason, #state{}}
 %% to stop the process with reason Reason immediately.
 -spec handle_error(gen_smtp_server_session:error_class(), any(), #state{}) ->
-    {ok, State} | {stop, any(), State}.
+    {ok, #state{}} | {stop, any(), #state{}}.
 handle_error(Class, Details, State) ->
     ?LOG_INFO("handle_error(~p, ~p, ~p)", [Class, Details, State], ?LOGGER_META),
     {ok, State}.
