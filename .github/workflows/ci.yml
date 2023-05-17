@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-20.04]
-        otp: ["25", "24", "23", "22"]
+        otp: ["26", "25", "24", "23", "22"]
         rebar3: ["3.18.0"]
         profile: [test, ranch_v2]
         include:
