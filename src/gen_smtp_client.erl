@@ -87,6 +87,7 @@
     | {relay, inet:ip_address() | inet:hostname()}
     | {no_mx_lookups, boolean()}
     | {auth, always | never | if_available}
+    | {auth_types, list()}
     | {hostname, string()}
     | {retries, non_neg_integer()}
     | {username, string()}
@@ -635,7 +636,22 @@ do_AUTH(Socket, Username, Password, Types, Options) ->
     trace(Options, "Fixed types: ~p~n", [FixedTypes]),
     AllowedTypes = [X || X <- ?AUTH_PREFERENCE, lists:member(X, FixedTypes)],
     trace(Options, "available authentication types, in order of preference: ~p~n", [AllowedTypes]),
-    do_AUTH_each(Socket, Username, Password, AllowedTypes, Options).
+    % get auth_types option, but default to the the full list of supported auth types
+    RequestedTypes = proplists:get_value(auth_types, Options, ?AUTH_PREFERENCE),
+    % make sure they are all charlists
+    RequestedTypes2 = lists:map(fun(X) ->
+      case X of
+        Y when is_binary(Y) ->
+          binary_to_list(Y);
+        Y ->
+          Y
+      end
+    end, RequestedTypes),
+    trace(Options, "Requested types: ~p~n", [RequestedTypes2]),
+    % get list of requested auth types that are supported by the server
+    AllowedAndRequestedTypes = lists:filter(fun(AuthType) -> lists:member(AuthType, RequestedTypes2) end, AllowedTypes),
+    trace(Options, "Allowed and requested types: ~p~n", [AllowedAndRequestedTypes]),
+    do_AUTH_each(Socket, Username, Password, AllowedAndRequestedTypes, Options).
 
 -spec do_AUTH_each(
     Socket :: smtp_socket:socket(),
