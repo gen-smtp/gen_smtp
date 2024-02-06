@@ -42,6 +42,7 @@ thousand emails without leaking any RAM or crashing the erlang virtual machine.
 + [Chicago Boss](http://www.chicagoboss.org/) uses gen_smtp for its mail API.
 + [Gmailbox](https://www.gmailbox.org) uses gen_smtp to provide a free email forwarding service.
 + [JOSHMARTIN GmbH](https://joshmartin.ch/) uses gen_smtp to send emails in [Hygeia](https://covid19-tracing.ch/) to send emails for contact tracing of SARS-CoV-2.
++ [hookup.email](https://hookup.email) uses gen_smtp to receive and parse emails the service forwards to webhooks, APIs, or any other HTTP application.
 + many libraries [depend on gen_smtp](https://hex.pm/packages/gen_smtp) according to hex.pm
 
 If you'd like to share your usage of gen_smtp, please submit a PR to this `README.md`.
