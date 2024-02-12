@@ -83,8 +83,9 @@ The `send` method variants `send/2, send/3, send_blocking/2` take an `Options` a
   * **password** the password of the smtp relay e.g. `"mypassword"`
   * **auth** whether the smtp server needs authentication. Valid values are `if_available`, `always`, and `never`. Defaults to `if_available`. If your smtp relay requires authentication set it to `always`
   * **ssl** whether to connect on 465 in ssl mode. Defaults to `false`
+  * **sockopts** used for the initial plain or SSL/TLS TCP connection. More info at Erlang documentation [gen_tcp](https://www.erlang.org/doc/man/gen_tcp.html) and [ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[binary, {packet, line}, {keepalive, true}, {active, false}]`.
   * **tls** valid values are `always`, `never`, `if_available`. Most modern smtp relays use tls, so set this to `always`. Defaults to `if_available`
-  * **tls_options** used in `ssl:connect`, More info at [Erlang documentation - ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: [smtp_socket.erl#L50 - SSL_CONNECT_OPTIONS](https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L50) .
+  * **tls_options** used for `STARTTLS` upgrades in `ssl:connect`, More info at [Erlang documentation - ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: [smtp_socket.erl#L50 - SSL_CONNECT_OPTIONS](https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L50) .
   * **hostname** the hostname to be used by the smtp relay. Defaults to: `smtp_util:guess_FQDN()`. The hostname on your computer might not be correct, so set this to a valid value.
   * **retries** how many retries per smtp host on temporary failure. Defaults to 1, which means it will retry once if there is a failure.
   * **protocol** valid values are `smtp`, `lmtp`. Default is `smtp`
