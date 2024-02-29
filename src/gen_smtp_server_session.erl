@@ -206,7 +206,7 @@ init([Ref, Transport, Socket, Module, Options]) ->
                 {error, _} -> error
             end;
         _ ->
-            case read_proxy_protocol(Transport, Socket, <<>>) of
+            case read_proxy_protocol(Transport, Socket) of
                 {ok, IpAddr} ->
                     IpAddr;
                 _ ->
@@ -1419,52 +1419,27 @@ report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
 % parse proxy protocol
 % http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
 
-read_proxy_protocol(Transport, Socket, Data1) ->
+read_proxy_protocol(Transport, Socket) ->
+    ok = Transport:setopts(Socket, [{packet, line}, binary]),
     case Transport:recv(Socket, 0, 5000) of
-        {ok, Data0} ->
-            Data = <<Data1/binary, Data0/binary>>,
-            case byte_size(Data) >=6 of
-                true ->
-                    case Data of
-                        <<"PROXY ", _/binary>> ->
-                            case binary:split(Data, <<"\r\n">>) of
-                                [ProxyBuffer, Rest] ->
-                                    case parse_proxy_protocol_buffer(ProxyBuffer) of
-                                        {ok, IpBin} ->
-                                            <<>> = Rest,
-                                            inet:parse_address(binary_to_list(IpBin));
-                                        _ ->
-                                            ?LOG_ERROR("failed to parse proxy protocol.", []),
-                                            {error, invalid_protocol}
-                                    end;
-                                _ ->
-                                    % a 108-byte buffer is always enough to store the entire proxy line
-                                    case byte_size(Data) >= 108 of
-                                        true ->
-                                            ?LOG_ERROR("failed to parse proxy protocol -> packet size exceedded", []),
-                                            {error, packet_size_exceeded};
-                                        _ ->
-                                            read_proxy_protocol(Transport, Socket, Data)
-                                    end
-                            end;
+        {ok, Data} ->
+            case Data of
+                <<"PROXY ", _/binary>> ->
+                    case binary:split(Data, <<" ">>, [global]) of
+                        [<<"PROXY">>, InetFamily, SrcIp, _DstIp, _SrcPort, _DstPort] when InetFamily == <<"TCP4">> orelse InetFamily == <<"TCP6">> ->
+                            inet:parse_address(binary_to_list(SrcIp));
                         _ ->
-                            % we don't have a proxy
-                            ?LOG_WARNING("no expected proxy protocol found ...", []),
-                            {error, no_proxy_protocol}
+                            ?LOG_ERROR("unexpected proxy protocol found: ~p.", [Data]),
+                            {error, invalid_proxy_protocol}
                     end;
                 _ ->
-                    read_proxy_protocol(Transport, Socket, Data)
+                    % misconfiguration.
+                    ?LOG_ERROR("unexpected proxy protocol found: ~p.", [Data]),
+                    {error, invalid_proxy_protocol}
             end;
         Error ->
+            ?LOG_ERROR("read_proxy_protocol receiving proxy data failed with ~p.", [Error]),
             Error
-    end.
-
-parse_proxy_protocol_buffer(Buffer) ->
-    case binary:split(Buffer, <<" ">>, [global]) of
-        [<<"PROXY">>, InetFamily, SrcIp, _DstIp, _SrcPort, _DstPort] when InetFamily == <<"TCP4">> orelse InetFamily == <<"TCP6">> ->
-            {ok, SrcIp};
-        _ ->
-            false
     end.
 
 -ifdef(TEST).
