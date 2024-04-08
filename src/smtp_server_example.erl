@@ -345,7 +345,7 @@ queue_or_deliver(From, To, Data, Reference, State) ->
             ),
             % ... should actually handle the email,
             %     if `ok` is returned we are taking the responsibility of the delivery.
-            {ok, ["queued as ~s", Reference], State};
+            {ok, ["queued as ", Reference], State};
         lmtp ->
             ?LOG_INFO("message from ~s delivered to ~p, body length ~p", [From, To, Length], ?LOGGER_META),
             Multiple = [{ok, ["delivered to ", Recipient]} || Recipient <- To],

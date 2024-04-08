@@ -179,7 +179,7 @@ DATA
 354 enter mail, end with line containing only '.'
 Good evening gentlemen, all your base are belong to us.
 .
-250 queued as #Ref<0.0.0.47>
+250 queued as d98ae19ee87f0741ac9ba90d7046f0c5
 QUIT
 221 Bye
 Connection closed by foreign host.
