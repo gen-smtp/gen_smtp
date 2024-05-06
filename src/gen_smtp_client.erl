@@ -850,13 +850,14 @@ connect(Host, Options) ->
             undefined -> [];
             Other -> Other
         end,
-    SockOpts = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
-    Proto =
+    SockOpts0 = [binary, {packet, line}, {keepalive, true}, {active, false} | AddSockOpts],
+    {Proto, SockOpts} =
         case proplists:get_value(ssl, Options) of
             true ->
-                ssl;
+                %% for ssl need to add tls_options to connect (see smtp_socket:connect/5)
+                {ssl, lists:append(SockOpts0, proplists:get_value(tls_options, Options, []))};
             _ ->
-                tcp
+                {tcp, SockOpts0}
         end,
     Port =
         case proplists:get_value(port, Options) of
