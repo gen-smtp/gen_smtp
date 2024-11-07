@@ -898,7 +898,10 @@ read_possible_multiline_reply(Socket) ->
                     Code = binstr:substr(Packet, 1, 3),
                     read_multiline_reply(Socket, Code, [Packet]);
                 <<" ">> ->
-                    {ok, Packet}
+                    {ok, Packet};
+                _ ->
+                    quit(Socket),
+                    throw({unexpected_response, Packet})
             end;
         Error ->
             throw({network_failure, Error})

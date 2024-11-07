@@ -829,7 +829,7 @@ handle_request({<<"NOOP">>, _Any}, State) ->
     send(State, "250 Ok\r\n"),
     {ok, State};
 handle_request({<<"QUIT">>, _Any}, State) ->
-    send(State, "221 Bye\r\n"),
+    try_send(State, "221 Bye\r\n"),
     {stop, normal, State};
 handle_request(
     {<<"VRFY">>, Address},
@@ -1356,6 +1356,14 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
                 false ->
                     Binary
             end
+    end.
+
+try_send(#state{transport = Transport, socket = Sock} = St, Data) ->
+    case Transport:send(Sock, Data) of
+        ok ->
+            ok;
+        {error, _Err} ->
+            ok
     end.
 
 send(#state{transport = Transport, socket = Sock} = St, Data) ->
