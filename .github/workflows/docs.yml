@@ -17,7 +17,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        otp: ["24"] # https://www.erlang.org/downloads
+        otp: ["25"] # https://www.erlang.org/downloads
         rebar3: ["3.18.0"] # https://www.rebar3.org
 
     steps:
