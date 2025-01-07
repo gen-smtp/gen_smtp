@@ -1358,13 +1358,9 @@ check_bare_crlf(Binary, _Prev, Op, Offset) ->
             end
     end.
 
-try_send(#state{transport = Transport, socket = Sock} = St, Data) ->
-    case Transport:send(Sock, Data) of
-        ok ->
-            ok;
-        {error, _Err} ->
-            ok
-    end.
+try_send(#state{transport = Transport, socket = Sock}, Data) ->
+    Transport:send(Sock, Data),
+    ok.
 
 send(#state{transport = Transport, socket = Sock} = St, Data) ->
     case Transport:send(Sock, Data) of
