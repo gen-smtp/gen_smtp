@@ -195,6 +195,10 @@ gen_smtp_server:start(
 ```
 
 This configures the session to fix bare newlines (other options are `strip`, `ignore` and `false`: `false` rejects emails with bare newlines, `ignore` passes them through unmodified and `strip` removes them) and tells the callback module to run the MIME decoder on the email once its been received. The example callback module also supports the following options: `relay` - whether to relay email on, `auth` - whether to do SMTP authentication and `parse` - whether to invoke the MIME parser. The example callback module is included mainly as an example and are not intended for serious usage. You could easily create your own callback options.
+
+If you want to pass through options to socket in relay mode in the `smtp_server_example`, for example when you need to bind the socket to different IP when your server has more than one IP, you can use `relayopts` option in the `callbackoption` list, such as `{callbackoptions, [{relayopts, [{sockopts, [{ip, {22,22,22,22}}]}]}]}`
+
+
 In general, following options can be specified `gen_smtp_server:options()`:
 
 * `{domain, string()}` - is used as server hostname (it's placed to SMTP server banner and HELO/EHLO response), default - guess from machine hostname
@@ -230,6 +234,8 @@ gen_smtp_client:send(
 ```
 
 If you want to listen on IPv6, you can use the `{family, inet6}` and `{address, {0, 0, 0, 0, 0, 0, 0, 0}}` options to enable listening on IPv6.
+
+
 
 Please notice that when using the LMTP protocol, the `handle_EHLO` callback will be used
 to handle the `LHLO` command as defined in [RFC2033](https://tools.ietf.org/html/rfc2033),
