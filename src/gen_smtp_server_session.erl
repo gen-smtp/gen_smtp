@@ -40,7 +40,9 @@
     {"SIZE", integer_to_list(?DEFAULT_MAXSIZE)},
     {"8BITMIME", true},
     {"PIPELINING", true},
-    {"SMTPUTF8", true}
+    {"SMTPUTF8", true},
+    {"CHUNKING", true}
+    %BINARYMIME is off by default as it may require additional handling in handle_DATA
 ]).
 % 3 minutes
 -define(TIMEOUT, 180000).
@@ -63,14 +65,24 @@
 -include_lib("kernel/include/logger.hrl").
 -define(LOGGER_META, #{domain => [gen_smtp, server]}).
 
+-record(chunking_state, {
+    size = 0 :: non_neg_integer() | 0,
+    targetsize = 0 :: non_neg_integer() | 0,
+    lastchunk = false :: boolean(),
+    error = undefined :: undefined | {error_class(), atom(), string() | undefined} | {out_of_order, binary(), string()},
+    transactionerrorprocessed = false :: boolean(),
+    readchunk = false :: boolean()
+}).
+
 -record(envelope, {
     from :: binary() | 'undefined',
     to = [] :: [binary()],
-    data = <<>> :: binary(),
+    chunks = [] :: [binary()],
+    chunkingstate = #chunking_state{},
     expectedsize = 0 :: pos_integer() | 0,
     % {"username", "password"}
     auth = {<<>>, <<>>} :: {binary(), binary()},
-    flags = [] :: [smtputf8 | '8bitmime' | '7bit']
+    flags = [] :: [smtputf8 | '8bitmime' | '7bit' | binarymime]
 }).
 
 -record(state, {
@@ -83,7 +95,7 @@
     maxsize = ?DEFAULT_MAXSIZE :: pos_integer() | 'infinity',
     waitingauth = false :: 'false' | 'plain' | 'login' | 'cram-md5',
     authdata :: 'undefined' | binary(),
-    readmessage = false :: boolean(),
+    readmessage = false :: boolean() | 'chunking',
     tls = false :: boolean(),
     callbackstate :: any(),
     protocol = smtp :: 'smtp' | 'lmtp',
@@ -312,6 +324,112 @@ handle_info(
             {noreply, State#state{readmessage = false, envelope = #envelope{}}, ?TIMEOUT}
     end;
 handle_info(
+    {receive_bdat, #chunking_state{error = {data_rejected, Kind, Message}, lastchunk = IsLastChunk} = ChunkingState},
+    #state{readmessage = 'chunking', envelope = Envelope = #envelope{chunkingstate = #chunking_state{readchunk = true}}} =
+        State
+) ->
+    setopts(State, [{packet, line}]),
+    send(State, Message),
+    setopts(State, [{active, once}]),
+    State1 = handle_error(data_rejected, Kind, State),
+    case IsLastChunk of
+        false ->
+            {noreply,
+                State1#state{
+                    envelope = Envelope#envelope{
+                        chunkingstate = ChunkingState#chunking_state{
+                            transactionerrorprocessed = true, readchunk = false
+                        }
+                    }
+                },
+                ?TIMEOUT};
+        true ->
+            % At this stage, RFC3030 mandates RSET to be sent; as this will erase the envelope, no need to do it now
+            {noreply,
+                State1#state{readmessage = false, envelope = Envelope#envelope{chunkingstate = #chunking_state{}}},
+                ?TIMEOUT}
+    end;
+handle_info(
+    {receive_bdat, #chunking_state{error = {out_of_order, _, Message}}},
+    #state{readmessage = 'chunking', envelope = Envelope = #envelope{chunkingstate = #chunking_state{readchunk = true}}} =
+        State
+) ->
+    % already handled!
+    setopts(State, [{packet, line}]),
+    send(State, Message),
+    setopts(State, [{active, once}]),
+    % no "out_of_order" errors related to a BDAT command may be emitted during a chunking session, so it's safe to erase the chunkingstate
+    {noreply, State#state{readmessage = false, envelope = Envelope#envelope{chunkingstate = #chunking_state{}}},
+        ?TIMEOUT};
+handle_info(
+    {receive_bdat, #chunking_state{error = {data_receive_error, Kind, _Message}}},
+    #state{readmessage = 'chunking'} = State
+) ->
+    State1 = handle_error(data_receive_error, Kind, State),
+    {stop, {error_receiving_data, Kind}, State1};
+handle_info(
+    {receive_bdat,
+        #chunking_state{size = Size, lastchunk = IsLastChunk, transactionerrorprocessed = ChunkingErrored} =
+            NewChunkingState,
+        BodyAcc},
+    #state{
+        readmessage = 'chunking',
+        envelope = Env = #envelope{chunkingstate = #chunking_state{size = SizeBefore}},
+        module = Module,
+        callbackstate = OldCallbackState
+    } = State
+) ->
+    setopts(State, [{packet, line}]),
+    case {ChunkingErrored, IsLastChunk} of
+        {true, _} ->
+            % silently discard even valid chunks after any chunk caused an error, as per spec
+            % we still keep count of the transfer state, so we can keep track of SMTP commands vs raw BDAT chunks down the line
+            setopts(State, [{active, once}]),
+            {noreply,
+                State#state{
+                    envelope = Env#envelope{chunkingstate = NewChunkingState#chunking_state{readchunk = false}}
+                },
+                ?TIMEOUT};
+        {false, false} ->
+            EnvelopeWithChunk = Env#envelope{
+                chunks = BodyAcc, chunkingstate = NewChunkingState#chunking_state{readchunk = false}
+            },
+            % also with LMTP, non-LAST BDAT commands return a single reply
+            Data = ["250 Continue, ", integer_to_list(Size - SizeBefore), " octets received\r\n"],
+            send(State, Data),
+            setopts(State, [{active, once}]),
+            {noreply, State#state{envelope = EnvelopeWithChunk}, ?TIMEOUT};
+        {false, true} ->
+            ?LOG_DEBUG(
+                "memory usage before flattening: ~p",
+                [
+                    erlang:process_info(self(), memory)
+                ],
+                ?LOGGER_META
+            ),
+            Body = list_to_binary(lists:reverse(BodyAcc)),
+            ?LOG_DEBUG(
+                "memory usage after flattening: ~p",
+                [
+                    erlang:process_info(self(), memory)
+                ],
+                ?LOGGER_META
+            ),
+            #envelope{from = From, to = To} = Env,
+            {ResponseType, Value, CallbackState} = Module:handle_DATA(
+                From, To, Body, OldCallbackState
+            ),
+            report_recipient(ResponseType, Value, State),
+            setopts(State, [{active, once}]),
+            {noreply,
+                State#state{
+                    readmessage = false,
+                    envelope = #envelope{},
+                    callbackstate = CallbackState
+                },
+                ?TIMEOUT}
+    end;
+handle_info(
     {SocketType, Socket, Packet},
     #state{socket = Socket, transport = Transport, waitingauth = false} = State
 ) when
@@ -326,6 +444,34 @@ handle_info(
             spawn_opt(
                 fun() ->
                     receive_data([], Transport, Socket, 0, Size, MaxSize, Session, Options)
+                end,
+                [link, {fullsweep_after, 0}]
+            ),
+            {noreply, NewState, ?TIMEOUT};
+        {ok,
+            #state{
+                options = Options,
+                envelope = #envelope{
+                    chunks = ChunksAcc, flags = Flags, chunkingstate = ChunkingState = #chunking_state{readchunk = true}
+                },
+                readmessage = 'chunking',
+                maxsize = MaxSize
+            } = NewState} ->
+            Session = self(),
+            setopts(NewState, [{packet, raw}]),
+            %% TODO: change to receive asynchronously in the same process
+            spawn_opt(
+                fun() ->
+                    receive_bdat(
+                        ChunksAcc,
+                        Transport,
+                        Socket,
+                        ChunkingState,
+                        MaxSize,
+                        lists:member(binarymime, Flags),
+                        Session,
+                        Options
+                    )
                 end,
                 [link, {fullsweep_after, 0}]
             ),
@@ -679,11 +825,18 @@ handle_request(
                                         {true, _} ->
                                             Flag = maps:get(BodyType, #{
                                                 <<"8BITMIME">> => '8bitmime',
-                                                <<"7BIT">> => '7bit'
+                                                <<"7BIT">> => '7bit',
+                                                <<"BINARYMIME">> => 'binarymime'
                                             }),
-                                            InnerState#state{
-                                                envelope = Envelope#envelope{flags = [Flag | Flags]}
-                                            };
+                                            HasBinaryMime = has_extension(Extensions, "BINARYMIME"),
+                                            case {Flag, HasBinaryMime} of
+                                                {'binarymime', false} ->
+                                                    {error, "555 Unsupported body type BINARYMIME\r\n"};
+                                                _Else ->
+                                                    InnerState#state{
+                                                        envelope = Envelope#envelope{flags = [Flag | Flags]}
+                                                    }
+                                            end;
                                         false ->
                                             {error, "555 Unsupported option BODY\r\n"}
                                     end;
@@ -742,6 +895,10 @@ handle_request({<<"RCPT">> = C, _Args}, #state{envelope = undefined} = State) ->
     send(State, "503 Error: need MAIL command\r\n"),
     State1 = handle_error(out_of_order, C, State),
     {ok, State1};
+handle_request({<<"RCPT">> = C, _Args}, #state{readmessage = 'chunking'} = State) ->
+    send(State, "503 Error: RCPT not allowed during message transfer\r\n"),
+    State1 = handle_error(out_of_order, C, State),
+    {ok, State1};
 handle_request(
     {<<"RCPT">>, Args},
     #state{
@@ -797,14 +954,29 @@ handle_request({<<"DATA">> = C, <<>>}, #state{envelope = undefined, protocol = P
     send(State, ["503 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
     State1 = handle_error(out_of_order, C, State),
     {ok, State1};
-handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
-    case {Envelope#envelope.from, Envelope#envelope.to} of
-        {undefined, _} ->
+handle_request({<<"BDAT">> = C, _Args}, #state{envelope = undefined, protocol = Protocol} = State) ->
+    % RFC3030 does not forbid us from immediately aborting in this case; see the handle_request for the BDAT command below.
+    send(State, ["554 Error: send ", lhlo_if_lmtp(Protocol, "HELO/EHLO"), " first\r\n"]),
+    State1 = handle_error(out_of_order, C, State),
+    {stop, normal, State1};
+handle_request({<<"DATA">> = Command, <<>>}, #state{readmessage = 'chunking'} = State) ->
+    send(State, ["503 Error: DATA and BDAT commands cannot be used in the same transaction.\r\n"]),
+    State1 = handle_error(out_of_order, Command, State),
+    {ok, State1};
+handle_request(
+    {<<"DATA">> = C, <<>>}, #state{envelope = Envelope = #envelope{flags = Flags}, readmessage = false} = State
+) ->
+    case {{Envelope#envelope.from, Envelope#envelope.to}, lists:member(binarymime, Flags)} of
+        {{undefined, _}, _} ->
             send(State, "503 Error: need MAIL command\r\n"),
             State1 = handle_error(out_of_order, C, State),
             {ok, State1};
-        {_, []} ->
+        {{_, []}, _} ->
             send(State, "503 Error: need RCPT command\r\n"),
+            State1 = handle_error(out_of_order, C, State),
+            {ok, State1};
+        {_Else, true} ->
+            send(State, "503 Error: DATA not allowed for BINARYMIME messages\r\n"),
             State1 = handle_error(out_of_order, C, State),
             {ok, State1};
         _Else ->
@@ -813,6 +985,48 @@ handle_request({<<"DATA">> = C, <<>>}, #state{envelope = Envelope} = State) ->
 
             {ok, State#state{readmessage = true}}
     end;
+handle_request({<<"BDAT">> = C, Args}, #state{envelope = Envelope, readmessage = false} = State) ->
+    case parse_bdat_into_state(Args, State) of
+        % handle parsing errors first
+        {error, State1} ->
+            {ok, State1};
+        {ok, State1} ->
+            case {Envelope#envelope.from, Envelope#envelope.to} of
+                {undefined, _} ->
+                    % RFC3030 is unclear on whether we should be ready to still receive and discard the bytes in out_of_order cases.
+                    % There's nothing to win in trying to salvage it, so we're not going to try and eat the chunk's bytes.
+                    % This means closing the connection immediately, lest the chunk will be interpreted as a command.
+                    % "Bigger names" implementations (e.g., Dovecot or Exim4) do eat away the bytes; we follow them.
+                    % Other implementations immediately terminate (gosmtp/ProtonMail, EmailRelay).
+
+                    % By handling the error now, we allow users to immediately terminate instead.
+                    State2 = handle_error(out_of_order, C, State1),
+                    {ok, State2#state{
+                        envelope = State1#state.envelope#envelope{
+                            chunkingstate = State2#state.envelope#envelope.chunkingstate#chunking_state{
+                                % inject error for deferred handling
+                                error = {out_of_order, C, "503 Error: need MAIL command\r\n"}
+                            }
+                        }
+                    }};
+                {_, []} ->
+                    % By handling the error now, we allow users to immediately terminate instead.
+                    State2 = handle_error(out_of_order, C, State1),
+                    {ok, State2#state{
+                        envelope = State1#state.envelope#envelope{
+                            chunkingstate = State2#state.envelope#envelope.chunkingstate#chunking_state{
+                                % inject error for deferred handling
+                                error = {out_of_order, C, "503 Error: need RCPT command\r\n"}
+                            }
+                        }
+                    }};
+                _Else ->
+                    {ok, State1}
+            end
+    end;
+handle_request({<<"BDAT">>, Args}, #state{readmessage = 'chunking'} = State) ->
+    {_, State1} = parse_bdat_into_state(Args, State),
+    {ok, State1};
 handle_request(
     {<<"RSET">>, _Any},
     #state{envelope = Envelope, module = Module, callbackstate = OldCallbackState} = State
@@ -984,6 +1198,32 @@ handle_error(Kind, Details, #state{module = Module, callbackstate = OldCallbackS
             State
     end.
 
+-spec parse_bdat_into_state(Args :: binary(), State :: #state{}) -> {'ok' | 'error', #state{}}.
+parse_bdat_into_state(
+    Args,
+    #state{
+        envelope = Envelope = #envelope{chunkingstate = ChunkingState = #chunking_state{targetsize = TargetSizeBefore}}
+    } = State
+) ->
+    case parse_bdat_args(Args) of
+        error ->
+            ?LOG_DEBUG("erroneous parameters for BDAT command", [], ?LOGGER_META),
+            send(State, "501 Syntax: Missing chunk size argument\r\n"),
+            {error, State};
+        {NextChunkSize, WillBeLast} ->
+            ?LOG_DEBUG("switching to chunked read mode", [], ?LOGGER_META),
+            {ok, State#state{
+                readmessage = 'chunking',
+                envelope = Envelope#envelope{
+                    chunkingstate = ChunkingState#chunking_state{
+                        targetsize = TargetSizeBefore + NextChunkSize,
+                        lastchunk = WillBeLast,
+                        readchunk = true
+                    }
+                }
+            }}
+    end.
+
 %% pa = parse address
 %% ab = angular brackets
 -record(pa, {
@@ -991,6 +1231,21 @@ handle_error(Kind, Details, #state{module = Module, callbackstate = OldCallbackS
     ab = true,
     utf8 = false
 }).
+
+%% https://datatracker.ietf.org/doc/html/rfc3030
+-spec parse_bdat_args(Args :: binary()) -> {integer(), boolean()} | error.
+parse_bdat_args(Args) ->
+    parse_bdat_args(Args, []).
+-spec parse_bdat_args(Args :: binary(), Acc :: list()) -> {integer(), boolean()} | error.
+parse_bdat_args(<<>>, Acc) when Acc =/= [] ->
+    {binary_to_integer(unicode:characters_to_binary(lists:reverse(Acc))), false};
+parse_bdat_args(<<" LAST">>, Acc) when Acc =/= [] ->
+    {binary_to_integer(unicode:characters_to_binary(lists:reverse(Acc))), true};
+parse_bdat_args(<<H, Rest/binary>>, Acc) when H >= $0, H =< $9 ->
+    % digits
+    parse_bdat_args(Rest, [H | Acc]);
+parse_bdat_args(_, _Acc) ->
+    error.
 
 %% https://datatracker.ietf.org/doc/html/rfc5321#section-4.1.2
 -spec parse_encoded_address(Address :: binary(), Utf8 :: boolean()) ->
@@ -1292,6 +1547,161 @@ receive_data(Acc, Transport, Socket, RecvSize, Size, MaxSize, Session, Options) 
             Session ! {receive_data, {error, Reason}}
     end.
 
+%% @doc a tight loop to receive multiple packets of a body chunk
+receive_bdat(
+    _Acc,
+    _Transport,
+    _Socket,
+    #chunking_state{size = Size, targetsize = TargetSize, error = Error, transactionerrorprocessed = false} =
+        ChunkingState,
+    _MaxSize,
+    _IsBinaryMime,
+    Session,
+    _Options
+) when
+    % BDAT 0 LAST, but...
+    (Size =:= TargetSize) andalso
+        % we have a new, unprocessed error
+        Error =/= undefined
+->
+    % we let it bubble up
+    Session ! {receive_bdat, ChunkingState};
+receive_bdat(
+    Acc,
+    _Transport,
+    _Socket,
+    #chunking_state{size = Size, targetsize = TargetSize} = ChunkingState,
+    _MaxSize,
+    _IsBinaryMime,
+    Session,
+    _Options
+) when
+    % BDAT 0 LAST (either with no error, or error already processed)
+    (Size =:= TargetSize)
+->
+    Session ! {receive_bdat, ChunkingState, Acc};
+receive_bdat(
+    Acc,
+    Transport,
+    Socket,
+    #chunking_state{size = Size, targetsize = TargetSize, error = Error} = ChunkingState,
+    MaxSize,
+    IsBinaryMime,
+    Session,
+    Options
+) ->
+    RecvSize = TargetSize - Size,
+    case Transport:recv(Socket, RecvSize, 1000) of
+        {ok, Packet} when Error =/= undefined ->
+            % best effort to keep receiving and discarding the in-flight BDAT segments before sending out the error
+            NewSize = Size + byte_size(Packet),
+            receive_bdat(
+                % so we discard the new packet
+                Acc,
+                Transport,
+                Socket,
+                ChunkingState#chunking_state{
+                    % but we count the received bytes progression towards the expected total
+                    size = NewSize,
+                    % and we carry over the error state
+                    error = Error
+                },
+                MaxSize,
+                IsBinaryMime,
+                Session,
+                Options
+            );
+        {ok, Packet} when MaxSize =/= 'infinity', (Size + byte_size(Packet) > MaxSize) ->
+            NewSize = Size + byte_size(Packet),
+            ?LOG_INFO("SMTP message body size ~B exceeded maximum allowed ~B", [NewSize, MaxSize], ?LOGGER_META),
+            % silently discard -- we have a check to send the proper error message once we received the full chunk
+            receive_bdat(
+                % so we discard the new packet
+                Acc,
+                Transport,
+                Socket,
+                ChunkingState#chunking_state{
+                    % but we count the received bytes progression towards the expected total
+                    size = NewSize,
+                    % register the error for carry-over
+                    error = {data_rejected, size_exceeded, "552 Chunked message too large\r\n"}
+                },
+                MaxSize,
+                IsBinaryMime,
+                Session,
+                Options
+            );
+        {ok, Packet} ->
+            PacketSize = byte_size(Packet),
+            NewSize = Size + PacketSize,
+            ?LOG_DEBUG(
+                "BDAT: Still expecting ~pb in chunk of ~p; TCP expected ~p; Size (before packet) ~p; New packet ~p; Size (after): ~p;",
+                [TargetSize - Size, TargetSize, RecvSize, Size, PacketSize, NewSize],
+                ?LOGGER_META
+            ),
+            Last =
+                case Acc of
+                    [] -> <<>>;
+                    [Last_ | _] -> Last_
+                end,
+            BareCRLFCheckType =
+                case IsBinaryMime of
+                    true -> ignore;
+                    _ -> proplists:get_value(allow_bare_newlines, Options, false)
+                end,
+            case
+                check_bare_crlf(
+                    Packet, Last, BareCRLFCheckType, 0
+                )
+            of
+                error ->
+                    receive_bdat(
+                        % so we discard the new packet
+                        Acc,
+                        Transport,
+                        Socket,
+                        ChunkingState#chunking_state{
+                            % but we count the received bytes progression towards the expected total
+                            size = NewSize,
+                            % register the error for carry-over
+                            error = {data_rejected, bare_newline, "451 Bare newline detected\r\n"}
+                        },
+                        MaxSize,
+                        IsBinaryMime,
+                        Session,
+                        Options
+                    );
+                FixedPacket ->
+                    Remainder = RecvSize - PacketSize,
+                    % the size arithmetic is not impacted by the CRLF fixing, as the packet is sized before being fixed
+                    % the sizes are not used to operate on the data, but only to keep track of the transmission status, so this isn't a problem either
+                    ?LOG_DEBUG(
+                        "received ~B bytes; size is now ~p, still expecting ~p",
+                        [
+                            RecvSize, NewSize, Remainder
+                        ],
+                        ?LOGGER_META
+                    ),
+                    ?LOG_DEBUG("memory usage: ~p", [erlang:process_info(self(), memory)], ?LOGGER_META),
+                    receive_bdat(
+                        [FixedPacket | Acc],
+                        Transport,
+                        Socket,
+                        ChunkingState#chunking_state{size = NewSize},
+                        MaxSize,
+                        IsBinaryMime,
+                        Session,
+                        Options
+                    )
+            end;
+        {error, timeout} ->
+            receive_bdat(Acc, Transport, Socket, ChunkingState, MaxSize, IsBinaryMime, Session, Options);
+        {error, Reason} ->
+            % the spec would have us accept the in-flight BDAT segments, but if we're here we can't count received bytes anymore, so there's no hope of keeping track anyway -- let's bail
+            ?LOG_WARNING("SMTP receive error: ~p", [Reason], ?LOGGER_META),
+            Session ! {receive_bdat, ChunkingState#chunking_state{error = {data_receive_error, Reason, undefined}}}
+    end.
+
 check_for_bare_crlf(Bin, Offset) ->
     case
         {
@@ -1562,6 +1972,74 @@ parse_request_test_() ->
         end}
     ].
 
+smtp_session_with_chunking_init_({smtp_socket, CSock}) ->
+    smtp_socket:active_once(CSock),
+    receive
+        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+    smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+    receive
+        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-localhost\r\n", Packet2),
+    receive
+        {tcp, CSock, Packet31} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-SIZE" ++ _, Packet31),
+    receive
+        {tcp, CSock, Packet32} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-8BITMIME" ++ _, Packet32),
+    receive
+        {tcp, CSock, Packet33} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-PIPELINING" ++ _, Packet33),
+    receive
+        {tcp, CSock, Packet34} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-SMTPUTF8" ++ _, Packet34),
+    receive
+        {tcp, CSock, Packet35} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250 CHUNKING" ++ _, Packet35).
+
+smtp_session_with_chunking_and_binarymime_init_({smtp_socket, CSock}) ->
+    smtp_socket:active_once(CSock),
+    receive
+        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+    smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+    receive
+        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-localhost\r\n", Packet2),
+    receive
+        {tcp, CSock, Packet31} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-SIZE" ++ _, Packet31),
+    receive
+        {tcp, CSock, Packet32} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-8BITMIME" ++ _, Packet32),
+    receive
+        {tcp, CSock, Packet33} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-PIPELINING" ++ _, Packet33),
+    receive
+        {tcp, CSock, Packet34} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-SMTPUTF8" ++ _, Packet34),
+    receive
+        {tcp, CSock, Packet35} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250-CHUNKING" ++ _, Packet35),
+    receive
+        {tcp, CSock, Packet36} -> smtp_socket:active_once(CSock)
+    end,
+    ?assertMatch("250 BINARYMIME" ++ _, Packet36).
+
 smtp_session_test_() ->
     {foreach, local,
         fun() ->
@@ -1764,6 +2242,475 @@ smtp_session_test_() ->
                 end}
             end,
             fun({CSock, _Pid}) ->
+                {"No BDAT before HELO/EHLO", fun() ->
+                    % After all MAIL [...] responses are collected and processed, the message is sent using a series of BDAT commands.
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "BDAT 9\r\ntoo early"),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("554 " ++ _, Packet7),
+                    % too late for that
+                    smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+                    Outcome =
+                        receive
+                            {tcp, CSock, Packet3} ->
+                                smtp_socket:active_once(CSock),
+                                Packet3;
+                            {tcp_closed, _} ->
+                                <<>>
+                        end,
+                    ?assertMatch(<<>>, Outcome)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"No BDAT before MAIL", fun() ->
+                    % After all MAIL [...] responses are collected and processed, the message is sent using a series of BDAT commands.
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "BDAT 9\r\ntoo early"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("503 " ++ _, Packet2),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 sender Ok" ++ _, Packet3)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"No BDAT before MAIL and RCPT", fun() ->
+                    % After all MAIL and RCPT responses are collected and processed, the message is sent using a series of BDAT commands.
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "BDAT 9\r\ntoo early"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("503 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 recipient Ok" ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"No DATA after BDAT", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "BDAT 73\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "Subject: tls message\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+                    %27
+                    smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+                    %2
+                    smtp_socket:send(CSock, "\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    smtp_socket:send(CSock, "DATA\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("503 " ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"No RCPT after BDAT", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "BDAT 73\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "Subject: tls message\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+                    %27
+                    smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+                    %2
+                    smtp_socket:send(CSock, "\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    smtp_socket:send(CSock, "RCPT TO:<otheruser@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("503 " ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"No BDAT after BDAT LAST", fun() ->
+                    % Any BDAT command sent after the BDAT LAST is illegal and MUST be replied to with a 503 "Bad sequence of commands" reply code.
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 73\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\n"
+                    ),
+                    smtp_socket:send(CSock, "BDAT 12 LAST\r\nmessage body"),
+                    smtp_socket:send(CSock, "BDAT 10\r\nextraneous"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet6),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    % treated as the (improper) beginning of a new transaction
+                    ?assertMatch("503 " ++ _, Packet7)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (singled-out command, single chunk, single segment)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "BDAT 85 LAST\r\n"),
+                    smtp_socket:send(
+                        CSock,
+                        "Subject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nmessage body"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (singled-out command, single chunk, split across segments)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "BDAT 85 LAST\r\n"),
+                    smtp_socket:send(
+                        CSock, "Subject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\n"
+                    ),
+                    smtp_socket:send(CSock, "message body"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (pipelined command, single chunk, single segment)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 85 LAST\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nmessage body"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (pipelined command, single chunk, split across segments)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 85 LAST\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\n"
+                    ),
+                    smtp_socket:send(CSock, "message body"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (pipelined commands, multiple chunks, single segment)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 73\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nBDAT 12 LAST\r\nmessage body"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (pipelined commands, multiple chunks, single segment, 0-LAST terminated)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 73\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nBDAT 12\r\nmessage bodyBDAT 0 LAST\r\n"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet6),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet7)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (pipelined commands, multiple chunks, multiple segments, 0-LAST terminated)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 73\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nBDAT 12\r\n"
+                    ),
+                    smtp_socket:send(CSock, "message bodyBDAT 0 LAST\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet6),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet7)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"Sending BDAT (pipelined commands, multiple chunks, a segment each)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    % 22
+                    smtp_socket:send(CSock, "BDAT 73\r\nSubject: tls message\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+                    %27
+                    smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+                    %2
+                    smtp_socket:send(CSock, "\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    %14
+                    smtp_socket:send(CSock, "BDAT 14 LAST\r\nmessage body\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (single 0-LAST chunk)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "BDAT 0 LAST\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("552 " ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (mismatched lengths: +1)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    % This will eat the first character of the next command as part of the message of the first one
+
+                    % 22
+                    smtp_socket:send(CSock, "BDAT 74\r\nSubject: tls message\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+                    %27
+                    smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+                    %2
+                    smtp_socket:send(CSock, "\r\nBDAT 14 LAST\r\nmessage body\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("500 Error: command not recognized : 'DAT'" ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT (mismatched lengths: -1)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    % This will cause the last character of the 1st command's data be parsed as part of the next command
+
+                    % 22
+                    smtp_socket:send(CSock, "BDAT 72\r\nSubject: tls message\r\n"),
+                    %22
+                    smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+                    %27
+                    smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+                    %2
+                    smtp_socket:send(CSock, "\r\nBDAT 14 LAST\r\nmessage body\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("500 Error: bad syntax" ++ _, Packet6)
+                end}
+            end,
+            % Server timeouts for BDAT are not tested
+            fun({CSock, _Pid}) ->
                 {"Sending with spaced MAIL FROM / RCPT TO", fun() ->
                     smtp_socket:active_once(CSock),
                     receive
@@ -1829,7 +2776,11 @@ smtp_session_test_() ->
                     receive
                         {tcp, CSock, Packet34} -> smtp_socket:active_once(CSock)
                     end,
-                    ?assertMatch("250 SMTPUTF8" ++ _, Packet34),
+                    ?assertMatch("250-SMTPUTF8" ++ _, Packet34),
+                    receive
+                        {tcp, CSock, Packet35} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 CHUNKING" ++ _, Packet35),
                     smtp_socket:send(
                         CSock, <<"MAIL FROM: <испытание@пример.испытание> SMTPUTF8\r\n"/utf8>>
                     ),
@@ -1859,109 +2810,147 @@ smtp_session_test_() ->
                     ?assertMatch("250 queued as" ++ _, Packet7)
                 end}
             end,
-            %			fun({CSock, _Pid}) ->
-            %					{"Sending DATA with a bare newline",
-            %						fun() ->
-            %								smtp_socket:active_once(CSock),
-            %								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("220 localhost"++_Stuff,  Packet),
-            %								smtp_socket:send(CSock, "HELO somehost.com\r\n"),
-            %								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 localhost\r\n",  Packet2),
-            %								smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
-            %								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 "++_, Packet3),
-            %								smtp_socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
-            %								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 "++_, Packet4),
-            %								smtp_socket:send(CSock, "DATA\r\n"),
-            %								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("354 "++_, Packet5),
-            %								smtp_socket:send(CSock, "Subject: tls message\r\n"),
-            %								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
-            %								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
-            %								smtp_socket:send(CSock, "\r\n"),
-            %								smtp_socket:send(CSock, "this\r\n"),
-            %								smtp_socket:send(CSock, "body\r\n"),
-            %								smtp_socket:send(CSock, "has\r\n"),
-            %								smtp_socket:send(CSock, "a\r\n"),
-            %								smtp_socket:send(CSock, "bare\n"),
-            %								smtp_socket:send(CSock, "newline\r\n"),
-            %								smtp_socket:send(CSock, "\r\n.\r\n"),
-            %								receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("451 "++_, Packet6),
-            %						end
-            %					}
-            %			end,
+            fun({CSock, _Pid}) ->
+                {"Sending with UTF8 addresses and body (with CHUNKING)", fun() ->
+                    smtp_session_with_chunking_init_({smtp_socket, CSock}),
+                    smtp_socket:send(
+                        CSock, <<"MAIL FROM: <испытание@пример.испытание> SMTPUTF8\r\n"/utf8>>
+                    ),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 sender Ok" ++ _, Packet4),
+                    smtp_socket:send(CSock, <<"RCPT TO: <測試@例子.測試>\r\n"/utf8>>),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 recipient Ok" ++ _, Packet5),
+                    % 10 + 90
+                    smtp_socket:send(
+                        CSock, <<"BDAT 189\r\nSubject: Я помню чудное мгновенье\r\nTo: <測試@例子.測試>\r\nFrom: "/utf8>>
+                    ),
+                    % 99
+                    smtp_socket:send(CSock, <<"<испытание@пример.испытание>\r\n\r\nПередо мной явилась ты\r\n"/utf8>>),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet7),
+                    % 10 + 41 + 13
+                    smtp_socket:send(CSock, <<"BDAT 41\r\nПередо мной явилась тыBDAT 0 LAST\r\n"/utf8>>),
+                    receive
+                        {tcp, CSock, Packet9} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet9),
+                    smtp_socket:send(CSock, ""),
+                    receive
+                        {tcp, CSock, Packet8} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet8)
+                end}
+            end,
+            %           fun({CSock, _Pid}) ->
+            %                   {"Sending DATA with a bare newline",
+            %                       fun() ->
+            %                               smtp_socket:active_once(CSock),
+            %                               receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("220 localhost"++_Stuff,  Packet),
+            %                               smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+            %                               receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 localhost\r\n",  Packet2),
+            %                               smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+            %                               receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 "++_, Packet3),
+            %                               smtp_socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+            %                               receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 "++_, Packet4),
+            %                               smtp_socket:send(CSock, "DATA\r\n"),
+            %                               receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("354 "++_, Packet5),
+            %                               smtp_socket:send(CSock, "Subject: tls message\r\n"),
+            %                               smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+            %                               smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+            %                               smtp_socket:send(CSock, "\r\n"),
+            %                               smtp_socket:send(CSock, "this\r\n"),
+            %                               smtp_socket:send(CSock, "body\r\n"),
+            %                               smtp_socket:send(CSock, "has\r\n"),
+            %                               smtp_socket:send(CSock, "a\r\n"),
+            %                               smtp_socket:send(CSock, "bare\n"),
+            %                               smtp_socket:send(CSock, "newline\r\n"),
+            %                               smtp_socket:send(CSock, "\r\n.\r\n"),
+            %                               receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("451 "++_, Packet6),
+            %                       end
+            %                   }
+            %           end,
             %fun({CSock, _Pid}) ->
-            %					{"Sending DATA with a bare CR",
-            %						fun() ->
-            %								smtp_socket:active_once(CSock),
-            %								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("220 localhost"++_Stuff,  Packet),
-            %								smtp_socket:send(CSock, "HELO somehost.com\r\n"),
-            %								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 localhost\r\n",  Packet2),
-            %								smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
-            %								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 "++_, Packet3),
-            %								smtp_socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
-            %								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 "++_, Packet4),
-            %								smtp_socket:send(CSock, "DATA\r\n"),
-            %								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("354 "++_, Packet5),
-            %								smtp_socket:send(CSock, "Subject: tls message\r\n"),
-            %								smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
-            %								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
-            %								smtp_socket:send(CSock, "\r\n"),
-            %								smtp_socket:send(CSock, "this\r\n"),
-            %								smtp_socket:send(CSock, "\rbody\r\n"),
-            %								smtp_socket:send(CSock, "has\r\n"),
-            %								smtp_socket:send(CSock, "a\r\n"),
-            %								smtp_socket:send(CSock, "bare\r"),
-            %								smtp_socket:send(CSock, "CR\r\n"),
-            %								smtp_socket:send(CSock, "\r\n.\r\n"),
-            %								receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("451 "++_, Packet6),
-            %						end
-            %					}
-            %			end,
+            %                   {"Sending DATA with a bare CR",
+            %                       fun() ->
+            %                               smtp_socket:active_once(CSock),
+            %                               receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("220 localhost"++_Stuff,  Packet),
+            %                               smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+            %                               receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 localhost\r\n",  Packet2),
+            %                               smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+            %                               receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 "++_, Packet3),
+            %                               smtp_socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+            %                               receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 "++_, Packet4),
+            %                               smtp_socket:send(CSock, "DATA\r\n"),
+            %                               receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("354 "++_, Packet5),
+            %                               smtp_socket:send(CSock, "Subject: tls message\r\n"),
+            %                               smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+            %                               smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+            %                               smtp_socket:send(CSock, "\r\n"),
+            %                               smtp_socket:send(CSock, "this\r\n"),
+            %                               smtp_socket:send(CSock, "\rbody\r\n"),
+            %                               smtp_socket:send(CSock, "has\r\n"),
+            %                               smtp_socket:send(CSock, "a\r\n"),
+            %                               smtp_socket:send(CSock, "bare\r"),
+            %                               smtp_socket:send(CSock, "CR\r\n"),
+            %                               smtp_socket:send(CSock, "\r\n.\r\n"),
+            %                               receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("451 "++_, Packet6),
+            %                       end
+            %                   }
+            %           end,
 
-            %			fun({CSock, _Pid}) ->
-            %					{"Sending DATA with a bare newline in the headers",
-            %						fun() ->
-            %								smtp_socket:active_once(CSock),
-            %								receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("220 localhost"++_Stuff,  Packet),
-            %								smtp_socket:send(CSock, "HELO somehost.com\r\n"),
-            %								receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 localhost\r\n",  Packet2),
-            %								smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
-            %								receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 "++_, Packet3),
-            %								smtp_socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
-            %								receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("250 "++_, Packet4),
-            %								smtp_socket:send(CSock, "DATA\r\n"),
-            %								receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("354 "++_, Packet5),
-            %								smtp_socket:send(CSock, "Subject: tls message\r\n"),
-            %								smtp_socket:send(CSock, "To: <user@otherhost>\n"),
-            %								smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
-            %								smtp_socket:send(CSock, "\r\n"),
-            %								smtp_socket:send(CSock, "this\r\n"),
-            %								smtp_socket:send(CSock, "body\r\n"),
-            %								smtp_socket:send(CSock, "has\r\n"),
-            %								smtp_socket:send(CSock, "no\r\n"),
-            %								smtp_socket:send(CSock, "bare\r\n"),
-            %								smtp_socket:send(CSock, "newlines\r\n"),
-            %								smtp_socket:send(CSock, "\r\n.\r\n"),
-            %								receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
-            %								?assertMatch("451 "++_, Packet6),
-            %						end
-            %					}
-            %			end,
+            %           fun({CSock, _Pid}) ->
+            %                   {"Sending DATA with a bare newline in the headers",
+            %                       fun() ->
+            %                               smtp_socket:active_once(CSock),
+            %                               receive {tcp, CSock, Packet} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("220 localhost"++_Stuff,  Packet),
+            %                               smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+            %                               receive {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 localhost\r\n",  Packet2),
+            %                               smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+            %                               receive {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 "++_, Packet3),
+            %                               smtp_socket:send(CSock, "RCPT TO: <user@otherhost.com>\r\n"),
+            %                               receive {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("250 "++_, Packet4),
+            %                               smtp_socket:send(CSock, "DATA\r\n"),
+            %                               receive {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("354 "++_, Packet5),
+            %                               smtp_socket:send(CSock, "Subject: tls message\r\n"),
+            %                               smtp_socket:send(CSock, "To: <user@otherhost>\n"),
+            %                               smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+            %                               smtp_socket:send(CSock, "\r\n"),
+            %                               smtp_socket:send(CSock, "this\r\n"),
+            %                               smtp_socket:send(CSock, "body\r\n"),
+            %                               smtp_socket:send(CSock, "has\r\n"),
+            %                               smtp_socket:send(CSock, "no\r\n"),
+            %                               smtp_socket:send(CSock, "bare\r\n"),
+            %                               smtp_socket:send(CSock, "newlines\r\n"),
+            %                               smtp_socket:send(CSock, "\r\n.\r\n"),
+            %                               receive {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock) end,
+            %                               ?assertMatch("451 "++_, Packet6),
+            %                       end
+            %                   }
+            %           end,
             fun({CSock, _Pid}) ->
                 {"Sending DATA with bare newline on first line of body", fun() ->
                     smtp_socket:active_once(CSock),
@@ -2004,6 +2993,285 @@ smtp_session_test_() ->
                         {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
                     end,
                     ?assertMatch("451 " ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"Sending BDAT with bare newline in first chunk", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 localhost\r\n", Packet2),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 90\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nthis\nbody\r\nhas\r\na"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("451 " ++ _, Packet5),
+                    smtp_socket:send(CSock, "NOOP\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Ok" ++ _, Packet6),
+                    smtp_socket:send(CSock, "BDAT 17 LAST\r\n\r\nbare\r\nnewline\r\n"),
+                    Packet8 =
+                        receive
+                            {tcp, CSock, Packet8i} ->
+                                smtp_socket:active_once(CSock),
+                                Packet8i
+                        after
+                            % Expected outcome
+                            1000 -> <<>>
+                        end,
+                    ?assertMatch(<<>>, Packet8)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"Sending BDAT with bare newline in last chunk", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 localhost\r\n", Packet2),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 90\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nthis\r\nbody\r\nhas\r\n"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    smtp_socket:send(CSock, "BDAT 17 LAST\r\na\r\nbare\nnewline\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("451 " ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"Sending BDAT with CR-LF split across chunks", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 localhost\r\n", Packet2),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 89\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nthis\r\nbody\r\nhas\r"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    smtp_socket:send(CSock, "BDAT 19 LAST\r\n\na\r\nbare\r\nnewline\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet6)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"Try BINARYMIME when not enabled", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-localhost\r\n", Packet2),
+                    receive
+                        {tcp, CSock, Packet31} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-SIZE" ++ _, Packet31),
+                    receive
+                        {tcp, CSock, Packet32} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-8BITMIME" ++ _, Packet32),
+                    receive
+                        {tcp, CSock, Packet33} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-PIPELINING" ++ _, Packet33),
+                    receive
+                        {tcp, CSock, Packet34} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-SMTPUTF8" ++ _, Packet34),
+                    receive
+                        {tcp, CSock, Packet35} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 CHUNKING" ++ _, Packet35),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com> BODY=BINARYMIME\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("555 Unsupported body type BINARYMIME" ++ _, Packet4)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"Sending BDAT to non-existent recipient", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "HELO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 localhost\r\n", Packet2),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<nobody@example.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("550 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 85 LAST\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nmessage body"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("503 " ++ _, Packet5),
+                    % check that the connection is still open, and the integrity of the command stream
+                    smtp_socket:send(CSock, "NOOP\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Ok" ++ _, Packet6)
+                end}
+            end
+        ]}.
+
+smtp_session_binarymime_test_() ->
+    {foreach, local,
+        fun() ->
+            application:ensure_all_started(gen_smtp),
+            {ok, Pid} = gen_smtp_server:start(
+                smtp_server_example,
+                [
+                    {sessionoptions, [{callbackoptions, [{binarymime, true}]}]},
+                    {domain, "localhost"},
+                    {port, 9876}
+                ]
+            ),
+            {ok, CSock} = smtp_socket:connect(tcp, "localhost", 9876),
+            {CSock, Pid}
+        end,
+        fun({CSock, _Pid}) ->
+            gen_smtp_server:stop(gen_smtp_server),
+            smtp_socket:close(CSock),
+            timer:sleep(10)
+        end,
+        [
+            fun({CSock, _Pid}) ->
+                {"BINARYMIME cannot be used with the DATA command", fun() ->
+                    smtp_session_with_chunking_and_binarymime_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com> BODY=BINARYMIME\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "DATA\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("503 " ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BINARYMIME can be used with the BDAT command", fun() ->
+                    smtp_session_with_chunking_and_binarymime_init_({smtp_socket, CSock}),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@somehost.com> BODY=BINARYMIME\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<user@otherhost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    RandomBytes = rand:bytes(32),
+                    smtp_socket:send(CSock, "BDAT 72\r\n"),
+                    smtp_socket:send(CSock, "Subject: tls message\r\n"),
+                    smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
+                    smtp_socket:send(CSock, "From: <user@somehost.com>\r\n"),
+                    %inserting a bare newline to check that no validation is performed with BINARYMIME
+                    smtp_socket:send(CSock, "\n"),
+                    smtp_socket:send(CSock, "BDAT 32\r\n"),
+                    smtp_socket:send(CSock, RandomBytes),
+                    smtp_socket:send(CSock, "BDAT 0 LAST\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet5),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 Continue" ++ _, Packet6),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 queued as" ++ _, Packet7)
                 end}
             end
         ]}.
@@ -2111,6 +3379,9 @@ lmtp_session_test_() ->
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
                             {tcp, CSock, Data} ->
                                 smtp_socket:active_once(CSock),
                                 {error, ["received: ", Data]}
@@ -2165,7 +3436,88 @@ lmtp_session_test_() ->
                     end,
                     ?assertMatch("221 " ++ _, Packet9)
                 end}
+            end,
+            fun({CSock, _Pid}) ->
+                {"BDAT with multiple RCPT TO", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "LHLO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-localhost\r\n", Packet2),
+                    Foo = fun(F, Acc) ->
+                        receive
+                            {tcp, CSock, "250-SIZE" ++ _ = Data} ->
+                                {error, ["received: ", Data]};
+                            {tcp, CSock, "250-" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                F(F, Acc);
+                            {tcp, CSock, "250 PIPELINING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, Data} ->
+                                smtp_socket:active_once(CSock),
+                                {error, ["received: ", Data]}
+                        end
+                    end,
+                    ?assertEqual(true, Foo(Foo, false)),
+
+                    smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<test1@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(CSock, "RCPT TO:<test2@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    smtp_socket:send(CSock, "RCPT TO:<test3@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet6} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet6),
+                    smtp_socket:send(CSock, "RCPT TO:<nobody@example.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("550 " ++ _, Packet7),
+
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 85 LAST\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nmessage body"
+                    ),
+                    % We sent 4 RCPT TO, of which 3 successful, so we should have 3 delivery reports
+                    AssertDelivery = fun(_) ->
+                        receive
+                            {tcp, CSock, Packet8} -> smtp_socket:active_once(CSock)
+                        end,
+                        ?assertMatch("250 " ++ _, Packet8)
+                    end,
+                    lists:foreach(AssertDelivery, [1, 2, 3]),
+                    smtp_socket:send(CSock, "QUIT\r\n"),
+                    receive
+                        {tcp, CSock, Packet9} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("221 " ++ _, Packet9)
+                end}
             end
+            % TOTEST LMTP with BDAT
         ]}.
 
 smtp_session_auth_test_() ->
@@ -3407,6 +4759,9 @@ smtp_session_maxsize_test_() ->
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
                             {tcp, CSock, _} ->
                                 smtp_socket:active_once(CSock),
                                 error
@@ -3441,6 +4796,68 @@ smtp_session_maxsize_test_() ->
                 end}
             end,
             fun({CSock, _Pid}) ->
+                {"Message with ok size (using RFC 3030 CHUNKING extension)", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-localhost\r\n", Packet2),
+                    Foo = fun(F, Acc) ->
+                        receive
+                            {tcp, CSock, "250-SIZE 100\r\n"} ->
+                                smtp_socket:active_once(CSock),
+                                F(F, true);
+                            {tcp, CSock, "250-SIZE" ++ _} ->
+                                error;
+                            {tcp, CSock, "250-" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                F(F, Acc);
+                            {tcp, CSock, "250 PIPELINING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, _} ->
+                                smtp_socket:active_once(CSock),
+                                error
+                        end
+                    end,
+                    ?assertEqual(true, Foo(Foo, false)),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<test@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 73\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\n"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    smtp_socket:send(CSock, "BDAT 12 LAST\r\nmessage body"),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet7)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
                 {"Message with too large size", fun() ->
                     smtp_socket:active_once(CSock),
                     receive
@@ -3466,6 +4883,9 @@ smtp_session_maxsize_test_() ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, _} ->
@@ -3507,6 +4927,79 @@ smtp_session_maxsize_test_() ->
                 end}
             end,
             fun({CSock, _Pid}) ->
+                {"Message with too large size (using RFC 3030 CHUNKING extension)", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-localhost\r\n", Packet2),
+                    Foo = fun(F, Acc) ->
+                        receive
+                            {tcp, CSock, "250-SIZE 100\r\n"} ->
+                                smtp_socket:active_once(CSock),
+                                F(F, true);
+                            {tcp, CSock, "250-SIZE" ++ _} ->
+                                error;
+                            {tcp, CSock, "250-" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                F(F, Acc);
+                            {tcp, CSock, "250 PIPELINING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, _} ->
+                                smtp_socket:active_once(CSock),
+                                error
+                        end
+                    end,
+                    ?assertEqual(true, Foo(Foo, false)),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<test@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 73\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\n"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5),
+                    smtp_socket:send(CSock, "BDAT 51\r\nmessage body message body message body message body"),
+                    receive
+                        {tcp, CSock, Packet7} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("552 " ++ _, Packet7),
+                    smtp_socket:send(CSock, "BDAT 0 LAST\r\n"),
+                    Packet8 =
+                        receive
+                            {tcp, CSock, Packet8i} ->
+                                smtp_socket:active_once(CSock),
+                                Packet8i
+                        after
+                            % Expected outcome
+                            1000 -> <<>>
+                        end,
+                    ?assertMatch(<<>>, Packet8)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
                 {"Message with ok size in FROM extension", fun() ->
                     smtp_socket:active_once(CSock),
                     receive
@@ -3532,6 +5025,9 @@ smtp_session_maxsize_test_() ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, _} ->
@@ -3573,6 +5069,9 @@ smtp_session_maxsize_test_() ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, _} ->
@@ -3636,6 +5135,9 @@ smtp_session_nomaxsize_test_() ->
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
                             {tcp, CSock, _Data} ->
                                 smtp_socket:active_once(CSock),
                                 error
@@ -3670,6 +5172,60 @@ smtp_session_nomaxsize_test_() ->
                 end}
             end,
             fun({CSock, _Pid}) ->
+                {"Message with no max size (using RFC 3030 CHUNKING extension)", fun() ->
+                    smtp_socket:active_once(CSock),
+                    receive
+                        {tcp, CSock, Packet} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("220 localhost" ++ _Stuff, Packet),
+                    smtp_socket:send(CSock, "EHLO somehost.com\r\n"),
+                    receive
+                        {tcp, CSock, Packet2} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250-localhost\r\n", Packet2),
+                    Foo = fun(F, Acc) ->
+                        receive
+                            {tcp, CSock, "250-SIZE" ++ _ = _Data} ->
+                                error;
+                            {tcp, CSock, "250-" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                F(F, Acc);
+                            {tcp, CSock, "250 PIPELINING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, _Data} ->
+                                smtp_socket:active_once(CSock),
+                                error
+                        end
+                    end,
+                    ?assertEqual(true, Foo(Foo, false)),
+                    smtp_socket:send(CSock, "MAIL FROM:<user@otherhost>\r\n"),
+                    receive
+                        {tcp, CSock, Packet3} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet3),
+                    smtp_socket:send(CSock, "RCPT TO:<test@somehost.com>\r\n"),
+                    receive
+                        {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet4),
+                    smtp_socket:send(
+                        CSock,
+                        "BDAT 85 LAST\r\nSubject: tls message\r\nTo: <user@otherhost>\r\nFrom: <user@somehost.com>\r\n\r\nmessage body"
+                    ),
+                    receive
+                        {tcp, CSock, Packet5} -> smtp_socket:active_once(CSock)
+                    end,
+                    ?assertMatch("250 " ++ _, Packet5)
+                end}
+            end,
+            fun({CSock, _Pid}) ->
                 {"Message with ok huge size in FROM extension", fun() ->
                     smtp_socket:active_once(CSock),
                     receive
@@ -3695,6 +5251,9 @@ smtp_session_nomaxsize_test_() ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, "250 SMTPUTF8" ++ _} ->
+                                smtp_socket:active_once(CSock),
+                                true;
+                            {tcp, CSock, "250 CHUNKING" ++ _} ->
                                 smtp_socket:active_once(CSock),
                                 true;
                             {tcp, CSock, _} ->
