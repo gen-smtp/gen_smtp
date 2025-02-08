@@ -198,11 +198,22 @@ ranch_init({Ref, Transport, {Callback, Opts}}) ->
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
 init([Ref, Transport, Socket, Module, Options]) ->
     Protocol = proplists:get_value(protocol, Options, smtp),
-    PeerName =
-        case Transport:peername(Socket) of
-            {ok, {IPaddr, _Port}} -> IPaddr;
-            {error, _} -> error
-        end,
+
+    PeerName = case proplists:get_value(proxy_protocol, Options, false) of
+        false ->
+            case Transport:peername(Socket) of
+                {ok, {IPaddr, _Port}} -> IPaddr;
+                {error, _} -> error
+            end;
+        _ ->
+            case read_proxy_protocol(Transport, Socket) of
+                {ok, IpAddr} ->
+                    IpAddr;
+                _ ->
+                    error
+            end
+    end,
+
     case
         PeerName =/= error andalso
             Module:init(
@@ -1408,6 +1419,32 @@ report_recipient(multiple, [], _State) ->
 report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
     report_recipient(ResponseType, Value, State),
     report_recipient(multiple, Rest, State).
+
+% parse proxy protocol
+% http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+
+read_proxy_protocol(Transport, Socket) ->
+    ok = Transport:setopts(Socket, [{packet, line}, binary]),
+    case Transport:recv(Socket, 0, 5000) of
+        {ok, Data} ->
+            case Data of
+                <<"PROXY ", _/binary>> ->
+                    case binary:split(Data, <<" ">>, [global]) of
+                        [<<"PROXY">>, InetFamily, SrcIp, _DstIp, _SrcPort, _DstPort] when InetFamily == <<"TCP4">> orelse InetFamily == <<"TCP6">> ->
+                            inet:parse_address(binary_to_list(SrcIp));
+                        _ ->
+                            ?LOG_ERROR("unexpected proxy protocol found: ~p.", [Data]),
+                            {error, invalid_proxy_protocol}
+                    end;
+                _ ->
+                    % misconfiguration.
+                    ?LOG_ERROR("unexpected proxy protocol found: ~p.", [Data]),
+                    {error, invalid_proxy_protocol}
+            end;
+        Error ->
+            ?LOG_ERROR("read_proxy_protocol receiving proxy data failed with ~p.", [Error]),
+            Error
+    end.
 
 -ifdef(TEST).
 parse_encoded_address_test_() ->
@@ -3713,3 +3750,4 @@ smtp_session_nomaxsize_test_() ->
         ]}.
 
 -endif.
+
