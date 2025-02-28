@@ -3250,7 +3250,7 @@ smtp_session_binarymime_test_() ->
                         {tcp, CSock, Packet4} -> smtp_socket:active_once(CSock)
                     end,
                     ?assertMatch("250 " ++ _, Packet4),
-                    RandomBytes = rand:bytes(32),
+                    RandomBytes = crypto:strong_rand_bytes(32),
                     smtp_socket:send(CSock, "BDAT 72\r\n"),
                     smtp_socket:send(CSock, "Subject: tls message\r\n"),
                     smtp_socket:send(CSock, "To: <user@otherhost>\r\n"),
