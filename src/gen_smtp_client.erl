@@ -79,9 +79,9 @@
 -type options() :: [
     {ssl, boolean()}
     | {tls, always | never | if_available}
-    % ssl:option() / ssl:tls_client_option()
-    | {tls_options, list()}
-    | {sockopts, [gen_tcp:connect_option()]}
+    | {tls_options, [ssl:tls_client_option()]}
+    %% depending on "ssl" option
+    | {sockopts, [gen_tcp:connect_option() | ssl:tls_client_option()]}
     | {port, inet:port_number()}
     | {timeout, timeout()}
     | {relay, inet:ip_address() | inet:hostname()}
@@ -941,6 +941,9 @@ quit(Socket) ->
 
 % TODO - more checking
 check_options(Options) ->
+    SSL = proplists:get_value(ssl, Options, false),
+    TLS = proplists:get_value(tls, Options, if_available),
+    State0 = check_ssl_options(SSL, TLS),
     CheckedOptions = [relay, port, auth],
     lists:foldl(
         fun(Option, State) ->
@@ -952,9 +955,14 @@ check_options(Options) ->
                     Other
             end
         end,
-        ok,
+        State0,
         CheckedOptions
     ).
+
+check_ssl_options(true, always) ->
+    {error, requested_both_ssl_and_tls};
+check_ssl_options(_, _) ->
+    ok.
 
 check_option({relay, undefined}, _Options) ->
     {error, no_relay};
