@@ -25,7 +25,7 @@ jobs:
             profile: "ranch_v2"
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - uses: erlef/setup-beam@v1
         with:
@@ -40,7 +40,7 @@ jobs:
           restore-keys: ${{ runner.os }}-hex-
 
       - name: Cache Dialyzer PLTs
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: |
             ~/.cache/rebar3/rebar3_*_plt

@@ -21,7 +21,7 @@ jobs:
         rebar3: ["3.18.0"] # https://www.rebar3.org
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - uses: erlef/setup-beam@v1
         with:
@@ -29,7 +29,7 @@ jobs:
           rebar3-version: ${{ matrix.rebar3 }}
 
       - name: Cache Hex packages
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: ~/.cache/rebar3/hex/hexpm/packages
           key: ${{ runner.os }}-hex-${{ hashFiles('**/rebar.lock') }}
