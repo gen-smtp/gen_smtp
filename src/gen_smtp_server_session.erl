@@ -571,7 +571,7 @@ handle_request(
                             }};
                         <<"CRAM-MD5">> ->
                             % ensure crypto is started, we're gonna need it
-                            crypto:start(),
+                            application:ensure_started(crypto),
                             String = smtp_util:get_cram_string(hostname(Options)),
                             send(State, ["334 ", String, "\r\n"]),
                             {ok, State#state{
