@@ -38,7 +38,11 @@
     {retries, 1},
     {on_transaction_error, quit},
     % smtp, lmtp
-    {protocol, smtp}
+    {protocol, smtp},
+    % default (max) chunk size for the RFC-3030 CHUNKING extension
+    {chunk_size, 256 * 1024},
+    % default to not use binarymime
+    {use_binarymime, false}
 ]).
 
 -define(AUTH_PREFERENCE, [
@@ -94,6 +98,8 @@
     | {trace_fun, fun((Fmt :: string(), Args :: [any()]) -> any())}
     | {on_transaction_error, quit | reset}
     | {protocol, smtp | lmtp}
+    | {chunk_size, non_neg_integer()}
+    | {use_binarymime, boolean()}
 ].
 
 -type extensions() :: [{binary(), binary()}].
@@ -397,6 +403,13 @@ open_smtp_session(Host, Options) ->
         options = Options
     }.
 
+-spec should_use_binarymime(Extensions :: extensions(), Options :: options()) -> boolean().
+should_use_binarymime(Extensions, Options) ->
+    CanBinaryMime = proplists:get_value(use_binarymime, Options),
+    ServerSupportsChunking = proplists:get_value(<<"CHUNKING">>, Extensions, false),
+    ServerSupportsBinaryMime = ServerSupportsChunking andalso proplists:get_value(<<"BINARYMIME">>, Extensions, false),
+    CanBinaryMime andalso ServerSupportsBinaryMime.
+
 -spec try_sending_it(
     Email :: email(),
     Socket :: smtp_socket:socket(),
@@ -406,9 +419,12 @@ open_smtp_session(Host, Options) ->
 try_sending_it({From, To, Body}, Socket, Extensions, Options) ->
     try_MAIL_FROM(From, Socket, Extensions, Options),
     try_RCPT_TO(To, Socket, Extensions, Options),
-    case proplists:get_value(protocol, Options) of
-        smtp -> try_DATA(Body, Socket, Extensions, Options);
-        lmtp -> try_lmtp_DATA(Body, To, Socket, Extensions, Options)
+    % we only use BDAT (CHUNKING extension) if BINARYMIME is also supported
+    case {proplists:get_value(protocol, Options), should_use_binarymime(Extensions, Options)} of
+        {smtp, false} -> try_DATA(Body, Socket, Extensions, Options);
+        {lmtp, false} -> try_lmtp_DATA(Body, To, Socket, Extensions, Options);
+        {smtp, true} -> try_BDAT(Body, Socket, Extensions, Options);
+        {lmtp, true} -> try_lmtp_BDAT(Body, To, Socket, Extensions, Options)
     end.
 
 -spec try_MAIL_FROM(
@@ -419,10 +435,15 @@ try_sending_it({From, To, Body}, Socket, Extensions, Options) ->
 ) -> true.
 try_MAIL_FROM(From, Socket, Extensions, Options) when is_binary(From) ->
     try_MAIL_FROM(binary_to_list(From), Socket, Extensions, Options);
-try_MAIL_FROM("<" ++ _ = From, Socket, _Extensions, Options) ->
+try_MAIL_FROM("<" ++ _ = From, Socket, Extensions, Options) ->
     OnTxError = proplists:get_value(on_transaction_error, Options),
+    MailFromOpts =
+        case should_use_binarymime(Extensions, Options) of
+            true -> " BODY=BINARYMIME";
+            _ -> ""
+        end,
     % TODO do we need to bother with SIZE?
-    smtp_socket:send(Socket, ["MAIL FROM:", From, "\r\n"]),
+    smtp_socket:send(Socket, ["MAIL FROM:", From, MailFromOpts, "\r\n"]),
     case read_possible_multiline_reply(Socket) of
         {ok, <<"250", _Rest/binary>>} ->
             true;
@@ -526,6 +547,48 @@ try_DATA(Body, Socket, _Extensions, Options) ->
             throw({permanent_failure, Msg})
     end.
 
+-spec try_BDAT(
+    Body :: binary() | function(),
+    Socket :: smtp_socket:socket(),
+    Extensions :: extensions(),
+    Options :: options()
+) -> binary().
+try_BDAT(Body, Socket, Extensions, Options) when is_function(Body) ->
+    try_BDAT(Body(), Socket, Extensions, Options);
+try_BDAT(Body, Socket, _Extensions, Options) ->
+    OnTxError = proplists:get_value(on_transaction_error, Options),
+    MaxChunkSize = proplists:get_value(chunk_size, Options),
+    % bite off the head chunk, size min(maxchunksize, len(Body))
+    {ChunkSize, CmdLast} =
+        case byte_size(Body) - MaxChunkSize of
+            Remainder when Remainder > 0 ->
+                {MaxChunkSize, ""};
+            _Else ->
+                {byte_size(Body), " LAST"}
+        end,
+    <<Chunk:ChunkSize/binary, Rest/binary>> = Body,
+    Cmd = "BDAT " ++ integer_to_list(ChunkSize) ++ CmdLast ++ "\r\n",
+    smtp_socket:send(Socket, [Cmd, Chunk]),
+    case read_possible_multiline_reply(Socket) of
+        {ok, <<"250 ", Receipt/binary>>} ->
+            case Rest of
+                <<>> -> Receipt;
+                Rest -> try_BDAT(Rest, Socket, _Extensions, Options)
+            end;
+        {ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+            rset_or_quit(Socket),
+            throw({temporary_failure, Msg});
+        {ok, <<"4", _Rest/binary>> = Msg} ->
+            quit(Socket),
+            throw({temporary_failure, Msg});
+        {ok, <<"5", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+            rset_or_quit(Socket),
+            throw({permanent_failure, Msg});
+        {ok, Msg} ->
+            quit(Socket),
+            throw({permanent_failure, Msg})
+    end.
+
 -spec try_lmtp_DATA(
     Body :: binary() | function(),
     To :: [binary(), ...],
@@ -564,6 +627,57 @@ try_lmtp_DATA(Body, To, Socket, _Extensions, Options) ->
         {ok, Msg} ->
             quit(Socket),
             throw({permanent_failure, Msg})
+    end.
+
+-spec try_lmtp_BDAT(
+    Body :: binary() | function(),
+    To :: [binary(), ...],
+    Socket :: smtp_socket:socket(),
+    Extensions :: extensions(),
+    Options :: options()
+) -> binary() | [{email_address(), binary() | string()}, ...].
+try_lmtp_BDAT(Body, To, Socket, Extensions, Options) when is_function(Body) ->
+    try_lmtp_BDAT(Body(), To, Socket, Extensions, Options);
+try_lmtp_BDAT(Body, To, Socket, _Extensions, Options) ->
+    OnTxError = proplists:get_value(on_transaction_error, Options),
+    MaxChunkSize = proplists:get_value(chunk_size, Options),
+    % bite off the head chunk, size min(maxchunksize, len(Body))
+    {ChunkSize, CmdLast} =
+        case byte_size(Body) - MaxChunkSize of
+            Remainder when Remainder > 0 ->
+                {MaxChunkSize, ""};
+            _Else ->
+                {byte_size(Body), " LAST"}
+        end,
+    <<Chunk:ChunkSize/binary, Rest/binary>> = Body,
+    Cmd = "BDAT " ++ integer_to_list(ChunkSize) ++ CmdLast ++ "\r\n",
+    smtp_socket:send(Socket, [Cmd, Chunk]),
+    case Rest of
+        <<>> ->
+            lists:map(
+                fun(Recipient) ->
+                    {ok, Receipt} = read_possible_multiline_reply(Socket),
+                    {Recipient, Receipt}
+                end,
+                To
+            );
+        Rest ->
+            case read_possible_multiline_reply(Socket) of
+                {ok, <<"250 ", _Receipt/binary>>} ->
+                    try_lmtp_BDAT(Rest, To, Socket, _Extensions, Options);
+                {ok, <<"4", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+                    rset_or_quit(Socket),
+                    throw({temporary_failure, Msg});
+                {ok, <<"4", _Rest/binary>> = Msg} ->
+                    quit(Socket),
+                    throw({temporary_failure, Msg});
+                {ok, <<"5", _Rest/binary>> = Msg} when OnTxError =:= reset ->
+                    rset_or_quit(Socket),
+                    throw({permanent_failure, Msg});
+                {ok, Msg} ->
+                    quit(Socket),
+                    throw({permanent_failure, Msg})
+            end
     end.
 
 -spec try_AUTH(Socket :: smtp_socket:socket(), Options :: options(), AuthTypes :: [string()]) ->
@@ -1521,7 +1635,439 @@ session_start_test_() ->
                     ok
                 end}
             end,
+            % does not improperly try to using BDAT nor binarymime (and/or)
+            fun({ListenSock}) ->
+                {"Only uses BINARYMIME when appropriate", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}, {use_binarymime, true}],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    ?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 hostname\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(X, 0, 1000)
+                    ),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(X, 0, 1000)),
+                    ?assertMatch(
+                        {ok, <<"ok\r\n">>},
+                        receive
+                            {callback, Ref, CbRet1} -> CbRet1
+                        end
+                    ),
+                    {ok, _Pid2} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, Y} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:send(Y, "220 Some banner\r\n"),
+                    ?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+                    smtp_socket:send(Y, "250-hostname\r\n"),
+                    smtp_socket:send(Y, "250 CHUNKING\r\n"),
+                    ?assertMatch(
+                        {ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)
+                    ),
+                    smtp_socket:send(Y, "250 ok\r\n"),
+                    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+                    smtp_socket:send(Y, "250 ok\r\n"),
+                    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+                    smtp_socket:send(Y, "354 ok\r\n"),
+                    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+                    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+                    smtp_socket:send(Y, "250 ok\r\n"),
+                    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+                    ?assertMatch(
+                        {ok, <<"ok\r\n">>},
+                        receive
+                            {callback, Ref, CbRet2} -> CbRet2
+                        end
+                    ),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"Send (using BDAT+BINARYMIME) with callback, success case", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}, {use_binarymime, true}],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:setopts(X, [binary, {packet, line}, {active, once}]),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    receive
+                        {tcp, X, Packet0} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"EHLO testing\r\n">>, Packet0),
+                    smtp_socket:send(X, <<"250-hostname\r\n">>),
+                    smtp_socket:send(X, <<"250-CHUNKING\r\n">>),
+                    smtp_socket:send(X, <<"250 BINARYMIME\r\n">>),
+                    receive
+                        {tcp, X, Packet1} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"MAIL FROM:<test@foo.com> BODY=BINARYMIME\r\n">>, Packet1),
 
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet2} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<foo@bar.com>\r\n">>, Packet2),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet3} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 11 LAST\r\n">>, Packet3),
+                    ?assertMatch({ok, <<"hello world">>}, smtp_socket:recv(X, 11, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    smtp_socket:active_once(X),
+                    receive
+                        {tcp, X, Packet4} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"QUIT\r\n">>, Packet4),
+                    ?assertMatch(
+                        {ok, <<"ok\r\n">>},
+                        receive
+                            {callback, Ref, CbRet1} -> CbRet1
+                        end
+                    ),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"Send (using BDAT+BINARYMIME) with callback, failure case", fun() ->
+                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}, {use_binarymime, true}],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:setopts(X, [binary, {packet, line}, {active, once}]),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    receive
+                        {tcp, X, Packet0} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"EHLO testing\r\n">>, Packet0),
+                    smtp_socket:send(X, <<"250-hostname\r\n">>),
+                    smtp_socket:send(X, <<"250-CHUNKING\r\n">>),
+                    smtp_socket:send(X, <<"250 BINARYMIME\r\n">>),
+                    receive
+                        {tcp, X, Packet1} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"MAIL FROM:<test@foo.com> BODY=BINARYMIME\r\n">>, Packet1),
+
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet2} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<foo@bar.com>\r\n">>, Packet2),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet3} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 11 LAST\r\n">>, Packet3),
+                    ?assertMatch({ok, <<"hello world">>}, smtp_socket:recv(X, 11, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "599 error\r\n"),
+                    smtp_socket:active_once(X),
+                    receive
+                        {tcp, X, Packet4} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"QUIT\r\n">>, Packet4),
+                    ?assertMatch(
+                        {error, send, {permanent_failure, _, <<"599 error\r\n">>}},
+                        receive
+                            {callback, Ref, CbRet2} -> CbRet2
+                        end
+                    ),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"Send (using BDAT+BINARYMIME) with small chunk size", fun() ->
+                    Options = [
+                        {relay, "localhost"},
+                        {port, 9876},
+                        {hostname, <<"testing">>},
+                        {use_binarymime, true},
+                        {chunk_size, 20}
+                    ],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:setopts(X, [binary, {packet, line}, {active, once}]),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    receive
+                        {tcp, X, Packet0} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"EHLO testing\r\n">>, Packet0),
+                    smtp_socket:send(X, <<"250-hostname\r\n">>),
+                    smtp_socket:send(X, <<"250-CHUNKING\r\n">>),
+                    smtp_socket:send(X, <<"250 BINARYMIME\r\n">>),
+                    receive
+                        {tcp, X, Packet1} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"MAIL FROM:<test@foo.com> BODY=BINARYMIME\r\n">>, Packet1),
+
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet2} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<foo@bar.com>\r\n">>, Packet2),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet3} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 20\r\n">>, Packet3),
+                    ?assertMatch({ok, <<"hello world hello wo">>}, smtp_socket:recv(X, 20, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "250 Continue\r\n"),
+                    smtp_socket:active_once(X),
+
+                    receive
+                        {tcp, X, Packet31} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 3 LAST\r\n">>, Packet31),
+                    ?assertMatch({ok, <<"rld">>}, smtp_socket:recv(X, 3, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    smtp_socket:active_once(X),
+
+                    receive
+                        {tcp, X, Packet4} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"QUIT\r\n">>, Packet4),
+                    ?assertMatch(
+                        {ok, <<"ok\r\n">>},
+                        receive
+                            {callback, Ref, CbRet1} -> CbRet1
+                        end
+                    ),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle single responses from BDAT on LMTP connections", fun() ->
+                    Options = [
+                        {relay, "localhost"},
+                        {port, 9876},
+                        {hostname, <<"testing">>},
+                        {protocol, lmtp},
+                        {use_binarymime, true}
+                    ],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:setopts(X, [binary, {packet, line}, {active, once}]),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    receive
+                        {tcp, X, Packet0} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"LHLO testing\r\n">>, Packet0),
+                    smtp_socket:send(X, <<"250-hostname\r\n">>),
+                    smtp_socket:send(X, <<"250-CHUNKING\r\n">>),
+                    smtp_socket:send(X, <<"250 BINARYMIME\r\n">>),
+                    receive
+                        {tcp, X, Packet1} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"MAIL FROM:<test@foo.com> BODY=BINARYMIME\r\n">>, Packet1),
+
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet2} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<foo@bar.com>\r\n">>, Packet2),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet3} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 11 LAST\r\n">>, Packet3),
+                    ?assertMatch({ok, <<"hello world">>}, smtp_socket:recv(X, 11, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    smtp_socket:active_once(X),
+                    receive
+                        {tcp, X, Packet4} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"QUIT\r\n">>, Packet4),
+                    ?assertMatch(
+                        {ok, [{<<"foo@bar.com">>, <<"250 ok\r\n">>}]},
+                        receive
+                            {callback, Ref, CbRet1} -> CbRet1
+                        end
+                    ),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle multiple successful responses from DATA on LMTP connections", fun() ->
+                    Options = [
+                        {relay, "localhost"},
+                        {port, 9876},
+                        {hostname, <<"testing">>},
+                        {protocol, lmtp},
+                        {use_binarymime, true}
+                    ],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>, <<"bar@foo.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:setopts(X, [binary, {packet, line}, {active, once}]),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    receive
+                        {tcp, X, Packet0} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"LHLO testing\r\n">>, Packet0),
+                    smtp_socket:send(X, <<"250-hostname\r\n">>),
+                    smtp_socket:send(X, <<"250-CHUNKING\r\n">>),
+                    smtp_socket:send(X, <<"250 BINARYMIME\r\n">>),
+                    receive
+                        {tcp, X, Packet1} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"MAIL FROM:<test@foo.com> BODY=BINARYMIME\r\n">>, Packet1),
+                    smtp_socket:send(X, "250 ok\r\n"),
+
+                    receive
+                        {tcp, X, Packet2} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<foo@bar.com>\r\n">>, Packet2),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet21} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<bar@foo.com>\r\n">>, Packet21),
+                    smtp_socket:send(X, "250 ok\r\n"),
+
+                    receive
+                        {tcp, X, Packet3} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 11 LAST\r\n">>, Packet3),
+                    ?assertMatch({ok, <<"hello world">>}, smtp_socket:recv(X, 11, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    smtp_socket:active_once(X),
+                    receive
+                        {tcp, X, Packet4} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"QUIT\r\n">>, Packet4),
+                    ?assertMatch(
+                        {ok, [{<<"foo@bar.com">>, <<"250 ok\r\n">>}, {<<"bar@foo.com">>, <<"250 ok\r\n">>}]},
+                        receive
+                            {callback, Ref, CbRet1} -> CbRet1
+                        end
+                    ),
+                    ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"handle mixed responses from DATA on LMTP connections #1", fun() ->
+                    Options = [
+                        {relay, "localhost"},
+                        {port, 9876},
+                        {hostname, <<"testing">>},
+                        {protocol, lmtp},
+                        {use_binarymime, true}
+                    ],
+                    Self = self(),
+                    Ref = make_ref(),
+                    Callback = fun(Arg) -> Self ! {callback, Ref, Arg} end,
+                    {ok, _Pid1} = send(
+                        {<<"test@foo.com">>, [<<"foo@bar.com">>, <<"bar@foo.com">>], <<"hello world">>},
+                        Options,
+                        Callback
+                    ),
+                    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+                    smtp_socket:setopts(X, [binary, {packet, line}, {active, once}]),
+                    smtp_socket:send(X, "220 Some banner\r\n"),
+                    receive
+                        {tcp, X, Packet0} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"LHLO testing\r\n">>, Packet0),
+                    smtp_socket:send(X, <<"250-hostname\r\n">>),
+                    smtp_socket:send(X, <<"250-CHUNKING\r\n">>),
+                    smtp_socket:send(X, <<"250 BINARYMIME\r\n">>),
+                    receive
+                        {tcp, X, Packet1} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"MAIL FROM:<test@foo.com> BODY=BINARYMIME\r\n">>, Packet1),
+                    smtp_socket:send(X, "250 ok\r\n"),
+
+                    receive
+                        {tcp, X, Packet2} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<foo@bar.com>\r\n">>, Packet2),
+                    smtp_socket:send(X, "250 ok\r\n"),
+                    receive
+                        {tcp, X, Packet21} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"RCPT TO:<bar@foo.com>\r\n">>, Packet21),
+                    smtp_socket:send(X, "250 ok\r\n"),
+
+                    receive
+                        {tcp, X, Packet3} -> smtp_socket:setopts(X, [{packet, raw}])
+                    end,
+                    ?assertMatch(<<"BDAT 11 LAST\r\n">>, Packet3),
+                    ?assertMatch({ok, <<"hello world">>}, smtp_socket:recv(X, 11, 1000)),
+                    smtp_socket:setopts(X, [{packet, line}]),
+                    smtp_socket:send(X, "250 ok\r\n452 <bar@foo.com> is temporarily over quota\r\n"),
+                    smtp_socket:active_once(X),
+                    receive
+                        {tcp, X, Packet4} -> smtp_socket:active_once(X)
+                    end,
+                    ?assertMatch(<<"QUIT\r\n">>, Packet4),
+                    ?assertMatch(
+                        {ok, [
+                            {<<"foo@bar.com">>, <<"250 ok\r\n">>},
+                            {<<"bar@foo.com">>, <<"452 <bar@foo.com> is temporarily over quota\r\n">>}
+                        ]},
+                        receive
+                            {callback, Ref, CbRet1} -> CbRet1
+                        end
+                    ),
+                    ok
+                end}
+            end,
             fun({ListenSock}) ->
                 {"Deliver with RSET on transaction error", fun() ->
                     Self = self(),

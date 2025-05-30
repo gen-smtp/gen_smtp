@@ -118,7 +118,14 @@ handle_EHLO(Hostname, Extensions, State) ->
             Size when is_integer(Size), Size > 0 ->
                 [{"SIZE", integer_to_list(Size)} | lists:keydelete("SIZE", 1, MyExtensions1)]
         end,
-    {ok, MyExtensions2, State}.
+    MyExtensions3 =
+        case proplists:get_value(binarymime, State#state.options) of
+            true ->
+                MyExtensions2 ++ [{"BINARYMIME", true}];
+            _Else ->
+                MyExtensions2
+        end,
+    {ok, MyExtensions3, State}.
 
 %% @doc Handle the MAIL FROM verb. The From argument is the email address specified by the
 %% MAIL FROM command. Extensions to the MAIL verb are handled by the `handle_MAIL_extension'
@@ -181,6 +188,9 @@ handle_RCPT_extension(Extension, _State) ->
 %% For each `ok' in the `StatusList', we have accepted full responsibility for
 %% delivering the email to that specific recipient. When a single recipient is
 %% specified the returned value can also follow the SMTP format.
+%%
+%% When the BINARYMIME extension is enabled, `Data` might contain arbitrary bytes, not
+%% necessarily UTF8.
 %%
 %% `ErrorMsg' should always start with the SMTP error code, while `SuccessMsg'
 %% should not (the `250' code is automatically prepended).
