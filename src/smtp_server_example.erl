@@ -201,7 +201,9 @@ handle_DATA(From, To, Data, State) ->
     % if RELAY is true, then relay email to email address, else send email data to console
     case proplists:get_value(relay, State#state.options, false) of
         true ->
-            relay(From, To, Data);
+            RelayConnectOpts = proplists:get_value(relayopts, State#state.options, []),
+            ok = relay(From, To, Data, RelayConnectOpts),
+            {ok, ["sent"], State};
         false ->
             % some kind of unique id
             Reference = lists:flatten([
@@ -311,14 +313,17 @@ terminate(Reason, State) ->
 unique_id() ->
     erlang:unique_integer().
 
--spec relay(binary(), [binary()], binary()) -> ok.
-relay(_, [], _) ->
+-spec relay(binary(), [binary()], binary(), list()) -> ok.
+relay(_, [], _, _) ->
     ok;
-relay(From, [To | Rest], Data) ->
+relay(From, [To | Rest], Data, RelayConnectOpts) ->
     % relay message to email address
     [_User, Host] = string:tokens(binary_to_list(To), "@"),
-    gen_smtp_client:send({From, [To], erlang:binary_to_list(Data)}, [{relay, Host}]),
-    relay(From, Rest, Data).
+    gen_smtp_client:send(
+        {From, [To], erlang:binary_to_list(Data)},
+        lists:keystore(relay, 1, RelayConnectOpts, {relay, Host})
+    ),
+    relay(From, Rest, Data, RelayConnectOpts).
 
 %% @doc Helps `handle_DATA' to deal with the received email.
 %% This function is not directly required by the behaviour.
