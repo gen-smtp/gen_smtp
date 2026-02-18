@@ -66,7 +66,8 @@
     smtp_session_error/0,
     host_failure/0,
     failure/0,
-    validate_options_error/0
+    validate_options_error/0,
+    auth_method/0
 ]).
 
 -type email_address() :: string() | binary().
@@ -75,6 +76,8 @@
     To :: [email_address(), ...],
     Body :: string() | binary() | fun(() -> string() | binary())
 }.
+
+-type auth_method() :: 'cram-md5' | login | plain | xoauth2.
 
 -type options() :: [
     {ssl, boolean()}
@@ -94,6 +97,7 @@
     | {trace_fun, fun((Fmt :: string(), Args :: [any()]) -> any())}
     | {on_transaction_error, quit | reset}
     | {protocol, smtp | lmtp}
+    | {auth_method, auth_method()}
 ].
 
 -type extensions() :: [{binary(), binary()}].
@@ -623,6 +627,15 @@ to_string(Binary) when is_binary(Binary) -> binary_to_list(Binary).
 to_binary(String) when is_binary(String) -> String;
 to_binary(String) when is_list(String) -> list_to_binary(String).
 
+auth_pref(Options) ->
+    auth_pref1(proplists:get_value(auth_method, Options)).
+
+auth_pref1(undefined) -> ?AUTH_PREFERENCE;
+auth_pref1('cram-md5') -> ["CRAM-MD5"];
+auth_pref1(login) -> ["LOGIN"];
+auth_pref1(plain) -> ["PLAIN"];
+auth_pref1(xoauth2) -> ["XOAUTH2"].
+
 -spec do_AUTH(
     Socket :: smtp_socket:socket(),
     Username :: binary(),
@@ -633,7 +646,7 @@ to_binary(String) when is_list(String) -> list_to_binary(String).
 do_AUTH(Socket, Username, Password, Types, Options) ->
     FixedTypes = [string:to_upper(X) || X <- Types],
     trace(Options, "Fixed types: ~p~n", [FixedTypes]),
-    AllowedTypes = [X || X <- ?AUTH_PREFERENCE, lists:member(X, FixedTypes)],
+    AllowedTypes = [X || X <- auth_pref(Options), lists:member(X, FixedTypes)],
     trace(Options, "available authentication types, in order of preference: ~p~n", [AllowedTypes]),
     do_AUTH_each(Socket, Username, Password, AllowedTypes, Options).
 
@@ -941,7 +954,7 @@ quit(Socket) ->
 
 % TODO - more checking
 check_options(Options) ->
-    CheckedOptions = [relay, port, auth],
+    CheckedOptions = [relay, port, auth, auth_method],
     lists:foldl(
         fun(Option, State) ->
             case State of
@@ -976,7 +989,14 @@ check_option({auth, always}, Options) ->
             ok
     end;
 check_option({auth, _}, _Options) ->
-    ok.
+    ok;
+check_option({auth_method, undefined}, _Options) ->
+    ok;
+check_option({auth_method, A}, _Options) when A =:= 'cram-md5'; A =:= 'login';
+                                              A =:= 'plain'; A =:= 'xoauth2'  ->
+    ok;
+check_option({auth_method, _}, _Options) ->
+    {error, invalid_auth_method}.
 
 -spec parse_extensions(Reply :: binary(), Options :: options()) -> extensions().
 parse_extensions(Reply, Options) ->
