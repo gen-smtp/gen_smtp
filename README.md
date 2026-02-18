@@ -89,7 +89,7 @@ The `send` method variants `send/2, send/3, send_blocking/2` take an `Options` a
   * **hostname** the hostname to be used by the smtp relay. Defaults to: `smtp_util:guess_FQDN()`. The hostname on your computer might not be correct, so set this to a valid value.
   * **retries** how many retries per smtp host on temporary failure. Defaults to 1, which means it will retry once if there is a failure.
   * **protocol** valid values are `smtp`, `lmtp`. Default is `smtp`
-
+  * **auth_method** valid values are `'cram-md5'`, `login`, `plain`, `xouath2`. If omitted, all methods supported by the server will be attempted in the following order: `'cram-md5'`, `login`, `plain`, `xouath2`.
 
 ### DKIM signing of outgoing emails
 
