@@ -64,10 +64,29 @@ TLS will be auto-negotiated if available (unless you pass `{tls, never}`) and
 authentication will by attempted by default since a username/password were
 specified (`{auth, never}` overrides this).
 
-If you want to mandate tls or auth, you can pass `{tls, always}` or `{auth,
-always}` as one of the options. You can specify an alternate port with `{port,
-2525}` (default is 25) or you can indicate that the server is listening for SSL
-connections using `{ssl, true}` (port defaults to 465 with this option).
+If you want to mandate authentication, you can pass `{auth, always}` as one of
+the options.
+
+### Encryption
+
+If you want to use a TLS socket (aka "ssl mode"), set `{ssl, true}` and pass
+your `:ssl.connect` options with `sockopts`. The `port` defaults to 465 with
+this option.
+
+If you want to mandate STARTTLS (which connects with SMTP over plaintext, then
+upgrades to TLS as part of the SMTP protocol), set `{tls, always}` and provide
+TLS options with `tls_options`.
+
+OTP 25+ provides `public_key:cacerts_get()` which provides the list of
+system-installed certificates. This is useful on OTP 26+, which has an empty
+default list of root certificates. This can be provided as part of `sockopts`
+or `tls_options` with `{cacerts, public_key:cacerts_get()}`.
+
+A safe, working set of TLS options can also be obtained by using the
+[tls_certificate_check package](https://hex.pm/packages/tls_certificate_check).
+The value of `tls_certificate_check:options(Hostname)` can provided directly to
+`sockopts` or `tls_options`, e.g. `{sockopts,
+tls_certificate_check:options(Hostname)}`.
 
 ### Options
 
@@ -82,10 +101,10 @@ The `send` method variants `send/2, send/3, send_blocking/2` take an `Options` a
   * **username** the username of the smtp relay e.g. `"me@gmail.com"`
   * **password** the password of the smtp relay e.g. `"mypassword"`
   * **auth** whether the smtp server needs authentication. Valid values are `if_available`, `always`, and `never`. Defaults to `if_available`. If your smtp relay requires authentication set it to `always`
-  * **ssl** whether to connect on 465 in ssl mode. Defaults to `false`
-  * **sockopts** used for the initial plain or SSL/TLS TCP connection. More info at Erlang documentation [gen_tcp](https://www.erlang.org/doc/man/gen_tcp.html) and [ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[binary, {packet, line}, {keepalive, true}, {active, false}]`.
-  * **tls** valid values are `always`, `never`, `if_available`. Most modern smtp relays use tls, so set this to `always`. Defaults to `if_available`
-  * **tls_options** used for `STARTTLS` upgrades in `ssl:connect`, More info at [Erlang documentation - ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: [smtp_socket.erl#L50 - SSL_CONNECT_OPTIONS](https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L50) .
+  * **ssl** whether to connect on 465 in "ssl" mode, negotiating TLS on the socket. Defaults to `false`
+  * **sockopts** used for the initial plain **or** SSL/TLS TCP connection. More info at Erlang documentation [gen_tcp](https://www.erlang.org/doc/man/gen_tcp.html) and [ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[binary, {packet, line}, {keepalive, true}, {active, false}]`.
+  * **tls** valid values are `always`, `never`, `if_available`. This enables STARTTLS. Most modern smtp relays use STARTTLS, so set this to `always`. Defaults to `if_available`
+  * **tls_options** is only used for `STARTTLS` connection upgrades. More info at [Erlang documentation - ssl](https://www.erlang.org/doc/man/ssl.html). Defaults to `[{versions , ['tlsv1', 'tlsv1.1', 'tlsv1.2']}]`. This is merged with options listed at: [smtp_socket.erl#L50 - SSL_CONNECT_OPTIONS](https://github.com/gen-smtp/gen_smtp/blob/master/src/smtp_socket.erl#L50) .
   * **hostname** the hostname to be used by the smtp relay. Defaults to: `smtp_util:guess_FQDN()`. The hostname on your computer might not be correct, so set this to a valid value.
   * **retries** how many retries per smtp host on temporary failure. Defaults to 1, which means it will retry once if there is a failure.
   * **protocol** valid values are `smtp`, `lmtp`. Default is `smtp`
