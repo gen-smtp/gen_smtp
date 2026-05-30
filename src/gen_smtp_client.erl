@@ -808,13 +808,20 @@ do_STARTTLS(Socket, Options) ->
     smtp_socket:send(Socket, "STARTTLS\r\n"),
     case read_possible_multiline_reply(Socket) of
         {ok, <<"220", _Rest/binary>>} ->
-            case
-                catch smtp_socket:to_ssl_client(
-                    Socket, [binary | proplists:get_value(tls_options, Options, [])], 5000
-                )
-            of
+            SslResult =
+                try
+                    smtp_socket:to_ssl_client(
+                        Socket,
+                        [binary | proplists:get_value(tls_options, Options, [])],
+                        5000
+                    )
+                catch
+                    Class:Reason:Stacktrace ->
+                        {'EXIT', {Class, Reason, Stacktrace}}
+                end,
+
+            case SslResult of
                 {ok, NewSocket} ->
-                    %NewSocket;
                     {ok, Extensions} = try_EHLO(NewSocket, Options),
                     {NewSocket, Extensions};
                 {'EXIT', Reason} ->
