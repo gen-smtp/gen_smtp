@@ -824,9 +824,9 @@ do_STARTTLS(Socket, Options) ->
                 {ok, NewSocket} ->
                     {ok, Extensions} = try_EHLO(NewSocket, Options),
                     {NewSocket, Extensions};
-                {'EXIT', Reason} ->
+                {'EXIT', Reason0} ->
                     quit(Socket),
-                    error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
+                    error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason0]),
                     erlang:throw({temporary_failure, tls_failed});
                 {error, closed} ->
                     quit(Socket),
