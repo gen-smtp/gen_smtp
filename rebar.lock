@@ -1,8 +1,11 @@
 {"1.2.0",
-[{<<"ranch">>,{pkg,<<"ranch">>,<<"1.8.0">>},0}]}.
+[{<<"eiconv">>,{pkg,<<"eiconv">>,<<"1.0.0">>},0},
+ {<<"ranch">>,{pkg,<<"ranch">>,<<"1.8.0">>},0}]}.
 [
 {pkg_hash,[
+ {<<"eiconv">>, <<"EE1E47EE37799A05BEFF7A68D61F63CCCC93101833C4FB94B454C23B12A21629">>},
  {<<"ranch">>, <<"8C7A100A139FD57F17327B6413E4167AC559FBC04CA7448E9BE9057311597A1D">>}]},
 {pkg_hash_ext,[
+ {<<"eiconv">>, <<"8C80851DECF72FC4571A70278D7932E9A87437770322077ECF797533FBB792CD">>},
  {<<"ranch">>, <<"49FBCFD3682FAB1F5D109351B61257676DA1A2FDBE295904176D5E521A2DDFE5">>}]}
 ].
