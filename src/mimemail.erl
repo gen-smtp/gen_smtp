@@ -128,9 +128,10 @@
     | {a, 'rsa-sha256' | 'ed25519-sha256'}
     | {private_key, dkim_priv_key()}
 ].
+-type encoding() :: none | binary().
 -type options() :: [
-    {encoding, binary()}
-    | {decode_attachment, boolean()}
+    {encoding, encoding()}
+    | {decode_attachments, boolean()}
     | {dkim, dkim_options()}
     | {allow_missing_version, boolean()}
     | {default_mime_version, binary()}
@@ -1858,6 +1859,13 @@ various_parsing_test_() ->
     ].
 
 -define(IMAGE_MD5, <<110, 130, 37, 247, 39, 149, 224, 61, 114, 198, 227, 138, 113, 4, 198, 60>>).
+
+decode_without_encoding_conversion_test() ->
+    Email = <<"MIME-Version: 1.0\r\nContent-Type: text/plain\r\n\r\nHello">>,
+    ?assertMatch(
+        {<<"text">>, <<"plain">>, _, _, <<"Hello">>},
+        decode(Email, [{encoding, none}])
+    ).
 
 parse_example_mails_test_() ->
     Getmail = fun(File) ->
