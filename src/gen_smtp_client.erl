@@ -808,18 +808,25 @@ do_STARTTLS(Socket, Options) ->
     smtp_socket:send(Socket, "STARTTLS\r\n"),
     case read_possible_multiline_reply(Socket) of
         {ok, <<"220", _Rest/binary>>} ->
-            case
-                catch smtp_socket:to_ssl_client(
-                    Socket, [binary | proplists:get_value(tls_options, Options, [])], 5000
-                )
-            of
+            SslResult =
+                try
+                    smtp_socket:to_ssl_client(
+                        Socket,
+                        [binary | proplists:get_value(tls_options, Options, [])],
+                        5000
+                    )
+                catch
+                    Class:Reason:Stacktrace ->
+                        {'EXIT', {Class, Reason, Stacktrace}}
+                end,
+
+            case SslResult of
                 {ok, NewSocket} ->
-                    %NewSocket;
                     {ok, Extensions} = try_EHLO(NewSocket, Options),
                     {NewSocket, Extensions};
-                {'EXIT', Reason} ->
+                {'EXIT', Reason0} ->
                     quit(Socket),
-                    error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason]),
+                    error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason0]),
                     erlang:throw({temporary_failure, tls_failed});
                 {error, closed} ->
                     quit(Socket),
