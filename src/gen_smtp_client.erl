@@ -781,18 +781,10 @@ try_STARTTLS(Socket, Options, Extensions) ->
     case {proplists:get_value(tls, Options), proplists:get_value(<<"STARTTLS">>, Extensions)} of
         {Atom, true} when Atom =:= always; Atom =:= if_available ->
             trace(Options, "Starting TLS~n", []),
-            case {do_STARTTLS(Socket, Options), Atom} of
-                {false, always} ->
-                    trace(Options, "TLS failed~n", []),
-                    quit(Socket),
-                    erlang:throw({temporary_failure, tls_failed});
-                {false, if_available} ->
-                    trace(Options, "TLS failed~n", []),
-                    {Socket, Extensions};
-                {{S, E}, _} ->
-                    trace(Options, "TLS started~n", []),
-                    {S, E}
-            end;
+            %% On failure throws `tls_failed', which retries without TLS if it is `if_available'
+            {S, E} = do_STARTTLS(Socket, Options),
+            trace(Options, "TLS started~n", []),
+            {S, E};
         {always, _} ->
             quit(Socket),
             erlang:throw({missing_requirement, tls});
@@ -803,7 +795,7 @@ try_STARTTLS(Socket, Options, Extensions) ->
 
 %% attempt to upgrade socket to TLS
 -spec do_STARTTLS(Socket :: smtp_socket:socket(), Options :: options()) ->
-    {smtp_socket:socket(), extensions()} | false.
+    {smtp_socket:socket(), extensions()}.
 do_STARTTLS(Socket, Options) ->
     smtp_socket:send(Socket, "STARTTLS\r\n"),
     case read_possible_multiline_reply(Socket) of
@@ -828,17 +820,16 @@ do_STARTTLS(Socket, Options) ->
                     quit(Socket),
                     error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason0]),
                     erlang:throw({temporary_failure, tls_failed});
-                {error, closed} ->
-                    quit(Socket),
-                    error_logger:error_msg("Error in ssl upgrade: socket closed.~n"),
-                    erlang:throw({temporary_failure, tls_failed});
                 {error, ssl_not_started} ->
                     quit(Socket),
                     error_logger:error_msg("SSL not started.~n"),
                     erlang:throw({permanent_failure, ssl_not_started});
-                Else ->
-                    trace(Options, "~p~n", [Else]),
-                    false
+                {error, Reason1} ->
+                    %% The server already agreed to STARTTLS, so the socket can't be used for
+                    %% plain-text SMTP anymore (eg, `closed', TLS alert or bad TLS options)
+                    quit(Socket),
+                    error_logger:error_msg("Error in ssl upgrade: ~p.~n", [Reason1]),
+                    erlang:throw({temporary_failure, tls_failed})
             end;
         {ok, <<"4", _Rest/binary>> = Msg} ->
             quit(Socket),
@@ -1014,6 +1005,9 @@ trace(Options, Format, Args) ->
     end.
 
 -ifdef(TEST).
+%% Test certificates are signed by a test CA and issued for "mx*.example.com", not "localhost",
+%% while `verify_peer' is the default for `ssl' clients since OTP-26
+-define(TEST_TLS_OPTIONS, [{verify, verify_none}]).
 
 session_start_test_() ->
     {foreach, local,
@@ -1355,7 +1349,12 @@ session_start_test_() ->
             end,
             fun({ListenSock}) ->
                 {"a valid complete transaction with TLS advertised should succeed", fun() ->
-                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}],
+                    Options = [
+                        {relay, "localhost"},
+                        {port, 9876},
+                        {hostname, <<"testing">>},
+                        {tls_options, ?TEST_TLS_OPTIONS}
+                    ],
                     {ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
                     {ok, X} = smtp_socket:accept(ListenSock, 1000),
                     smtp_socket:send(X, "220 Some banner\r\n"),
@@ -1391,7 +1390,12 @@ session_start_test_() ->
             end,
             fun({ListenSock}) ->
                 {"a valid complete transaction with TLS advertised and binary arguments should succeed", fun() ->
-                    Options = [{relay, "localhost"}, {port, 9876}, {hostname, <<"testing">>}],
+                    Options = [
+                        {relay, "localhost"},
+                        {port, 9876},
+                        {hostname, <<"testing">>},
+                        {tls_options, ?TEST_TLS_OPTIONS}
+                    ],
                     {ok, _Pid} = send(
                         {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>}, Options
                     ),
@@ -1435,7 +1439,8 @@ session_start_test_() ->
                         {relay, "localhost"},
                         {port, 9876},
                         {hostname, <<"testing">>},
-                        {tls, if_available}
+                        {tls, if_available},
+                        {tls_options, ?TEST_TLS_OPTIONS}
                     ],
                     {ok, _Pid} = send(
                         {<<"test@foo.com">>, [<<"foo@bar.com">>], <<"hello world">>}, Options
@@ -1968,7 +1973,9 @@ session_start_test_() ->
                         {relay, <<"localhost">>},
                         {port, 9877},
                         {hostname, <<"testing">>},
-                        {ssl, true}
+                        {ssl, true},
+                        %% for `ssl' connections `sockopts' are passed to `ssl:connect'
+                        {sockopts, ?TEST_TLS_OPTIONS}
                     ],
                     {ok, _Pid} = send(
                         {<<"test@foo.com">>, [<<"<foo@bar.com>">>, <<"baz@bar.com">>], <<"hello world">>},

@@ -19,8 +19,9 @@ for DOMAIN in "mx1.example.com" "mx2.example.com"; do
 	openssl genrsa -out $KEY 2048
 	# generate server signature request
 	openssl req -new -key $KEY -out $CSR -subj "/CN=${DOMAIN}"
-	# create signed server cert
-	openssl x509 -req -text -days 3650 -in $CSR -CA ${DATADIR}/root.crt -CAkey ${DATADIR}/root.key -CAcreateserial -out $CRT
+	# create signed server cert; newer OTP hostname check needs subjectAltName, CN is not enough
+	echo "subjectAltName=DNS:${DOMAIN}" > ${DATADIR}/san.ext
+	openssl x509 -req -text -days 3650 -in $CSR -CA ${DATADIR}/root.crt -CAkey ${DATADIR}/root.key -CAcreateserial -extfile ${DATADIR}/san.ext -out $CRT
 done
 
-rm ${DATADIR}/*.csr
+rm ${DATADIR}/*.csr ${DATADIR}/san.ext ${DATADIR}/root.srl

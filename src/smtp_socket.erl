@@ -259,18 +259,19 @@ to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
 to_ssl_server(_Socket, _Options, _Timeout) ->
     {error, already_ssl}.
 
--spec to_ssl_client(Socket :: socket()) -> {'ok', ssl:sslsocket()} | {'error', 'already_ssl'}.
+-spec to_ssl_client(Socket :: socket()) ->
+    {'ok', ssl:sslsocket()} | {'error', 'already_ssl' | any()}.
 to_ssl_client(Socket) ->
     to_ssl_client(Socket, []).
 
 -spec to_ssl_client(Socket :: socket(), Options :: list()) ->
-    {'ok', ssl:sslsocket()} | {'error', 'already_ssl'}.
+    {'ok', ssl:sslsocket()} | {'error', 'already_ssl' | any()}.
 to_ssl_client(Socket, Options) ->
     to_ssl_client(Socket, Options, infinity).
 
 -spec to_ssl_client(
     Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity'
-) -> {'ok', ssl:sslsocket()} | {'error', 'already_ssl'}.
+) -> {'ok', ssl:sslsocket()} | {'error', 'already_ssl' | any()}.
 to_ssl_client(Socket, Options, Timeout) when is_port(Socket) ->
     ssl:connect(Socket, ssl_connect_options(Options), Timeout);
 to_ssl_client(_Socket, _Options, _Timeout) ->
@@ -343,6 +344,11 @@ parse_address(Options) ->
 -spec extract_port_from_socket(Socket :: socket()) -> port().
 extract_port_from_socket({sslsocket, _, {SSLPort, _}}) ->
     SSLPort;
+extract_port_from_socket(Socket) when
+    element(1, Socket) =:= sslsocket, is_port(element(2, Socket))
+->
+    %% Newer OTP (`ssl' internal record layout changed)
+    element(2, Socket);
 extract_port_from_socket(Socket) ->
     Socket.
 
@@ -366,6 +372,9 @@ set_sockopt(ListenObject, ClientSocket) ->
 
 -ifdef(TEST).
 -define(TEST_PORT, 7586).
+%% Test certificates are signed by a test CA and issued for "mx*.example.com", not "localhost",
+%% while `verify_peer' is the default for `ssl' clients since OTP-26
+-define(TEST_SSL_CLIENT_OPTS, [{verify, verify_none}]).
 
 connect_test_() ->
     [
@@ -410,9 +419,9 @@ connect_test_() ->
             receive
                 {Ref, listen} -> ok
             end,
-            {ok, ClientSocket} = connect(ssl, "localhost", Port, []),
+            {ok, ClientSocket} = connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS),
             receive
-                {Ref, {sslsocket, _, _} = ListenSocket} -> ok
+                {Ref, ListenSocket} when element(1, ListenSocket) =:= sslsocket -> ok
             end,
             ?assertMatch([sslsocket | _], tuple_to_list(ClientSocket)),
             close(ListenSocket)
@@ -450,7 +459,7 @@ evented_connections_test_() ->
                 {certfile, "test/fixtures/mx1.example.com-server.crt"}
             ]),
             begin_inet_async(ListenSocket),
-            spawn(fun() -> connect(ssl, "localhost", Port) end),
+            spawn(fun() -> connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS) end),
             receive
                 {inet_async, _ListenPort, _, {ok, ServerSocket}} -> ok
             end,
@@ -462,7 +471,7 @@ evented_connections_test_() ->
             ?assertMatch([sslsocket | _], tuple_to_list(NewServerSocket)),
             ?assertMatch([sslsocket | _], tuple_to_list(ListenSocket)),
             %Stop the async
-            spawn(fun() -> connect(ssl, "localhost", Port) end),
+            spawn(fun() -> connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS) end),
             receive
                 _Ignored -> ok
             end,
@@ -479,7 +488,7 @@ evented_connections_test_() ->
             application:ensure_all_started(gen_smtp),
             {ok, ListenSocket} = listen(tcp, Port),
             begin_inet_async(ListenSocket),
-            spawn(fun() -> connect(ssl, "localhost", Port) end),
+            spawn(fun() -> connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS) end),
             ServerSocket =
                 receive
                     {inet_async, _ListenPort, _, {ok, ServerSocket0}} -> ServerSocket0
@@ -493,7 +502,7 @@ evented_connections_test_() ->
             ]),
             ?assertMatch([sslsocket | _], tuple_to_list(NewServerSocket)),
             % Stop the async
-            spawn(fun() -> connect(ssl, "localhost", Port) end),
+            spawn(fun() -> connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS) end),
             receive
                 _Ignored -> ok
             end,
@@ -508,7 +517,9 @@ accept_test_() ->
             Port = ?TEST_PORT + 6,
             {ok, ListenSocket} = listen(tcp, Port, tcp_listen_options([])),
             ?assert(is_port(ListenSocket)),
-            spawn(fun() -> connect(ssl, "localhost", Port, tcp_connect_options([])) end),
+            spawn(fun() ->
+                connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS ++ tcp_connect_options([]))
+            end),
             {ok, ServerSocket} = accept(ListenSocket),
             ?assert(is_port(ListenSocket)),
             close(ServerSocket),
@@ -522,7 +533,7 @@ accept_test_() ->
                 {certfile, "test/fixtures/mx1.example.com-server.crt"}
             ]),
             ?assertMatch([sslsocket | _], tuple_to_list(ListenSocket)),
-            spawn(fun() -> connect(ssl, "localhost", Port) end),
+            spawn(fun() -> connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS) end),
             accept(ListenSocket),
             close(ListenSocket)
         end}
@@ -737,12 +748,12 @@ ssl_upgrade_test_() ->
             erlang:yield(),
             {ok, ClientSocket} = connect(tcp, "localhost", Port),
             ?assert(is_port(ClientSocket)),
-            {ok, NewClientSocket} = to_ssl_client(ClientSocket),
+            {ok, NewClientSocket} = to_ssl_client(ClientSocket, ?TEST_SSL_CLIENT_OPTS),
             ?assertMatch([sslsocket | _], tuple_to_list(NewClientSocket)),
             receive
                 {sock, NewServerSocket} -> ok
             end,
-            ?assertMatch({sslsocket, _, _}, NewServerSocket),
+            ?assertMatch([sslsocket | _], tuple_to_list(NewServerSocket)),
             close(NewClientSocket),
             close(NewServerSocket)
         end},
@@ -764,7 +775,7 @@ ssl_upgrade_test_() ->
                 listening -> ok
             end,
             erlang:yield(),
-            {ok, ClientSocket} = connect(ssl, "localhost", Port),
+            {ok, ClientSocket} = connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS),
             close(ClientSocket)
         end},
         {"SSL client connection can't be upgraded again", fun() ->
@@ -784,7 +795,7 @@ ssl_upgrade_test_() ->
                 listening -> ok
             end,
             erlang:yield(),
-            {ok, ClientSocket} = connect(ssl, "localhost", Port),
+            {ok, ClientSocket} = connect(ssl, "localhost", Port, ?TEST_SSL_CLIENT_OPTS),
             receive
                 {sock, ServerSocket} -> ok
             end,
