@@ -906,7 +906,10 @@ handle_request(
                     }};
                 {error, Reason} ->
                     ?LOG_INFO("SSL handshake failed : ~p", [Reason], ?LOGGER_META),
-                    send(State, "454 TLS negotiation failed\r\n"),
+                    %% `ssl' usually closes the socket on handshake failure (eg, when client
+                    %% rejects our certificate or on timeout), so `send/2' would fail with
+                    %% `send_error' and the callback would never see `ssl_handshake_error'
+                    try_send(State, "454 TLS negotiation failed\r\n"),
                     State1 = handle_error(ssl_handshake_error, Reason, State),
                     {ok, State1}
             end;
