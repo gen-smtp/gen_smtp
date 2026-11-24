@@ -9,11 +9,21 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-22.04]
-        otp: ["25", "24"]
-        rebar3: ["3.18.0"]
+        os: [ubuntu-24.04]
         profile: [test, ranch_v2]
+        otp: ["29", "28", "27", "26"]
+        # Each OTP needs a rebar3 release that supports it
+        include:
+          - otp: "29"
+            rebar3: "3.28.0"
+          - otp: "28"
+            rebar3: "3.25.0"
+          - otp: "27"
+            rebar3: "3.24.0"
+          - otp: "26"
+            rebar3: "3.24.0"
 
     steps:
       - uses: actions/checkout@v3

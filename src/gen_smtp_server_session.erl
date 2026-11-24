@@ -906,7 +906,10 @@ handle_request(
                     }};
                 {error, Reason} ->
                     ?LOG_INFO("SSL handshake failed : ~p", [Reason], ?LOGGER_META),
-                    send(State, "454 TLS negotiation failed\r\n"),
+                    %% `ssl' usually closes the socket on handshake failure (eg, when client
+                    %% rejects our certificate or on timeout), so `send/2' would fail with
+                    %% `send_error' and the callback would never see `ssl_handshake_error'
+                    try_send(State, "454 TLS negotiation failed\r\n"),
                     State1 = handle_error(ssl_handshake_error, Reason, State),
                     {ok, State1}
             end;
@@ -1415,6 +1418,10 @@ report_recipient(multiple, [{ResponseType, Value} | Rest], State) ->
     report_recipient(multiple, Rest, State).
 
 -ifdef(TEST).
+%% Test certificates are signed by a test CA and issued for "mx*.example.com", not "localhost",
+%% while `verify_peer' is the default for `ssl' clients since OTP-26
+-define(TEST_SSL_CLIENT_OPTS, [{verify, verify_none}]).
+
 parse_encoded_address_test_() ->
     [
         {"Valid addresses should parse", fun() ->
@@ -2840,7 +2847,7 @@ smtp_session_tls_test_() ->
                         {tcp, CSock, Packet4} -> ok
                     end,
                     ?assertMatch("220 " ++ _, Packet4),
-                    Result = smtp_socket:to_ssl_client(CSock),
+                    Result = smtp_socket:to_ssl_client(CSock, ?TEST_SSL_CLIENT_OPTS),
                     ?assertMatch({ok, _Socket}, Result),
                     {ok, _Socket} = Result
                 %smtp_socket:active_once(Socket),
@@ -2886,7 +2893,7 @@ smtp_session_tls_test_() ->
                         {tcp, CSock, Packet4} -> ok
                     end,
                     ?assertMatch("220 " ++ _, Packet4),
-                    Result = smtp_socket:to_ssl_client(CSock),
+                    Result = smtp_socket:to_ssl_client(CSock, ?TEST_SSL_CLIENT_OPTS),
                     ?assertMatch({ok, _Socket}, Result),
                     {ok, Socket} = Result,
                     smtp_socket:active_once(Socket),
@@ -2954,7 +2961,7 @@ smtp_session_tls_test_() ->
                         {tcp, CSock, Packet4} -> ok
                     end,
                     ?assertMatch("220 " ++ _, Packet4),
-                    Result = smtp_socket:to_ssl_client(CSock),
+                    Result = smtp_socket:to_ssl_client(CSock, ?TEST_SSL_CLIENT_OPTS),
                     ?assertMatch({ok, _Socket}, Result),
                     {ok, Socket} = Result,
                     smtp_socket:active_once(Socket),
@@ -3063,7 +3070,7 @@ smtp_session_tls_test_() ->
                     receive
                         {tcp, CSock, _} -> ok
                     end,
-                    {ok, Socket} = smtp_socket:to_ssl_client(CSock),
+                    {ok, Socket} = smtp_socket:to_ssl_client(CSock, ?TEST_SSL_CLIENT_OPTS),
                     smtp_socket:active_once(Socket),
                     smtp_socket:send(Socket, "EHLO somehost.com\r\n"),
                     receive
@@ -3170,7 +3177,7 @@ smtp_session_tls_test_() ->
                     receive
                         {tcp, CSock, _} -> ok
                     end,
-                    {ok, Socket} = smtp_socket:to_ssl_client(CSock),
+                    {ok, Socket} = smtp_socket:to_ssl_client(CSock, ?TEST_SSL_CLIENT_OPTS),
                     smtp_socket:active_once(Socket),
                     smtp_socket:send(Socket, "EHLO somehost.com\r\n"),
                     ReadSSLExtensions = fun(F, Acc) ->
@@ -3237,7 +3244,12 @@ smtp_session_tls_sni_test_() ->
                 smtp_server_example,
                 [
                     {sessionoptions, [
-                        {tls_options, [{sni_hosts, SniHosts}]},
+                        %% Newer OTP requires default certificate and key even with `sni_hosts'
+                        {tls_options, [
+                            {keyfile, "test/fixtures/mx1.example.com-server.key"},
+                            {certfile, "test/fixtures/mx1.example.com-server.crt"},
+                            {sni_hosts, SniHosts}
+                        ]},
                         {callbackoptions, [{auth, true}]}
                     ]},
                     {domain, "localhost"},
