@@ -81,6 +81,9 @@
     | {tls, always | never | if_available}
     % ssl:option() / ssl:tls_client_option()
     | {tls_options, list()}
+    % send the host name we are connected to (eg, MX host) as SNI in STARTTLS; `verify' also
+    % checks the server certificate against it (with `{verify, verify_peer}' in `tls_options')
+    | {tls_sni, false | send | verify}
     | {sockopts, [gen_tcp:connect_option()]}
     | {port, inet:port_number()}
     | {timeout, timeout()}
@@ -128,7 +131,8 @@
 -type validate_options_error() ::
     no_relay
     | invalid_port
-    | no_credentials.
+    | no_credentials
+    | invalid_tls_sni.
 -type failure() ::
     {temporary_failure, temporary_failure_reason()}
     | {permanent_failure, permanent_failure_reason()}
@@ -386,7 +390,7 @@ open_smtp_session(Host, Options) ->
     trace(Options, "connected to ~s; banner was ~s~n", [Host, Banner]),
     {ok, Extensions} = try_EHLO(Socket, Options),
     trace(Options, "Extensions are ~p~n", [Extensions]),
-    {Socket2, Extensions2} = try_STARTTLS(Socket, Options, Extensions),
+    {Socket2, Extensions2} = try_STARTTLS(Socket, sni_options(Host, Options), Extensions),
     trace(Options, "Extensions are ~p~n", [Extensions2]),
     Authed = try_AUTH(Socket2, Options, proplists:get_value(<<"AUTH">>, Extensions2)),
     trace(Options, "Authentication status is ~p~n", [Authed]),
@@ -793,6 +797,60 @@ try_STARTTLS(Socket, Options, Extensions) ->
             {Socket, Extensions}
     end.
 
+%% With `{tls_sni, send | verify}' add the host we are connected to as `server_name_indication'.
+%% SSL upgrade of an already connected socket doesn't know the host name: it sends no SNI and,
+%% with `verify_peer', checks the certificate against the peer IP address. With a name, `ssl'
+%% checks the certificate against it; `send' accepts any certificate name (the chain is still
+%% verified), also when there is no name to send. IP addresses are not sent (RFC 6066 allows only
+%% host names). Explicit `server_name_indication' in `tls_options' takes precedence.
+-spec sni_options(Host :: string(), Options :: options()) -> options().
+sni_options(Host, Options) ->
+    TlsOptions = proplists:get_value(tls_options, Options, []),
+    Explicit = proplists:is_defined(server_name_indication, TlsOptions),
+    Mode = proplists:get_value(tls_sni, Options, false),
+    case {Explicit, Mode, sni_name(Host, proplists:get_value(relay, Options))} of
+        {false, send, {ok, Name}} ->
+            [{tls_options, [{server_name_indication, Name} | any_hostname(TlsOptions)]} | Options];
+        {false, send, none} ->
+            [{tls_options, any_hostname(TlsOptions)} | Options];
+        {false, verify, {ok, Name}} ->
+            [{tls_options, [{server_name_indication, Name} | TlsOptions]} | Options];
+        _ ->
+            Options
+    end.
+
+%% Accept any certificate name. Explicit `customize_hostname_check' takes precedence.
+any_hostname(TlsOptions) ->
+    case proplists:is_defined(customize_hostname_check, TlsOptions) of
+        true ->
+            TlsOptions;
+        false ->
+            AnyName = fun(_ReferenceId, _PresentedId) -> true end,
+            [{customize_hostname_check, [{match_fun, AnyName}]} | TlsOptions]
+    end.
+
+%% MX records point to host names, so an IP address `Host' is either `relay' itself or the
+%% result of `smtp_util:mxlookup/1' falling back to `relay''s A records when it has no MX
+%% (implicit MX, RFC 5321 5.1): then the server is known by the `relay' name.
+-spec sni_name(Host :: string(), Relay :: inet:ip_address() | inet:hostname() | binary()) ->
+    {ok, string()} | none.
+sni_name(Host, Relay) ->
+    case is_ip(Host) of
+        false ->
+            {ok, string:trim(Host, trailing, ".")};
+        true when is_list(Relay); is_binary(Relay) ->
+            Name = string:trim(to_string(Relay), trailing, "."),
+            case is_ip(Name) of
+                false -> {ok, Name};
+                true -> none
+            end;
+        true ->
+            none
+    end.
+
+is_ip(Host) ->
+    inet:parse_address(string:trim(Host, trailing, ".")) =/= {error, einval}.
+
 %% attempt to upgrade socket to TLS
 -spec do_STARTTLS(Socket :: smtp_socket:socket(), Options :: options()) ->
     {smtp_socket:socket(), extensions()}.
@@ -939,7 +997,7 @@ quit(Socket) ->
 
 % TODO - more checking
 check_options(Options) ->
-    CheckedOptions = [relay, port, auth],
+    CheckedOptions = [relay, port, auth, tls_sni],
     lists:foldl(
         fun(Option, State) ->
             case State of
@@ -963,6 +1021,12 @@ check_option({port, undefined}, _Options) ->
 check_option({port, Port}, _Options) when is_integer(Port) -> ok;
 check_option({port, _}, _Options) ->
     {error, invalid_port};
+check_option({tls_sni, Mode}, _Options) when
+    Mode =:= undefined; Mode =:= false; Mode =:= send; Mode =:= verify
+->
+    ok;
+check_option({tls_sni, _}, _Options) ->
+    {error, invalid_tls_sni};
 check_option({auth, always}, Options) ->
     case
         proplists:is_defined(username, Options) and
@@ -1008,6 +1072,146 @@ trace(Options, Format, Args) ->
 %% Test certificates are signed by a test CA and issued for "mx*.example.com", not "localhost",
 %% while `verify_peer' is the default for `ssl' clients since OTP-26
 -define(TEST_TLS_OPTIONS, [{verify, verify_none}]).
+
+%% Test CA-verified client options. The server certificate is for "mx1.example.com", while the
+%% tests connect to "localhost"
+-define(TEST_TLS_VERIFY_OPTIONS, [{verify, verify_peer}, {cacertfile, "test/fixtures/root.crt"}]).
+
+sni_test_options(ExtraOptions) ->
+    Base = [
+        {relay, "localhost"},
+        {port, 9876},
+        {hostname, <<"testing">>},
+        {tls_options, ?TEST_TLS_OPTIONS}
+    ],
+    lists:ukeymerge(1, lists:ukeysort(1, ExtraOptions), lists:ukeysort(1, Base)).
+
+%% Accepts the connection and replies to STARTTLS; returns the result of the server side of the
+%% TLS handshake (`sni_fun' sends the received SNI to the caller)
+sni_starttls(ListenSock) ->
+    {ok, X} = smtp_socket:accept(ListenSock, 1000),
+    smtp_socket:send(X, "220 Some banner\r\n"),
+    ?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(X, 0, 1000)),
+    smtp_socket:send(X, "250-hostname\r\n250 STARTTLS\r\n"),
+    ?assertMatch({ok, "STARTTLS\r\n"}, smtp_socket:recv(X, 0, 1000)),
+    application:ensure_all_started(gen_smtp),
+    smtp_socket:send(X, "220 ok\r\n"),
+    Self = self(),
+    smtp_socket:to_ssl_server(
+        X,
+        [
+            {certfile, "test/fixtures/mx1.example.com-server.crt"},
+            {keyfile, "test/fixtures/mx1.example.com-server.key"},
+            %% Called only when the client sends SNI; `[]' keeps the certificate above
+            {sni_fun, fun(Name) ->
+                Self ! {sni, Name},
+                []
+            end}
+        ],
+        5000
+    ).
+
+%% Complete STARTTLS transaction to `relay = "localhost"'; returns the SNI the server received
+sni_transaction(ListenSock, ExtraOptions) ->
+    Options = sni_test_options(ExtraOptions),
+    {ok, _Pid} = send({"test@foo.com", ["foo@bar.com"], "hello world"}, Options),
+    {ok, Y} = sni_starttls(ListenSock),
+    ?assertMatch({ok, "EHLO testing\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    smtp_socket:send(Y, "250-hostname\r\n250 STARTTLS\r\n"),
+    ?assertMatch({ok, "MAIL FROM:<test@foo.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    smtp_socket:send(Y, "250 ok\r\n"),
+    ?assertMatch({ok, "RCPT TO:<foo@bar.com>\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    smtp_socket:send(Y, "250 ok\r\n"),
+    ?assertMatch({ok, "DATA\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    smtp_socket:send(Y, "354 ok\r\n"),
+    ?assertMatch({ok, "hello world\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    ?assertMatch({ok, ".\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    smtp_socket:send(Y, "250 ok\r\n"),
+    ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
+    received_sni().
+
+%% `ssl' may call `sni_fun' more than once per handshake; drain them all, so they don't leak into
+%% the next test running in the same process
+received_sni() ->
+    case lists:usort(flush_sni()) of
+        [] -> no_sni;
+        [Name] -> {sni, Name}
+    end.
+
+flush_sni() ->
+    receive
+        {sni, Name} -> [Name | flush_sni()]
+    after 0 -> []
+    end.
+
+sni_options_test_() ->
+    Tls = fun(Opts) -> proplists:get_value(tls_options, Opts) end,
+    On = [{tls_sni, verify}, {tls_options, [{verify, verify_none}]}],
+    [
+        ?_assertEqual(
+            [{server_name_indication, "mx.example.com"}, {verify, verify_none}],
+            Tls(sni_options("mx.example.com", On))
+        ),
+        ?_assertEqual(
+            [{server_name_indication, "mx.example.com"}, {verify, verify_none}],
+            Tls(sni_options("mx.example.com.", On))
+        ),
+        ?_assertEqual(
+            [{server_name_indication, "mx.example.com"}],
+            Tls(sni_options("mx.example.com", [{tls_sni, verify}]))
+        ),
+        %% `send': any certificate name is accepted
+        ?_test(begin
+            [{server_name_indication, "mx.example.com"}, {customize_hostname_check, Check}] =
+                Tls(sni_options("mx.example.com", [{tls_sni, send}])),
+            MatchFun = proplists:get_value(match_fun, Check),
+            ?assert(MatchFun({dns_id, "mx.example.com"}, {dNSName, "other.example.org"}))
+        end),
+        ?_test(begin
+            OwnCheck = {customize_hostname_check, [{match_fun, fun(_, _) -> default end}]},
+            ?assertEqual(
+                [{server_name_indication, "mx.example.com"}, OwnCheck],
+                Tls(sni_options("mx.example.com", [{tls_sni, send}, {tls_options, [OwnCheck]}]))
+            )
+        end),
+        ?_assertEqual(On, sni_options("192.0.2.1", On)),
+        ?_assertEqual(On, sni_options("2001:db8::1", On)),
+        %% No MX: `smtp_util:mxlookup/1' returned relay's A record, the server is known as relay
+        ?_assertEqual(
+            [{server_name_indication, "example.com"}, {verify, verify_none}],
+            Tls(sni_options("192.0.2.1", [{relay, <<"example.com.">>} | On]))
+        ),
+        ?_test(begin
+            IpRelay = [{relay, "192.0.2.1"} | On],
+            ?assertEqual(IpRelay, sni_options("192.0.2.1", IpRelay))
+        end),
+        ?_test(begin
+            TupleRelay = [{relay, {192, 0, 2, 1}} | On],
+            ?assertEqual(TupleRelay, sni_options("192.0.2.1", TupleRelay))
+        end),
+        %% `send' without a name to send still accepts any certificate name, while `ssl' would
+        %% otherwise check it against the IP address
+        ?_test(begin
+            [{customize_hostname_check, [{match_fun, _}]}, {verify, verify_none}] =
+                Tls(sni_options("192.0.2.1", [{tls_sni, send}, {relay, "192.0.2.1"} | On]))
+        end),
+        ?_assertEqual(
+            [{tls_options, [{verify, verify_none}]}],
+            sni_options("mx.example.com", [{tls_options, [{verify, verify_none}]}])
+        ),
+        ?_assertEqual(
+            [{tls_sni, false}],
+            sni_options("mx.example.com", [{tls_sni, false}])
+        ),
+        ?_test(begin
+            Explicit = [{tls_sni, send}, {tls_options, [{server_name_indication, disable}]}],
+            ?assertEqual(Explicit, sni_options("mx.example.com", Explicit))
+        end),
+        ?_assertEqual(
+            {error, invalid_tls_sni},
+            send({"test@foo.com", ["foo@bar.com"], "hello"}, [{relay, "localhost"}, {tls_sni, true}])
+        )
+    ].
 
 session_start_test_() ->
     {foreach, local,
@@ -1386,6 +1590,47 @@ session_start_test_() ->
                     smtp_socket:send(Y, "250 ok\r\n"),
                     ?assertMatch({ok, "QUIT\r\n"}, smtp_socket:recv(Y, 0, 1000)),
                     ok
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"STARTTLS sends the relay host name as SNI with tls_sni", fun() ->
+                    ?assertEqual(
+                        {sni, "localhost"}, sni_transaction(ListenSock, [{tls_sni, send}])
+                    )
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"tls_sni = send doesn't check the certificate name", fun() ->
+                    Options = [{tls_sni, send}, {tls_options, ?TEST_TLS_VERIFY_OPTIONS}],
+                    ?assertEqual({sni, "localhost"}, sni_transaction(ListenSock, Options))
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"tls_sni = verify checks the certificate name", fun() ->
+                    Options = sni_test_options([
+                        {tls_sni, verify},
+                        {tls_options, ?TEST_TLS_VERIFY_OPTIONS},
+                        {tls, always},
+                        {retries, 0}
+                    ]),
+                    Self = self(),
+                    spawn_link(fun() ->
+                        Res = send_blocking({"test@foo.com", ["foo@bar.com"], "hello"}, Options),
+                        Self ! {result, Res}
+                    end),
+                    %% The certificate is for "mx1.example.com", not "localhost"
+                    ?assertMatch({error, _}, sni_starttls(ListenSock)),
+                    ?assertEqual({sni, "localhost"}, received_sni()),
+                    receive
+                        {result, Res} ->
+                            ?assertMatch({error, _, {temporary_failure, _, tls_failed}}, Res)
+                    after 5000 -> error(timeout)
+                    end
+                end}
+            end,
+            fun({ListenSock}) ->
+                {"STARTTLS sends no SNI by default", fun() ->
+                    ?assertEqual(no_sni, sni_transaction(ListenSock, []))
                 end}
             end,
             fun({ListenSock}) ->
